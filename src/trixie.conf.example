@@ -60,7 +60,7 @@ keyboard {
 
 # ── Keybinds ──────────────────────────────────────────────────────────────────
 
-keybind = Super:Return,     exec, foot
+keybind = Super:Return,     exec, kitty
 keybind = Super:q,          close
 keybind = Super:f,          fullscreen
 keybind = Super+Shift:space,toggle_float

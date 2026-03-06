@@ -1,6 +1,7 @@
 /* main.c — Trixie compositor entry point, wlroots backend & event loop */
 #include "trixie.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <signal.h>
 #include <stdio.h>
@@ -26,7 +27,6 @@ static void handle_request_cursor(struct wl_listener *l, void *data);
 static void handle_request_set_selection(struct wl_listener *l, void *data);
 static void handle_request_set_primary_selection(struct wl_listener *l, void *data);
 
-/* per-view */
 static void view_handle_map(struct wl_listener *l, void *data);
 static void view_handle_unmap(struct wl_listener *l, void *data);
 static void view_handle_destroy(struct wl_listener *l, void *data);
@@ -35,12 +35,10 @@ static void view_handle_request_fullscreen(struct wl_listener *l, void *data);
 static void view_handle_set_title(struct wl_listener *l, void *data);
 static void view_handle_set_app_id(struct wl_listener *l, void *data);
 
-/* per-output */
 static void output_handle_frame(struct wl_listener *l, void *data);
 static void output_handle_request_state(struct wl_listener *l, void *data);
 static void output_handle_destroy(struct wl_listener *l, void *data);
 
-/* per-keyboard */
 static void keyboard_handle_key(struct wl_listener *l, void *data);
 static void keyboard_handle_modifiers(struct wl_listener *l, void *data);
 static void keyboard_handle_destroy(struct wl_listener *l, void *data);
@@ -50,32 +48,56 @@ static void keyboard_handle_destroy(struct wl_listener *l, void *data);
 #define CONTAINER_OF(ptr, type, member) \
   ((type *)((char *)(ptr) - offsetof(type, member)))
 
-static TrixieServer *server_from_listener(struct wl_listener *l, size_t offset) {
-  /* used by top-level listeners */
-  return (TrixieServer *)((char *)l - offset);
-}
-
 /* ── Spawn ────────────────────────────────────────────────────────────────── */
 
 void server_spawn(TrixieServer *s, const char *cmd) {
   if(!cmd || !cmd[0]) return;
-  wlr_log(WLR_INFO, "spawn: %s", cmd);
+  wlr_log(WLR_INFO,
+          "SPAWN: cmd='%s' WAYLAND_DISPLAY='%s'",
+          cmd,
+          getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "(unset)");
+
   pid_t pid = fork();
+  if(pid < 0) {
+    wlr_log(WLR_ERROR, "SPAWN: fork: %s", strerror(errno));
+    return;
+  }
   if(pid == 0) {
-    /* double-fork to avoid zombie */
-    if(fork() == 0) {
+    pid_t pid2 = fork();
+    if(pid2 < 0) _exit(1);
+    if(pid2 == 0) {
       setsid();
-      const char *display = getenv("WAYLAND_DISPLAY");
-      if(!display) {
-        /* compositor sets it in env before spawning */
+
+      /* Close wlroots fds but keep stdin/stdout/stderr */
+      int maxfd = 256;
+      for(int fd = 3; fd < maxfd; fd++)
+        close(fd);
+
+      /* Redirect stdout+stderr to a log for debugging */
+      int logfd = open("/tmp/trixie-spawn.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+      if(logfd >= 0) {
+        dup2(logfd, STDOUT_FILENO);
+        dup2(logfd, STDERR_FILENO);
+        close(logfd);
       }
+
+      /* Ensure a sane PATH so the binary can be found */
+      if(!getenv("PATH")) setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
+
+      /* Log what we are about to exec so trixie-spawn.log is useful */
+      dprintf(STDOUT_FILENO,
+              "trixie-spawn: execing '%s' WAYLAND_DISPLAY=%s\n",
+              cmd,
+              getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "(unset)");
+
       execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+      dprintf(STDERR_FILENO, "trixie-spawn: execl failed: %s\n", strerror(errno));
       _exit(127);
     }
     _exit(0);
-  } else if(pid > 0) {
-    waitpid(pid, NULL, 0);
   }
+  waitpid(pid, NULL, 0);
+  wlr_log(WLR_INFO, "SPAWN: fork done");
 }
 
 /* ── Focus ────────────────────────────────────────────────────────────────── */
@@ -96,10 +118,9 @@ void server_focus_pane(TrixieServer *s, PaneId id) {
   struct wlr_keyboard *kb   = wlr_seat_get_keyboard(s->seat);
 
   wlr_scene_node_raise_to_top(&v->scene_tree->node);
-  if(kb) {
+  if(kb)
     wlr_seat_keyboard_notify_enter(
         s->seat, surf, kb->keycodes, kb->num_keycodes, &kb->modifiers);
-  }
 }
 
 void server_sync_focus(TrixieServer *s) {
@@ -107,7 +128,7 @@ void server_sync_focus(TrixieServer *s) {
   if(id) server_focus_pane(s, id);
 }
 
-/* ── Window sync (position + size) ───────────────────────────────────────── */
+/* ── Window sync ──────────────────────────────────────────────────────────── */
 
 void server_sync_windows(TrixieServer *s) {
   Workspace *ws         = &s->twm.workspaces[s->twm.active_ws];
@@ -119,14 +140,31 @@ void server_sync_windows(TrixieServer *s) {
     Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
     if(!p) continue;
 
-    /* only sync panes on the active workspace (or closing) */
     bool on_ws = false;
-    for(int i = 0; i < ws->pane_count; i++)
+    for(int i = 0; i < ws->pane_count; i++) {
       if(ws->panes[i] == v->pane_id) {
         on_ws = true;
         break;
       }
-    if(!on_ws && !anim_is_closing(&s->anim, v->pane_id)) continue;
+    }
+
+    bool is_closing = anim_is_closing(&s->anim, v->pane_id);
+
+    wlr_log(WLR_INFO,
+            "SYNC DIAG: pane=%u on_ws=%d is_closing=%d mapped=%d "
+            "rect=(%d,%d,%d,%d) node.enabled=%d node.parent=%p",
+            v->pane_id,
+            on_ws,
+            is_closing,
+            v->mapped,
+            p->rect.x,
+            p->rect.y,
+            p->rect.w,
+            p->rect.h,
+            v->scene_tree->node.enabled,
+            (void *)v->scene_tree->node.parent);
+
+    if(!on_ws && !is_closing) continue;
 
     Rect r  = anim_get_rect(&s->anim, v->pane_id, p->rect);
     int  bw = (p->floating || p->fullscreen) ? 0 : s->twm.border_w;
@@ -138,35 +176,43 @@ void server_sync_windows(TrixieServer *s) {
     if(win_w < 1) win_w = 1;
     if(win_h < 1) win_h = 1;
 
-    /* move scene node */
-    wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
+    wlr_log(WLR_DEBUG,
+            "SYNC: pane=%u pos=(%d,%d) size=%dx%d node_enabled=%d",
+            v->pane_id,
+            win_x,
+            win_y,
+            win_w,
+            win_h,
+            v->scene_tree->node.enabled);
 
-    /* send configure if size changed */
+    wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
+    wlr_log(WLR_INFO,
+            "SYNC DIAG: positioned pane=%u at (%d,%d) size=(%d,%d)",
+            v->pane_id,
+            win_x,
+            win_y,
+            win_w,
+            win_h);
+
     if(!anim_is_closing(&s->anim, v->pane_id)) {
-      /* use final logical rect for configure to avoid constant resize */
       int cfg_w = p->rect.w - bw * 2;
       int cfg_h = p->rect.h - bw * 2;
       if(cfg_w < 1) cfg_w = 1;
       if(cfg_h < 1) cfg_h = 1;
-
       struct wlr_xdg_toplevel *tl = v->xdg_toplevel;
-      struct wlr_box           current;
-      wlr_xdg_surface_get_geometry(tl->base, &current);
-      if(current.width != cfg_w || current.height != cfg_h) {
+      struct wlr_box           cur;
+      wlr_xdg_surface_get_geometry(tl->base, &cur);
+      if(cur.width != cfg_w || cur.height != cfg_h)
         wlr_xdg_toplevel_set_size(tl, cfg_w, cfg_h);
-      }
     }
   }
 }
 
-/* ── Anim helpers ─────────────────────────────────────────────────────────── */
+/* ── Redraw request ───────────────────────────────────────────────────────── */
 
 void server_request_redraw(TrixieServer *s) {
-  /* Force all outputs to repaint next frame */
   TrixieOutput *o;
-  wl_list_for_each(o, &s->outputs, link) {
-    wlr_output_schedule_frame(o->wlr_output);
-  }
+  wl_list_for_each(o, &s->outputs, link) wlr_output_schedule_frame(o->wlr_output);
 }
 
 /* ── Action dispatch ──────────────────────────────────────────────────────── */
@@ -180,7 +226,10 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
 
     case ACTION_RELOAD: server_apply_config_reload(s); break;
 
-    case ACTION_EXEC: server_spawn(s, a->exec_cmd); break;
+    case ACTION_EXEC:
+      wlr_log(WLR_INFO, "action: exec '%s'", a->exec_cmd);
+      server_spawn(s, a->exec_cmd);
+      break;
 
     case ACTION_CLOSE: {
       PaneId id = twm_focused_id(&s->twm);
@@ -197,7 +246,14 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       if(p) {
         p->fullscreen = !p->fullscreen;
         TrixieView *v = view_from_pane(s, id);
-        if(v) wlr_xdg_toplevel_set_fullscreen(v->xdg_toplevel, p->fullscreen);
+        if(v) {
+          wlr_xdg_toplevel_set_fullscreen(v->xdg_toplevel, p->fullscreen);
+          /* move between layers */
+          struct wlr_scene_tree *tgt =
+              p->fullscreen ? s->layer_floating : s->layer_windows;
+          wlr_scene_node_reparent(&v->scene_tree->node, tgt);
+          wlr_scene_node_raise_to_top(&v->scene_tree->node);
+        }
         twm_reflow(&s->twm);
         server_sync_windows(s);
       }
@@ -307,10 +363,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
     }
 
     case ACTION_SCRATCHPAD: server_scratch_toggle(s, a->name); break;
-
-    case ACTION_SWITCH_VT:
-      /* wlr_backend_is_session/get_session removed in wlroots 0.18 */
-      break;
+    case ACTION_SWITCH_VT: break;
   }
 }
 
@@ -323,10 +376,19 @@ void server_float_toggle(TrixieServer *s) {
   if(!p) return;
   bool was_float = p->floating;
   twm_toggle_float(&s->twm);
+
+  TrixieView *v = view_from_pane(s, id);
+  if(v) {
+    struct wlr_scene_tree *tgt = p->floating ? s->layer_floating : s->layer_windows;
+    wlr_scene_node_reparent(&v->scene_tree->node, tgt);
+    wlr_scene_node_raise_to_top(&v->scene_tree->node);
+  }
+
   if(p->floating && !was_float)
     anim_float_open(&s->anim, id, p->rect);
   else if(!p->floating && was_float)
     anim_open(&s->anim, id, p->rect);
+
   server_sync_windows(s);
   server_sync_focus(s);
 }
@@ -367,15 +429,11 @@ void server_apply_config_reload(TrixieServer *s) {
   s->twm.border_w   = s->cfg.border_width;
   s->twm.smart_gaps = s->cfg.smart_gaps;
   twm_set_bar_height(&s->twm, s->cfg.bar.height, s->cfg.bar.position == BAR_BOTTOM);
-  /* update xcursor */
   wlr_xcursor_manager_load(s->xcursor_mgr, s->cfg.cursor_size);
 
-  /* update keyboard repeat */
   TrixieKeyboard *kb;
-  wl_list_for_each(kb, &s->keyboards, link) {
-    wlr_keyboard_set_repeat_info(
-        kb->wlr_keyboard, s->cfg.keyboard.repeat_rate, s->cfg.keyboard.repeat_delay);
-  }
+  wl_list_for_each(kb, &s->keyboards, link) wlr_keyboard_set_repeat_info(
+      kb->wlr_keyboard, s->cfg.keyboard.repeat_rate, s->cfg.keyboard.repeat_delay);
   server_request_redraw(s);
   wlr_log(WLR_INFO, "Config reloaded");
 }
@@ -397,7 +455,6 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
   struct wlr_keyboard_key_event *event = data;
   struct wlr_seat               *seat  = s->seat;
 
-  /* Translate libinput keycode → xkbcommon keycode */
   uint32_t            keycode = event->keycode + 8;
   const xkb_keysym_t *syms;
   int  nsyms   = xkb_state_key_get_syms(kb->wlr_keyboard->xkb_state, keycode, &syms);
@@ -406,7 +463,6 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
   uint32_t mods = wlr_mods_to_trixie(wlr_keyboard_get_modifiers(kb->wlr_keyboard));
 
   if(event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-    /* emergency quit */
     for(int i = 0; i < nsyms; i++) {
       if(syms[i] == XKB_KEY_Print && (mods & MOD_SUPER) && (mods & MOD_SHIFT)) {
         wlr_log(WLR_INFO, "Emergency quit");
@@ -414,20 +470,14 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
         wl_display_terminate(s->display);
         return;
       }
-      /* VT switching: Ctrl+Alt+F1..F12
-       * (wlr_backend_is_session removed in wlroots 0.18) */
-      (void)0;
     }
-
-    if(!handled) {
-      for(int i = 0; i < nsyms && !handled; i++) {
-        for(int ki = 0; ki < s->cfg.keybind_count; ki++) {
-          Keybind *bind = &s->cfg.keybinds[ki];
-          if(bind->sym == syms[i] && bind->mods == mods) {
-            server_dispatch_action(s, &bind->action);
-            handled = true;
-            break;
-          }
+    for(int i = 0; i < nsyms && !handled; i++) {
+      for(int ki = 0; ki < s->cfg.keybind_count; ki++) {
+        Keybind *bind = &s->cfg.keybinds[ki];
+        if(bind->sym == syms[i] && bind->mods == mods) {
+          server_dispatch_action(s, &bind->action);
+          handled = true;
+          break;
         }
       }
     }
@@ -461,11 +511,8 @@ static void server_new_keyboard(TrixieServer *s, struct wlr_input_device *dev) {
   kb->server                  = s;
   kb->wlr_keyboard            = wlr_kb;
 
-  /* XKB keymap */
   struct xkb_context   *ctx   = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   struct xkb_rule_names rules = {
-    .rules   = NULL,
-    .model   = NULL,
     .layout  = s->cfg.keyboard.kb_layout[0] ? s->cfg.keyboard.kb_layout : NULL,
     .variant = s->cfg.keyboard.kb_variant[0] ? s->cfg.keyboard.kb_variant : NULL,
     .options = s->cfg.keyboard.kb_options[0] ? s->cfg.keyboard.kb_options : NULL,
@@ -504,7 +551,6 @@ static void handle_new_input(struct wl_listener *listener, void *data) {
     case WLR_INPUT_DEVICE_POINTER: server_new_pointer(s, dev); break;
     default: break;
   }
-
   uint32_t caps = WL_SEAT_CAPABILITY_POINTER;
   if(!wl_list_empty(&s->keyboards)) caps |= WL_SEAT_CAPABILITY_KEYBOARD;
   wlr_seat_set_capabilities(s->seat, caps);
@@ -517,7 +563,6 @@ static PaneId pane_at_cursor(TrixieServer *s, double lx, double ly) {
   Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
   int        bw = s->twm.border_w;
 
-  /* floating first (higher z) */
   for(int i = ws->pane_count - 1; i >= 0; i--) {
     Pane *p = twm_pane_by_id(&s->twm, ws->panes[i]);
     if(!p || !p->floating) continue;
@@ -541,17 +586,12 @@ static void update_cursor_focus(TrixieServer *s, uint32_t time) {
   if(pid) {
     TrixieView *v = view_from_pane(s, pid);
     if(v && v->mapped) {
-      /* find surface under cursor */
-      struct wlr_box geo;
-      wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &geo);
-
       struct wlr_scene_node *node =
           wlr_scene_node_at(&s->scene->tree.node, cx, cy, &sx, &sy);
       if(node && node->type == WLR_SCENE_NODE_BUFFER) {
-        struct wlr_scene_buffer  *scene_buf = wlr_scene_buffer_from_node(node);
-        struct wlr_scene_surface *scene_surf =
-            wlr_scene_surface_try_from_buffer(scene_buf);
-        if(scene_surf) surface = scene_surf->surface;
+        struct wlr_scene_buffer  *sb = wlr_scene_buffer_from_node(node);
+        struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(sb);
+        if(ss) surface = ss->surface;
       }
     }
   }
@@ -568,7 +608,6 @@ static void update_cursor_focus(TrixieServer *s, uint32_t time) {
 static void handle_cursor_motion(struct wl_listener *listener, void *data) {
   TrixieServer *s = CONTAINER_OF(listener, TrixieServer, cursor_motion);
   struct wlr_pointer_motion_event *ev = data;
-
   wlr_cursor_move(s->cursor, &ev->pointer->base, ev->delta_x, ev->delta_y);
 
   if(s->drag_mode == DRAG_MOVE) {
@@ -583,7 +622,6 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     server_request_redraw(s);
     return;
   }
-
   update_cursor_focus(s, ev->time_msec);
 }
 
@@ -614,8 +652,7 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
     bool            super_held = false;
     TrixieKeyboard *kb;
     wl_list_for_each(kb, &s->keyboards, link) {
-      uint32_t mods = wlr_keyboard_get_modifiers(kb->wlr_keyboard);
-      if(mods & WLR_MODIFIER_LOGO) {
+      if(wlr_keyboard_get_modifiers(kb->wlr_keyboard) & WLR_MODIFIER_LOGO) {
         super_held = true;
         break;
       }
@@ -682,11 +719,9 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
   TrixieOutput *o = CONTAINER_OF(listener, TrixieOutput, frame);
   TrixieServer *s = o->server;
 
-  /* Tick animations */
   bool still_animating = anim_tick(&s->anim);
   if(still_animating) server_sync_windows(s);
 
-  /* Update bar + deco on every frame (cheap, pixman-rendered) */
   if(o->bar) bar_update(o->bar, &s->twm, &s->cfg);
   if(o->deco) deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
 
@@ -727,7 +762,6 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   wlr_output_state_init(&state);
   wlr_output_state_set_enabled(&state, true);
 
-  /* Pick mode matching config, or preferred */
   struct wlr_output_mode *mode = NULL;
   MonitorCfg             *mcfg = NULL;
   for(int i = 0; i < s->cfg.monitor_count; i++) {
@@ -736,7 +770,6 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
       break;
     }
   }
-
   if(mcfg) {
     struct wlr_output_mode *m;
     wl_list_for_each(m, &wlr_output->modes, link) {
@@ -772,7 +805,6 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   wlr_scene_output_layout_add_output(
       s->scene_layout, layout_output, o->scene_output);
 
-  /* Determine output pixel size */
   int ow = wlr_output->width, oh = wlr_output->height;
   if(mode) {
     ow = mode->width;
@@ -781,15 +813,14 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   o->width  = ow;
   o->height = oh;
 
-  /* Resize TWM if first output */
   if(wl_list_length(&s->outputs) == 1) {
     twm_resize(&s->twm, ow, oh);
     anim_set_resize(&s->anim, ow, oh);
   }
 
-  /* Create bar and deco renderers */
-  o->bar  = bar_create(s->scene, ow, oh, &s->cfg);
-  o->deco = deco_create(s->scene);
+  /* bar and deco attach to the overlay layer */
+  o->bar  = bar_create(s->layer_overlay, ow, oh, &s->cfg);
+  o->deco = deco_create(s->layer_overlay);
 
   wlr_log(WLR_INFO, "New output: %s %dx%d", wlr_output->name, ow, oh);
 }
@@ -801,7 +832,13 @@ static void view_handle_map(struct wl_listener *listener, void *data) {
   TrixieServer *s = v->server;
   v->mapped       = true;
 
-  /* apply window rules */
+  Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
+  if(!p) {
+    wlr_log(WLR_ERROR, "MAP: pane not found for id=%u!", v->pane_id);
+    return;
+  }
+
+  /* win rules */
   const char *app_id      = v->xdg_toplevel->app_id ? v->xdg_toplevel->app_id : "";
   bool        force_float = false, force_fs = false;
   for(int i = 0; i < s->cfg.win_rule_count; i++) {
@@ -811,44 +848,79 @@ static void view_handle_map(struct wl_listener *listener, void *data) {
       if(r->fullscreen_rule) force_fs = true;
     }
   }
-
-  Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
-  if(p) {
-    if(force_float) {
-      p->floating = true;
-      if(rect_empty(p->float_rect)) p->float_rect = p->rect;
-    }
-    if(force_fs) p->fullscreen = true;
-
-    twm_reflow(&s->twm);
-
-    /* pick open animation */
-    bool is_scratch = false;
-    for(int i = 0; i < s->twm.scratch_count; i++)
-      if(s->twm.scratchpads[i].has_pane &&
-         s->twm.scratchpads[i].pane_id == v->pane_id) {
-        is_scratch = true;
-        break;
-      }
-
-    if(is_scratch)
-      anim_scratch_open(&s->anim, v->pane_id, p->rect);
-    else if(p->floating)
-      anim_float_open(&s->anim, v->pane_id, p->rect);
-    else
-      anim_open(&s->anim, v->pane_id, p->rect);
-
-    /* send initial size */
-    int bw = p->floating ? 0 : s->twm.border_w;
-    int cw = p->rect.w - bw * 2, ch = p->rect.h - bw * 2;
-    if(cw < 1) cw = 1;
-    if(ch < 1) ch = 1;
-    wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
-    wlr_xdg_toplevel_set_activated(v->xdg_toplevel, true);
+  if(force_float) {
+    p->floating = true;
+    if(rect_empty(p->float_rect)) p->float_rect = p->rect;
   }
+  if(force_fs) p->fullscreen = true;
+
+  twm_reflow(&s->twm);
+  wlr_log(WLR_INFO,
+          "MAP DIAG: pane=%u rect=(%d,%d,%d,%d) floating=%d fs=%d",
+          v->pane_id,
+          p->rect.x,
+          p->rect.y,
+          p->rect.w,
+          p->rect.h,
+          p->floating,
+          p->fullscreen);
+  wlr_log(WLR_INFO,
+          "MAP DIAG: scene_tree=%p node.enabled=%d node.parent=%p",
+          (void *)v->scene_tree,
+          v->scene_tree->node.enabled,
+          (void *)v->scene_tree->node.parent);
+  wlr_log(WLR_INFO,
+          "MAP DIAG: layer_windows=%p layer_floating=%p layer_overlay=%p",
+          (void *)s->layer_windows,
+          (void *)s->layer_floating,
+          (void *)s->layer_overlay);
+  struct wlr_scene_tree *tgt =
+      (p->floating || p->fullscreen) ? s->layer_floating : s->layer_windows;
+  wlr_scene_node_reparent(&v->scene_tree->node, tgt);
+  wlr_scene_node_raise_to_top(&v->scene_tree->node);
+  wlr_log(WLR_INFO,
+          "MAP DIAG: after reparent node.parent=%p (expected tgt=%p)",
+          (void *)v->scene_tree->node.parent,
+          (void *)tgt);
+  /* Send the configure FIRST and record that we've done so. The client
+   * must ack before it will render at the right size. We do NOT call
+   * server_sync_windows yet — that will happen on the next output frame
+   * once the client has acked and committed. */
+  int bw = (p->floating || p->fullscreen) ? 0 : s->twm.border_w;
+  int cw = p->rect.w - bw * 2;
+  int ch = p->rect.h - bw * 2;
+  if(cw < 1) cw = 1;
+  if(ch < 1) ch = 1;
+
+  wlr_xdg_toplevel_set_activated(v->xdg_toplevel, true);
+  wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
+
+  /* Position the scene node immediately so the window is visible even
+   * before the client acks the configure. wlr_scene uses the node
+   * position independently of the surface size. */
+  int win_x = p->rect.x + bw;
+  int win_y = p->rect.y + bw;
+  wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
+  wlr_scene_node_set_enabled(&v->scene_tree->node, true);
+
+  bool is_scratch = false;
+  for(int i = 0; i < s->twm.scratch_count; i++)
+    if(s->twm.scratchpads[i].has_pane &&
+       s->twm.scratchpads[i].pane_id == v->pane_id) {
+      is_scratch = true;
+      break;
+    }
+
+  if(is_scratch)
+    anim_scratch_open(&s->anim, v->pane_id, p->rect);
+  else if(p->floating)
+    anim_float_open(&s->anim, v->pane_id, p->rect);
+  else
+    anim_open(&s->anim, v->pane_id, p->rect);
 
   server_focus_pane(s, v->pane_id);
-  server_sync_windows(s);
+  /* sync_windows will reposition correctly on the next frame tick;
+   * request a redraw to kick the frame loop. */
   server_request_redraw(s);
 }
 
@@ -875,7 +947,6 @@ static void view_handle_unmap(struct wl_listener *listener, void *data) {
   }
 
   if(s->seat->keyboard_state.focused_surface) {
-    /* refocus next available window */
     TrixieView *next;
     wl_list_for_each(next, &s->views, link) {
       if(next != v && next->mapped) {
@@ -890,7 +961,6 @@ static void view_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieView   *v = CONTAINER_OF(listener, TrixieView, destroy);
   TrixieServer *s = v->server;
 
-  /* Defer close by one animation cycle (via next frame) */
   twm_close(&s->twm, v->pane_id);
 
   wl_list_remove(&v->map.link);
@@ -908,7 +978,6 @@ static void view_handle_destroy(struct wl_listener *listener, void *data) {
 
 static void view_handle_commit(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, commit);
-  /* Sync scene node size on commit */
   server_request_redraw(v->server);
 }
 
@@ -927,43 +996,32 @@ static void view_handle_set_title(struct wl_listener *listener, void *data) {
 
 static void view_handle_set_app_id(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, set_app_id);
-  /* If we didn't know app_id at new_toplevel time, assign scratch now */
   if(v->xdg_toplevel->app_id)
     twm_try_assign_scratch(&v->server->twm, v->pane_id, v->xdg_toplevel->app_id);
 }
 
 static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
-  TrixieServer           *s = CONTAINER_OF(listener, TrixieServer, new_xdg_surface);
-  struct wlr_xdg_surface *surface = data;
+  TrixieServer            *s = CONTAINER_OF(listener, TrixieServer, new_xdg_surface);
+  struct wlr_xdg_toplevel *toplevel = data;
+  struct wlr_xdg_surface  *surface  = toplevel->base;
 
-  if(surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-    /* popups are handled by scene automatically */
-    return;
-  }
+  const char *app_id = toplevel->app_id ? toplevel->app_id : "";
+  wlr_log(WLR_INFO, "XDG_TOPLEVEL: new toplevel app_id='%s'", app_id);
 
-  struct wlr_xdg_toplevel *toplevel = surface->toplevel;
-  const char              *app_id   = toplevel->app_id ? toplevel->app_id : "";
-
-  /* Allocate TWM pane */
   PaneId pane_id = twm_open(&s->twm, app_id);
+  wlr_log(WLR_INFO, "XDG_TOPLEVEL: assigned pane_id=%u", pane_id);
 
-  /* Try scratchpad assignment */
-  twm_try_assign_scratch(&s->twm, pane_id, app_id);
-
-  /* Set server-side decoration */
   wlr_xdg_toplevel_set_activated(toplevel, false);
   wlr_xdg_toplevel_set_tiled(
       toplevel, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
 
-  /* Allocate view */
   TrixieView *v   = calloc(1, sizeof(*v));
   v->server       = s;
   v->xdg_toplevel = toplevel;
   v->pane_id      = pane_id;
   v->mapped       = false;
 
-  /* Create scene tree for this toplevel */
-  v->scene_tree = wlr_scene_xdg_surface_create(&s->scene->tree, surface);
+  v->scene_tree = wlr_scene_xdg_surface_create(s->layer_windows, surface);
   wlr_scene_node_set_enabled(&v->scene_tree->node, true);
 
   v->map.notify                = view_handle_map;
@@ -974,8 +1032,6 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   v->set_title.notify          = view_handle_set_title;
   v->set_app_id.notify         = view_handle_set_app_id;
 
-  /* wlroots 0.18: map/unmap signals live on the xdg_surface, not the
-   * underlying wl_surface. Use surface->events.map / surface->events.unmap. */
   wl_signal_add(&toplevel->base->surface->events.map, &v->map);
   wl_signal_add(&toplevel->base->surface->events.unmap, &v->unmap);
   wl_signal_add(&surface->events.destroy, &v->destroy);
@@ -988,24 +1044,19 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
 }
 
 static void handle_new_layer_surface(struct wl_listener *listener, void *data) {
-  /* Layer shell surfaces (e.g. external bars) — attach to scene */
   TrixieServer *s = CONTAINER_OF(listener, TrixieServer, new_layer_surface);
   struct wlr_layer_surface_v1 *layer = data;
   wlr_log(WLR_DEBUG, "New layer surface: namespace=%s", layer->namespace);
-  /* Minimal: create scene tree; a full implementation would handle layers properly
-   */
-  wlr_scene_layer_surface_v1_create(&s->scene->tree, layer);
+  wlr_scene_layer_surface_v1_create(s->layer_overlay, layer);
 }
 
 static void handle_new_deco(struct wl_listener *listener, void *data) {
   struct wlr_xdg_toplevel_decoration_v1 *deco = data;
-  /* Force server-side decorations */
   wlr_xdg_toplevel_decoration_v1_set_mode(
       deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
 }
 
-/* ── IPC (Unix socket) ────────────────────────────────────────────────────── */
-#include <fcntl.h>
+/* ── IPC ──────────────────────────────────────────────────────────────────── */
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -1029,7 +1080,6 @@ static int ipc_read_cb(int fd, uint32_t mask, void *data) {
   char    buf[1024] = { 0 };
   ssize_t n         = read(client, buf, sizeof(buf) - 1);
   if(n > 0) {
-    /* trim newline */
     char *nl = strchr(buf, '\n');
     if(nl) *nl = '\0';
     char reply[4096] = { 0 };
@@ -1082,7 +1132,6 @@ void server_init_config_watch(TrixieServer *s) {
     if(!home) home = "/root";
     snprintf(dir, sizeof(dir), "%s/.config/trixie", home);
   }
-
   s->inotify_fd = inotify_init1(IN_NONBLOCK);
   if(s->inotify_fd < 0) return;
   if(inotify_add_watch(s->inotify_fd, dir, IN_MODIFY | IN_CREATE) < 0) {
@@ -1153,7 +1202,6 @@ int main(int argc, char *argv[]) {
   wlr_renderer_init_wl_display(s->renderer, s->display);
   s->allocator = wlr_allocator_autocreate(s->backend, s->renderer);
 
-  /* Global protocols */
   wlr_compositor_create(s->display, 5, s->renderer);
   wlr_subcompositor_create(s->display);
   wlr_data_device_manager_create(s->display);
@@ -1163,16 +1211,21 @@ int main(int argc, char *argv[]) {
   s->scene         = wlr_scene_create();
   s->scene_layout  = wlr_scene_attach_output_layout(s->scene, s->output_layout);
 
+  /* Z-ordered scene layers — order of creation = bottom to top */
+  s->layer_background = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_windows    = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_floating   = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_overlay    = wlr_scene_tree_create(&s->scene->tree);
+
   /* Shells */
   s->xdg_shell              = wlr_xdg_shell_create(s->display, 6);
   s->new_xdg_surface.notify = handle_new_xdg_surface;
-  wl_signal_add(&s->xdg_shell->events.new_surface, &s->new_xdg_surface);
+  wl_signal_add(&s->xdg_shell->events.new_toplevel, &s->new_xdg_surface);
 
   s->layer_shell              = wlr_layer_shell_v1_create(s->display, 4);
   s->new_layer_surface.notify = handle_new_layer_surface;
   wl_signal_add(&s->layer_shell->events.new_surface, &s->new_layer_surface);
 
-  /* XDG output manager */
   s->output_mgr = wlr_xdg_output_manager_v1_create(s->display, s->output_layout);
 
   /* Decorations */
@@ -1235,11 +1288,9 @@ int main(int argc, char *argv[]) {
   setenv("XDG_SESSION_TYPE", "wayland", true);
   wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket);
 
-  /* IPC + config watch */
   server_init_ipc(s);
   server_init_config_watch(s);
 
-  /* exec_once */
   if(!s->exec_once_done) {
     s->exec_once_done = true;
     for(int i = 0; i < s->cfg.exec_once_count; i++)
