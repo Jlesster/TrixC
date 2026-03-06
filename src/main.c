@@ -110,6 +110,42 @@ TrixieView *view_from_pane(TrixieServer *s, PaneId id) {
   return NULL;
 }
 
+TrixieView *view_at(TrixieServer        *s,
+                    double               lx,
+                    double               ly,
+                    struct wlr_surface **surf_out,
+                    double              *sx,
+                    double              *sy) {
+  struct wlr_scene_node *node =
+      wlr_scene_node_at(&s->scene->tree.node, lx, ly, sx, sy);
+  if(!node || node->type != WLR_SCENE_NODE_BUFFER) return NULL;
+  struct wlr_scene_buffer  *sb = wlr_scene_buffer_from_node(node);
+  struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(sb);
+  if(!ss) return NULL;
+  if(surf_out) *surf_out = ss->surface;
+  /* Walk up to find the TrixieView owning this tree */
+  struct wlr_scene_tree *tree = node->parent;
+  while(tree && &tree->node != &s->scene->tree.node) {
+    TrixieView *v;
+    wl_list_for_each(v, &s->views, link) {
+      if(v->scene_tree == tree && v->mapped) return v;
+    }
+    tree = tree->node.parent;
+  }
+  return NULL;
+}
+
+/* Trigger / refresh an animation for a pane whose rect just changed.
+ * Used after config reloads and direct rect mutations outside of twm_reflow. */
+void server_apply_anim(TrixieServer *s, PaneId id) {
+  Pane *p = twm_pane_by_id(&s->twm, id);
+  if(!p) return;
+  /* Only morph — open/close anims are handled at map/unmap time */
+  if(!anim_is_closing(&s->anim, id))
+    anim_morph(&s->anim, id, p->rect, p->rect);
+  server_request_redraw(s);
+}
+
 void server_focus_pane(TrixieServer *s, PaneId id) {
   TrixieView *v = view_from_pane(s, id);
   if(!v) return;

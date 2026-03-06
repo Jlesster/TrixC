@@ -14,6 +14,7 @@
  */
 #include "trixie.h"
 #include <ctype.h>
+#include <fontconfig/fontconfig.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -865,6 +866,46 @@ static void handle_kv(Config     *c,
     return;
   }
 
+  /* ── bar_module <label> {} ──────────────────────────────────────────────── */
+  if(!strcmp(block, "bar_module") && c->bar.module_cfg_count > 0) {
+    BarModuleCfg *mc = &c->bar.module_cfgs[c->bar.module_cfg_count - 1];
+    if(!strcmp(key, "exec"))
+      strncpy(mc->exec, val.s, sizeof(mc->exec) - 1);
+    else if(!strcmp(key, "interval"))
+      mc->interval = (int)val.d;
+    else if(!strcmp(key, "icon"))
+      strncpy(mc->icon, val.s, sizeof(mc->icon) - 1);
+    else if(!strcmp(key, "color") && val.kind == T_COLOR) {
+      mc->color     = tok_color(val);
+      mc->has_color = true;
+    }
+    return;
+  }
+
+  /* ── window_rule {} ──────────────────────────────────────────────────────── */
+  if(!strcmp(block, "window_rule")) {
+    if(c->win_rule_count > 0) {
+      WinRule *r = &c->win_rules[c->win_rule_count - 1];
+      if(!strcmp(key, "float"))
+        r->float_rule = tok_bool(val.s);
+      else if(!strcmp(key, "fullscreen"))
+        r->fullscreen_rule = tok_bool(val.s);
+      else if(!strcmp(key, "noborder"))
+        r->noborder = tok_bool(val.s);
+      else if(!strcmp(key, "notitle"))
+        r->notitle = tok_bool(val.s);
+      else if(!strcmp(key, "workspace"))
+        r->forced_ws = (int)val.d;
+      else if(!strcmp(key, "size")) {
+        r->forced_w = (int)val.d;
+        ts_eat(ts, T_COMMA);
+        Tok h       = ts_next(ts);
+        r->forced_h = (int)h.d;
+      }
+    }
+    return;
+  }
+
   /* ── animations {} / general {} / unknown ─────────────────────────────── */
   /* silently accepted */
   (void)label;
@@ -930,6 +971,19 @@ static void parse_block_body(TokStream  *ts,
           sp->height_pct = 0.6f;
           strncpy(sp->name, label_tok.s, sizeof(sp->name) - 1);
           strncpy(sp->app_id, label_tok.s, sizeof(sp->app_id) - 1);
+        }
+        if(!strcmp(key, "bar_module") &&
+           c->bar.module_cfg_count < MAX_BAR_MODULE_CFGS) {
+          BarModuleCfg *mc = &c->bar.module_cfgs[c->bar.module_cfg_count++];
+          memset(mc, 0, sizeof(*mc));
+          strncpy(mc->name, label_tok.s, sizeof(mc->name) - 1);
+          mc->interval = 5; /* default poll interval */
+        }
+        if(!strcmp(key, "window_rule") && c->win_rule_count < MAX_WIN_RULES) {
+          WinRule *r = &c->win_rules[c->win_rule_count++];
+          memset(r, 0, sizeof(*r));
+          r->forced_ws = -1;
+          strncpy(r->app_id, label_tok.s, sizeof(r->app_id) - 1);
         }
         parse_block_body(ts, c, vt, key, label_tok.s, file_dir);
         ts_eat(ts, T_RBRACE);
@@ -1161,12 +1215,125 @@ void config_defaults(Config *c) {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
+/* ── Fontconfig font resolution ───────────────────────────────────────────── */
+
+/* Resolve a font name/filename/path to a full absolute path using fontconfig.
+ * Handles:
+ *   - Already-absolute paths: returned as-is if the file exists
+ *   - Bare filenames like "IosevkaNerdFont-Regular.ttf": searched via fc-list
+ *   - Family names like "Iosevka Nerd Font": matched by fontconfig pattern
+ * Returns true and fills out[0..outlen-1] on success. */
+static bool
+fc_resolve(const char *query, int weight, int slant, char *out, int outlen) {
+  if(!query || !query[0]) return false;
+
+  /* Already an absolute path that exists — use it directly */
+  if(query[0] == '/') {
+    FILE *f = fopen(query, "r");
+    if(f) {
+      fclose(f);
+      strncpy(out, query, outlen - 1);
+      return true;
+    }
+    wlr_log(WLR_ERROR, "config: font path '%s' does not exist", query);
+    return false;
+  }
+
+  FcInit();
+  FcConfig *fc = FcConfigGetCurrent();
+
+  /* Try bare filename match first — walk all font files fontconfig knows */
+  if(strchr(query, '.')) {
+    FcFontSet *fs = FcConfigGetFonts(fc, FcSetSystem);
+    if(fs) {
+      for(int i = 0; i < fs->nfont; i++) {
+        FcChar8 *file = NULL;
+        if(FcPatternGetString(fs->fonts[i], FC_FILE, 0, &file) == FcResultMatch) {
+          /* Match on basename */
+          const char *base = strrchr((char *)file, '/');
+          base             = base ? base + 1 : (char *)file;
+          if(strcasecmp(base, query) == 0) {
+            strncpy(out, (char *)file, outlen - 1);
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  /* Pattern match: treat query as family name (or partial name) */
+  FcPattern *pat = FcNameParse((FcChar8 *)query);
+  FcPatternAddInteger(pat, FC_WEIGHT, weight);
+  FcPatternAddInteger(pat, FC_SLANT, slant);
+  FcConfigSubstitute(fc, pat, FcMatchPattern);
+  FcDefaultSubstitute(pat);
+
+  FcResult   result;
+  FcPattern *match = FcFontMatch(fc, pat, &result);
+  FcPatternDestroy(pat);
+
+  if(!match) return false;
+
+  FcChar8 *file = NULL;
+  bool     ok   = false;
+  if(FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
+    strncpy(out, (char *)file, outlen - 1);
+    ok = true;
+  }
+  FcPatternDestroy(match);
+  return ok;
+}
+
+/* Resolve cfg->font_path (whatever the user wrote) to real paths for
+ * regular, bold, and italic variants. Called after parsing completes. */
+static void config_resolve_fonts(Config *c) {
+  /* The raw value the user set — could be a name, filename, or full path */
+  char raw[256];
+  strncpy(raw, c->font_path, sizeof(raw) - 1);
+
+  /* Regular */
+  char resolved[256] = { 0 };
+  if(fc_resolve(
+         raw, FC_WEIGHT_REGULAR, FC_SLANT_ROMAN, resolved, sizeof(resolved))) {
+    strncpy(c->font_path, resolved, sizeof(c->font_path) - 1);
+    wlr_log(WLR_INFO, "config: font regular  → %s", c->font_path);
+  } else {
+    wlr_log(WLR_ERROR, "config: could not resolve font '%s'", raw);
+  }
+
+  /* Bold — try the same query with bold weight */
+  if(fc_resolve(raw,
+                FC_WEIGHT_BOLD,
+                FC_SLANT_ROMAN,
+                c->font_path_bold,
+                sizeof(c->font_path_bold))) {
+    wlr_log(WLR_INFO, "config: font bold     → %s", c->font_path_bold);
+  } else {
+    /* Fall back to regular for bold */
+    strncpy(c->font_path_bold, c->font_path, sizeof(c->font_path_bold) - 1);
+    wlr_log(WLR_INFO, "config: font bold     → (same as regular)");
+  }
+
+  /* Italic */
+  if(fc_resolve(raw,
+                FC_WEIGHT_REGULAR,
+                FC_SLANT_ITALIC,
+                c->font_path_italic,
+                sizeof(c->font_path_italic))) {
+    wlr_log(WLR_INFO, "config: font italic   → %s", c->font_path_italic);
+  } else {
+    strncpy(c->font_path_italic, c->font_path, sizeof(c->font_path_italic) - 1);
+    wlr_log(WLR_INFO, "config: font italic   → (same as regular)");
+  }
+}
+
 void config_load(Config *c, const char *path) {
   config_defaults(c);
 
   FILE *f = fopen(path, "r");
   if(!f) {
     wlr_log(WLR_INFO, "config: no file at %s, using defaults", path);
+    config_resolve_fonts(c);
     return;
   }
   fseek(f, 0, SEEK_END);
@@ -1192,6 +1359,9 @@ void config_load(Config *c, const char *path) {
   VarTable vt = { 0 };
   parse_file_src(c, &vt, src, dir);
   free(src);
+
+  /* Resolve font name/filename → absolute paths for regular/bold/italic */
+  config_resolve_fonts(c);
 
   wlr_log(WLR_INFO,
           "config: loaded %s (%d keybinds, %d monitors, %d scratchpads)",

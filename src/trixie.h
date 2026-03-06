@@ -223,21 +223,35 @@ typedef struct {
   float scale;
 } MonitorCfg;
 
+/* Custom bar module config */
 typedef struct {
-  BarPos position;
-  int    height;
-  Color  bg, fg, accent, dim;
-  Color  active_ws_fg, active_ws_bg;
-  Color  occupied_ws_fg, inactive_ws_fg;
-  char   modules_left[MAX_BAR_MODS][64];
-  char   modules_center[MAX_BAR_MODS][64];
-  char   modules_right[MAX_BAR_MODS][64];
-  int    modules_left_n, modules_center_n, modules_right_n;
-  bool   separator;
-  Color  separator_color;
-  int    pill_radius;
-  int    item_spacing;
-  float  font_size;
+  char  name[64];
+  char  exec[256];
+  int   interval;
+  char  icon[32];
+  Color color;
+  bool  has_color;
+} BarModuleCfg;
+
+#define MAX_BAR_MODULE_CFGS 16
+
+typedef struct {
+  BarPos       position;
+  int          height;
+  Color        bg, fg, accent, dim;
+  Color        active_ws_fg, active_ws_bg;
+  Color        occupied_ws_fg, inactive_ws_fg;
+  char         modules_left[MAX_BAR_MODS][64];
+  char         modules_center[MAX_BAR_MODS][64];
+  char         modules_right[MAX_BAR_MODS][64];
+  int          modules_left_n, modules_center_n, modules_right_n;
+  bool         separator;
+  Color        separator_color;
+  int          pill_radius;
+  int          item_spacing;
+  float        font_size;
+  BarModuleCfg module_cfgs[MAX_BAR_MODULE_CFGS];
+  int          module_cfg_count;
 } BarCfg;
 
 typedef struct {
@@ -253,7 +267,9 @@ typedef struct {
 } KbCfg;
 
 typedef struct {
-  char  font_path[256];
+  char  font_path[256];        /* resolved at load time via fontconfig */
+  char  font_path_bold[256];   /* auto-detected bold variant           */
+  char  font_path_italic[256]; /* auto-detected italic variant         */
   float font_size;
   int   gap, border_width, corner_radius;
   bool  smart_gaps;
