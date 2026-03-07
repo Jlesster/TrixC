@@ -1,0 +1,263 @@
+[
+  {
+    "name": "history",
+    "type": "pkgconfig",
+    "version": "8.3",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libhistory.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "history_dep"
+    ]
+  },
+  {
+    "name": "libdrm",
+    "type": "pkgconfig",
+    "version": "2.4.131",
+    "compile_args": [
+      "-I/usr/include/libdrm"
+    ],
+    "link_args": [
+      "/usr/lib/libdrm.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "libdrm_dep"
+    ]
+  },
+  {
+    "name": "pixman-1",
+    "type": "pkgconfig",
+    "version": "0.46.4",
+    "compile_args": [
+      "-I/usr/include/pixman-1"
+    ],
+    "link_args": [
+      "/usr/lib/libpixman-1.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "pixman_1_dep"
+    ]
+  },
+  {
+    "name": "fontconfig",
+    "type": "pkgconfig",
+    "version": "2.17.1",
+    "compile_args": [
+      "-I/usr/include/freetype2",
+      "-I/usr/include/libpng16"
+    ],
+    "link_args": [
+      "/usr/lib/libfontconfig.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "fontconfig_dep"
+    ]
+  },
+  {
+    "name": "harfbuzz-gobject",
+    "type": "pkgconfig",
+    "version": "12.3.2",
+    "compile_args": [
+      "-I/usr/include/harfbuzz",
+      "-I/usr/include/freetype2",
+      "-I/usr/include/libpng16",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread"
+    ],
+    "link_args": [
+      "/usr/lib/libharfbuzz-gobject.so",
+      "/usr/lib/libharfbuzz.so",
+      "/usr/lib/libgobject-2.0.so",
+      "/usr/lib/libglib-2.0.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "harfbuzz_gobject_dep"
+    ]
+  },
+  {
+    "name": "spandsp",
+    "type": "pkgconfig",
+    "version": "0.0.6",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libspandsp.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "spandsp_dep"
+    ]
+  },
+  {
+    "name": "wlroots-0.18",
+    "type": "pkgconfig",
+    "version": "0.18.3",
+    "compile_args": [
+      "-I/usr/include/wlroots-0.18",
+      "-I/usr/include/pixman-1",
+      "-I/usr/include/libdrm"
+    ],
+    "link_args": [
+      "/usr/lib/libwlroots-0.18.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "wlroots_0_18_dep"
+    ]
+  },
+  {
+    "name": "jack",
+    "type": "pkgconfig",
+    "version": "3.1410.0",
+    "compile_args": [
+      "-D_REENTRANT"
+    ],
+    "link_args": [
+      "/usr/lib/libjack.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "jack_dep"
+    ]
+  },
+  {
+    "name": "json-c",
+    "type": "pkgconfig",
+    "version": "0.18",
+    "compile_args": [
+      "-I/usr/include/json-c"
+    ],
+    "link_args": [
+      "/usr/lib/libjson-c.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "json_c_dep"
+    ]
+  },
+  {
+    "name": "girara",
+    "type": "pkgconfig",
+    "version": "2026.02.04",
+    "compile_args": [
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib/glib-2.0/include",
+      "-I/usr/include/libmount",
+      "-I/usr/include/blkid",
+      "-I/usr/include/sysprof-6",
+      "-pthread"
+    ],
+    "link_args": [
+      "/usr/lib/libgirara.so",
+      "/usr/lib/libgio-2.0.so",
+      "/usr/lib/libgobject-2.0.so",
+      "/usr/lib/libglib-2.0.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "girara_dep"
+    ]
+  },
+  {
+    "name": "freetype2",
+    "type": "pkgconfig",
+    "version": "26.4.20",
+    "compile_args": [
+      "-I/usr/include/freetype2",
+      "-I/usr/include/libpng16"
+    ],
+    "link_args": [
+      "/usr/lib/libfreetype.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "freetype_dep"
+    ]
+  },
+  {
+    "name": "wayland-server",
+    "type": "pkgconfig",
+    "version": "1.24.0",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libwayland-server.so",
+      "-lm"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "wayland_server_dep"
+    ]
+  },
+  {
+    "name": "xkbcommon",
+    "type": "pkgconfig",
+    "version": "1.13.1",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libxkbcommon.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "xkbcommon_dep"
+    ]
+  }
+]

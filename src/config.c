@@ -584,18 +584,29 @@ static void handle_kv(Config     *c,
       int  argc          = 0;
       strncpy(args[argc++], val.s, 255); /* combo */
       while(ts_peek(ts).kind == T_COMMA) {
-        ts_next(ts);
-        Tok a = ts_peek(ts);
-        if(a.kind == T_RBRACE || a.kind == T_EOF || a.kind == T_LBRACE) break;
-        if(argc < 16) {
+        ts_next(ts); /* eat comma */
+        /* Collect all space-separated tokens until the next comma, brace, or EOF.
+         * This lets "exec, kitty -e yazi" work without requiring commas between
+         * the command and its arguments. Each whitespace-delimited token becomes
+         * its own arg entry, exactly as if it had been comma-separated. */
+        bool got_one = false;
+        for(;;) {
+          Tok a = ts_peek(ts);
+          if(a.kind == T_RBRACE || a.kind == T_EOF || a.kind == T_LBRACE) break;
+          if(a.kind == T_COMMA) break; /* next comma starts a new explicit arg */
+          if(argc >= 16) {
+            ts_next(ts);
+            continue;
+          }
           Tok av = ts_next(ts);
           if(av.kind == T_IDENT || av.kind == T_STRING)
             strncpy(args[argc++], av.s, 255);
           else if(av.kind == T_INT || av.kind == T_FLOAT || av.kind == T_DIM_PX ||
                   av.kind == T_DIM_HZ || av.kind == T_DIM_PCT || av.kind == T_DIM_MS)
             snprintf(args[argc++], 255, "%.10g", av.d);
-        } else
-          ts_next(ts);
+          got_one = true;
+        }
+        (void)got_one;
       }
       if(argc < 2) return;
       /* parse combo: SUPER+SHIFT:key */
@@ -660,6 +671,10 @@ static void handle_kv(Config     *c,
             act.kind = ACTION_MOVE_LEFT;
           else if(!strcmp(arg1, "right"))
             act.kind = ACTION_MOVE_RIGHT;
+          else if(!strcmp(arg1, "up"))
+            act.kind = ACTION_MOVE_UP;
+          else if(!strcmp(arg1, "down"))
+            act.kind = ACTION_MOVE_DOWN;
         }
       } else if(!strcmp(act_str, "workspace")) {
         act.kind = ACTION_WORKSPACE;
@@ -683,6 +698,11 @@ static void handle_kv(Config     *c,
         act.kind = ACTION_QUIT;
       else if(!strcmp(act_str, "reload"))
         act.kind = ACTION_RELOAD;
+      else if(!strcmp(act_str, "switch_vt")) {
+        act.kind = ACTION_SWITCH_VT;
+        act.n    = arg1 ? atoi(arg1) : 1;
+      } else if(!strcmp(act_str, "emergency_quit"))
+        act.kind = ACTION_EMERGENCY_QUIT;
       else if(!strcmp(act_str, "scratchpad")) {
         act.kind = ACTION_SCRATCHPAD;
         if(arg1) strncpy(act.name, arg1, sizeof(act.name) - 1);
@@ -695,6 +715,93 @@ static void handle_kv(Config     *c,
         c->keybinds[c->keybind_count].action = act;
         c->keybind_count++;
       }
+    } else if(!strcmp(key, "window_rule")) {
+      /* Inline form: window_rule = "matcher", effect [, effect ...]
+       *
+       * Effects (space-separated tokens after the effect keyword):
+       *   float               noborder         notitle
+       *   fullscreen          workspace N
+       *   size WxH            size W H         (both forms accepted)
+       *   position X Y        opacity F
+       */
+      if(c->win_rule_count >= MAX_WIN_RULES) return;
+      WinRule *r = &c->win_rules[c->win_rule_count++];
+      memset(r, 0, sizeof(*r));
+      r->forced_ws = -1;
+
+      /* val = matcher string/ident — strip prefix, set r->app_id */
+      const char *matcher = val.s;
+      if(!strncmp(matcher, "title:", 6)) {
+        /* title: prefix — store as "title:pattern" so matcher can detect it */
+        snprintf(r->app_id, sizeof(r->app_id), "title:%s", matcher + 6);
+      } else {
+        if(!strncmp(matcher, "app_id:", 7))
+          matcher += 7;
+        else if(!strncmp(matcher, "class:", 6))
+          matcher += 6;
+        strncpy(r->app_id, matcher, sizeof(r->app_id) - 1);
+      }
+      /* Consume comma-separated effect tokens until next non-effect or EOF */
+      while(ts_peek(ts).kind == T_COMMA) {
+        ts_next(ts); /* eat comma */
+        Tok eff = ts_peek(ts);
+        if(eff.kind == T_RBRACE || eff.kind == T_EOF || eff.kind == T_LBRACE) break;
+        if(eff.kind != T_IDENT && eff.kind != T_STRING) break;
+        ts_next(ts);
+
+        if(!strcmp(eff.s, "float"))
+          r->float_rule = true;
+        else if(!strcmp(eff.s, "fullscreen"))
+          r->fullscreen_rule = true;
+        else if(!strcmp(eff.s, "noborder"))
+          r->noborder = true;
+        else if(!strcmp(eff.s, "notitle"))
+          r->notitle = true;
+        else if(!strcmp(eff.s, "workspace")) {
+          Tok n        = ts_next(ts);
+          r->forced_ws = (int)n.d;
+        } else if(!strcmp(eff.s, "opacity")) {
+          Tok n      = ts_next(ts);
+          r->opacity = (float)n.d;
+        } else if(!strcmp(eff.s, "size")) {
+          /* "size 900x550": lexer splits this into T_INT(900) + T_IDENT("x550").
+           * Also accept "size 900, 550" and "size 900 550" (space-separated). */
+          Tok w = ts_next(ts);
+          if(w.kind == T_IDENT) {
+            /* Single token like "900x550" — split on 'x' or 'X' */
+            char *xp = strchr(w.s, 'x');
+            if(!xp) xp = strchr(w.s, 'X');
+            if(xp) {
+              *xp         = '\0';
+              r->forced_w = atoi(w.s);
+              r->forced_h = atoi(xp + 1);
+            }
+          } else {
+            /* Numeric width token (T_INT / T_DIM_PX) */
+            r->forced_w = (int)w.d;
+            /* Check if the height is attached as "x550" in the very next token */
+            Tok nx      = ts_peek(ts);
+            if(nx.kind == T_IDENT && (nx.s[0] == 'x' || nx.s[0] == 'X') &&
+               isdigit((unsigned char)nx.s[1])) {
+              ts_next(ts); /* consume "x550" */
+              r->forced_h = atoi(nx.s + 1);
+            } else {
+              /* "900, 550" or "900 550" */
+              ts_eat(ts, T_COMMA);
+              Tok h       = ts_next(ts);
+              r->forced_h = (int)h.d;
+            }
+          }
+        } else if(!strcmp(eff.s, "position")) {
+          /* "position X Y" — space-separated, no comma required */
+          Tok x       = ts_next(ts);
+          r->forced_x = (int)x.d;
+          ts_eat(ts, T_COMMA); /* optional comma */
+          Tok y       = ts_next(ts);
+          r->forced_y = (int)y.d;
+        }
+        /* unknown effects are silently skipped */
+      }
     }
     return;
   }
@@ -706,6 +813,10 @@ static void handle_kv(Config     *c,
       b->position = !strcmp(val.s, "top") ? BAR_TOP : BAR_BOTTOM;
     else if(!strcmp(key, "height"))
       b->height = (int)val.d;
+    else if(!strcmp(key, "padding"))
+      b->padding = (int)val.d;
+    else if(!strcmp(key, "glyph_y_offset"))
+      b->glyph_y_offset = (int)val.d;
     else if(!strcmp(key, "item_spacing"))
       b->item_spacing = (int)val.d;
     else if(!strcmp(key, "pill_radius"))
@@ -730,6 +841,8 @@ static void handle_kv(Config     *c,
       b->inactive_ws_fg = tok_color(val);
     else if(!strcmp(key, "separator"))
       b->separator = tok_bool(val.s);
+    else if(!strcmp(key, "separator_top"))
+      b->separator_top = tok_bool(val.s);
     else if(!strcmp(key, "separator_color"))
       b->separator_color = tok_color(val);
     else if(!strcmp(key, "modules_left")) {
@@ -803,14 +916,23 @@ static void handle_kv(Config     *c,
       c->colors.active_border = tok_color(val);
     else if(!strcmp(key, "inactive_border"))
       c->colors.inactive_border = tok_color(val);
+    else if(!strcmp(key, "active_title"))
+      c->colors.active_title = tok_color(val);
+    else if(!strcmp(key, "inactive_title"))
+      c->colors.inactive_title = tok_color(val);
     else if(!strcmp(key, "pane_bg"))
       c->colors.pane_bg = tok_color(val);
-    else if(!strcmp(key, "bar_bg"))
-      c->bar.bg = tok_color(val);
-    else if(!strcmp(key, "bar_fg"))
-      c->bar.fg = tok_color(val);
-    else if(!strcmp(key, "bar_accent"))
-      c->bar.accent = tok_color(val);
+    else if(!strcmp(key, "bar_bg")) {
+      c->colors.bar_bg = tok_color(val);
+      c->bar.bg        = tok_color(val); /* sync to bar too */
+    } else if(!strcmp(key, "bar_fg")) {
+      c->colors.bar_fg = tok_color(val);
+      c->bar.fg        = tok_color(val);
+    } else if(!strcmp(key, "bar_accent")) {
+      c->colors.bar_accent = tok_color(val);
+      c->bar.accent        = tok_color(val);
+    } else if(!strcmp(key, "focus_ring"))
+      c->colors.focus_ring = tok_color(val);
     return;
   }
 
@@ -841,10 +963,21 @@ static void handle_kv(Config     *c,
     else if(!strcmp(key, "scale"))
       m->scale = (float)val.d;
     else if(!strcmp(key, "position")) {
-      m->pos_x = (int)val.d;
-      ts_eat(ts, T_COMMA);
-      Tok y    = ts_next(ts);
-      m->pos_y = (int)y.d;
+      if(val.kind == T_LBRACKET) {
+        /* position = [x, y] */
+        Tok x    = ts_next(ts);
+        m->pos_x = (int)x.d;
+        ts_eat(ts, T_COMMA);
+        Tok y    = ts_next(ts);
+        m->pos_y = (int)y.d;
+        ts_eat(ts, T_RBRACKET);
+      } else {
+        /* position = x, y */
+        m->pos_x = (int)val.d;
+        ts_eat(ts, T_COMMA);
+        Tok y    = ts_next(ts);
+        m->pos_y = (int)y.d;
+      }
     }
     return;
   }
@@ -896,11 +1029,18 @@ static void handle_kv(Config     *c,
         r->notitle = tok_bool(val.s);
       else if(!strcmp(key, "workspace"))
         r->forced_ws = (int)val.d;
+      else if(!strcmp(key, "opacity"))
+        r->opacity = (float)val.d;
       else if(!strcmp(key, "size")) {
         r->forced_w = (int)val.d;
         ts_eat(ts, T_COMMA);
         Tok h       = ts_next(ts);
         r->forced_h = (int)h.d;
+      } else if(!strcmp(key, "position")) {
+        r->forced_x = (int)val.d;
+        ts_eat(ts, T_COMMA);
+        Tok py      = ts_next(ts);
+        r->forced_y = (int)py.d;
       }
     }
     return;
@@ -1141,11 +1281,19 @@ void config_defaults(Config *c) {
 
   c->colors.active_border   = color_hex(0xb4befe);
   c->colors.inactive_border = color_hex(0x45475a);
+  c->colors.active_title    = color_hex(0xb4befe);
+  c->colors.inactive_title  = color_hex(0x585b70);
   c->colors.pane_bg         = color_hex(0x11111b);
+  c->colors.bar_bg          = color_hex(0x181825);
+  c->colors.bar_fg          = color_hex(0xa6adc8);
+  c->colors.bar_accent      = color_hex(0xb4befe);
+  c->colors.focus_ring      = color_hex(0xb4befe);
 
   BarCfg *b          = &c->bar;
   b->position        = BAR_BOTTOM;
   b->height          = 28;
+  b->padding         = 10;
+  b->glyph_y_offset  = 0;
   b->item_spacing    = 4;
   b->pill_radius     = 4;
   b->bg              = color_hex(0x181825);
@@ -1157,6 +1305,7 @@ void config_defaults(Config *c) {
   b->occupied_ws_fg  = color_hex(0xb4befe);
   b->inactive_ws_fg  = color_hex(0x585b70);
   b->separator       = false;
+  b->separator_top   = false;
   b->separator_color = color_hex(0x313244);
 
   strncpy(b->modules_left[0], "workspaces", 63);

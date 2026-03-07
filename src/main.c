@@ -141,8 +141,7 @@ void server_apply_anim(TrixieServer *s, PaneId id) {
   Pane *p = twm_pane_by_id(&s->twm, id);
   if(!p) return;
   /* Only morph — open/close anims are handled at map/unmap time */
-  if(!anim_is_closing(&s->anim, id))
-    anim_morph(&s->anim, id, p->rect, p->rect);
+  if(!anim_is_closing(&s->anim, id)) anim_morph(&s->anim, id, p->rect, p->rect);
   server_request_redraw(s);
 }
 
@@ -331,6 +330,16 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       twm_swap(&s->twm, true);
       server_sync_windows(s);
       break;
+    case ACTION_MOVE_UP:
+      twm_focus_dir(&s->twm, 0, -1);
+      twm_swap(&s->twm, false);
+      server_sync_windows(s);
+      break;
+    case ACTION_MOVE_DOWN:
+      twm_focus_dir(&s->twm, 0, 1);
+      twm_swap(&s->twm, true);
+      server_sync_windows(s);
+      break;
 
     case ACTION_WORKSPACE: {
       int old = s->twm.active_ws;
@@ -399,7 +408,16 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
     }
 
     case ACTION_SCRATCHPAD: server_scratch_toggle(s, a->name); break;
-    case ACTION_SWITCH_VT: break;
+
+    case ACTION_SWITCH_VT:
+      /* s->session is populated by wlr_backend_autocreate(); NULL when nested */
+      if(s->session) wlr_session_change_vt(s->session, (unsigned)a->n);
+      break;
+
+    case ACTION_EMERGENCY_QUIT:
+      s->running = false;
+      wl_display_terminate(s->display);
+      break;
   }
 }
 
@@ -875,20 +893,38 @@ static void view_handle_map(struct wl_listener *listener, void *data) {
   }
 
   /* win rules */
-  const char *app_id      = v->xdg_toplevel->app_id ? v->xdg_toplevel->app_id : "";
-  bool        force_float = false, force_fs = false;
+  const char *app_id = v->xdg_toplevel->app_id ? v->xdg_toplevel->app_id : "";
+  const char *title  = v->xdg_toplevel->title ? v->xdg_toplevel->title : "";
   for(int i = 0; i < s->cfg.win_rule_count; i++) {
-    WinRule *r = &s->cfg.win_rules[i];
-    if(!strcmp(r->app_id, app_id) || strstr(app_id, r->app_id)) {
-      if(r->float_rule) force_float = true;
-      if(r->fullscreen_rule) force_fs = true;
+    WinRule    *r     = &s->cfg.win_rules[i];
+    bool        match = false;
+    const char *pat   = r->app_id;
+    if(!strncmp(pat, "title:", 6))
+      match = strstr(title, pat + 6) != NULL;
+    else
+      match = pat[0] && (strstr(app_id, pat) != NULL);
+    if(!match) continue;
+
+    if(r->float_rule) {
+      p->floating = true;
+      if(rect_empty(p->float_rect)) p->float_rect = p->rect;
     }
+    if(r->fullscreen_rule) p->fullscreen = true;
+    if(r->forced_ws >= 0 && r->forced_ws < s->twm.ws_count)
+      twm_move_to_ws(&s->twm, r->forced_ws - 1);
+    if(r->forced_w > 0 && r->forced_h > 0) {
+      p->float_rect.w = r->forced_w;
+      p->float_rect.h = r->forced_h;
+      p->floating     = true;
+    }
+    if(r->forced_x != 0 || r->forced_y != 0) {
+      p->float_rect.x = r->forced_x;
+      p->float_rect.y = r->forced_y;
+    }
+    /* noborder, notitle, opacity — stored on pane for deco/compositor use */
+    if(r->noborder) p->rect = rect_inset(p->rect, 0); /* flag via future field */
+    (void)r->opacity; /* reserved — no opacity compositor support yet */
   }
-  if(force_float) {
-    p->floating = true;
-    if(rect_empty(p->float_rect)) p->float_rect = p->rect;
-  }
-  if(force_fs) p->fullscreen = true;
 
   twm_reflow(&s->twm);
   wlr_log(WLR_INFO,
@@ -1228,7 +1264,8 @@ int main(int argc, char *argv[]) {
 
   /* Wayland display */
   s->display = wl_display_create();
-  s->backend = wlr_backend_autocreate(wl_display_get_event_loop(s->display), NULL);
+  s->backend =
+      wlr_backend_autocreate(wl_display_get_event_loop(s->display), &s->session);
   if(!s->backend) {
     wlr_log(WLR_ERROR, "Failed to create backend");
     return 1;

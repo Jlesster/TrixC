@@ -1,0 +1,75 @@
+Build started at 2026-03-07T17:15:20.281295
+Main binary: /usr/bin/python
+Build Options: 
+Python system: Linux
+The Meson build system
+Version: 1.10.1
+Source dir: /home/jless/Code/c-cpp/c/Trixie
+Build dir: /home/jless/Code/c-cpp/c/Trixie/build
+Build type: native build
+Project name: Trixie
+Project version: 0.1.0
+C compiler for the host machine: cc (gcc 15.2.1 "cc (GCC) 15.2.1 20260209")
+C linker for the host machine: cc ld.bfd 2.46
+-----------
+Detecting archiver via: `gcc-ar --version` -> 0
+stdout:
+GNU ar (GNU Binutils) 2.46
+Copyright (C) 2026 Free Software Foundation, Inc.
+This program is free software; you may redistribute it under the terms of
+the GNU General Public License version 3 or (at your option) any later version.
+This program has absolutely no warranty.
+-----------
+C compiler for the build machine: cc (gcc 15.2.1 "cc (GCC) 15.2.1 20260209")
+C linker for the build machine: cc ld.bfd 2.46
+-----------
+Detecting archiver via: `gcc-ar --version` -> 0
+stdout:
+GNU ar (GNU Binutils) 2.46
+Copyright (C) 2026 Free Software Foundation, Inc.
+This program is free software; you may redistribute it under the terms of
+the GNU General Public License version 3 or (at your option) any later version.
+This program has absolutely no warranty.
+-----------
+Build machine cpu family: x86_64
+Build machine cpu: x86_64
+Host machine cpu family: x86_64
+Host machine cpu: x86_64
+Target machine cpu family: x86_64
+Target machine cpu: x86_64
+Running compile:
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp5apqn0z1
+Code:
+int main(void) { return 0; }
+
+-----------
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp5apqn0z1/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp5apqn0z1/output.exe -D_FILE_OFFSET_BITS=64 -O0 -lm -Wl,--allow-shlib-undefined` -> 0
+Library m found: YES
+Dependency history found: YES 8.3 (cached)
+Dependency freetype2 found: YES 26.4.20 (cached)
+Dependency libdrm found: YES 2.4.131 (cached)
+Dependency pixman-1 found: YES 0.46.4 (cached)
+Dependency fontconfig found: YES 2.17.1 (cached)
+Dependency harfbuzz-gobject found: YES 12.3.2 (cached)
+Dependency spandsp found: YES 0.0.6 (cached)
+Dependency wlroots-0.18 found: YES 0.18.3 (cached)
+Dependency wayland-server found: YES 1.24.0 (cached)
+Dependency xkbcommon found: YES 1.13.1 (cached)
+Dependency jack found: YES 3.1410.0 (cached)
+Dependency json-c found: YES 0.18 (cached)
+Dependency girara found: YES 2026.02.04 (cached)
+Program wayland-scanner found: YES (/usr/bin/wayland-scanner)
+Build targets in project: 19
+
+Found ninja-1.13.2 at /usr/bin/ninja
+Running compile:
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7mh2fhoj
+Code:
+
+-----------
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7mh2fhoj/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7mh2fhoj/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
+stdout:
+install: /usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/
+programs: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/
+libraries: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../lib/:/lib/x86_64-pc-linux-gnu/15.2.1/:/lib/../lib/:/usr/lib/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../:/lib/:/usr/lib/
+-----------
