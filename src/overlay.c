@@ -1,28 +1,36 @@
 /* overlay.c — Ratatui-styled TUI dev overlay for Trixie.
  *
- * Seven panels (Tab / 1-7):
+ * Ten panels (Tab / 1-9,0):
  *
  *   [1] Workspace map   — minimap grid + layout/ratio per workspace
  *   [2] Command palette — all keybinds + IPC commands, fuzzy search
- *   [3] Process list    — top-N CPU/mem from /proc (no popen)
- *   [4] Log viewer      — wlr_log ring buffer, colour-coded by severity
- *   [5] Git             — branch, status summary, last 10 commits
- *   [6] Build           — run a build command, stream stdout into log ring
- *   [7] Notes           — scratch pad persisted to ~/.config/trixie/notes.txt
+ *   [3] Process list    — top-N CPU/RSS; Enter=SIGTERM, K=SIGKILL,
+ *                         s=sort-cycle (CPU/RSS/PID), sparkline bars
+ *   [4] Log viewer      — wlr_log ring; colour-coded; / regex filter; c=clear
+ *   [5] Git             — branch/status; d=inline diff; s/u=stage/unstage;
+ *                         split view: status left, diff right; r=refresh
+ *   [6] Build           — async pthread; auto-detects Meson/Cargo/go/Maven/
+ *                         Gradle/Make; error list (e=toggle); Enter=jump
+ *                         to error in $EDITOR; C/Rust/Go/Java parsers
+ *   [7] Notes           — multi-file (8), Markdown render, [/]=switch,
+ *                         n=rename, N=new, d=delete, e=edit
+ *   [8] Search          — ripgrep/grep file search; live results; Enter=open
+ *                         in $EDITOR at match line; f=toggle file-only mode
+ *   [9] Run             — named run configs (per-lang presets + custom);
+ *                         async process per config; Enter=start/stop;
+ *                         stdout tail in log ring; a=add, d=delete config
+ *   [0] Deps            — language-aware dependency viewer: Cargo.toml,
+ *                         go.mod, pom.xml, build.gradle; u=check outdated
  *
- * Navigation
- * ──────────
- *   Tab / 1-7    switch panel
- *   j / Down     cursor / scroll down
- *   k / Up       cursor / scroll up
- *   Enter        execute selected item (commands); confirm (build)
- *   Escape / `   dismiss
- *   /            enter filter mode (commands panel)
- *   Backspace    delete filter char; delete notes char
- *   e            open notes for editing (notes panel)
- *   r            refresh git status (git panel)
- *   b            trigger build (build panel)
- *   Any printable key while notes in edit mode: append to note
+ * Global keys
+ * ───────────
+ *   Tab / 1-9,0  switch panel
+ *   j / Down     cursor down / scroll
+ *   k / Up       cursor up / scroll
+ *   Enter        execute / confirm / open
+ *   Escape / `   dismiss or exit sub-mode
+ *   /            search / filter mode
+ *   Backspace    delete char in input mode
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -32,11 +40,15 @@
 #include <ft2build.h>
 #include <unistd.h>
 #include FT_FREETYPE_H
+#include <fcntl.h>
 #include <math.h>
+#include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <wlr/interfaces/wlr_buffer.h>
@@ -83,16 +95,26 @@ overlay_log_handler(enum wlr_log_importance imp, const char *fmt, va_list args) 
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §1  Process list
+ * §1  Process list — sparklines, sort, kill
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define PROC_MAX 32
+#define PROC_MAX  48
+#define PROC_HIST 16 /* sparkline history depth */
+
+typedef enum { PROC_SORT_CPU = 0, PROC_SORT_RSS, PROC_SORT_PID } ProcSort;
+static ProcSort g_proc_sort = PROC_SORT_CPU;
 
 typedef struct {
-  pid_t pid;
-  char  comm[32];
-  float cpu_pct;
-  long  rss_kb;
+  pid_t     pid;
+  char      comm[32];
+  float     cpu_pct;
+  long      rss_kb;
+  float     cpu_hist[PROC_HIST]; /* ring of recent samples */
+  int       hist_head;
+  int       hist_count;
+  /* raw jiffies from last sample for delta */
+  long long prev_total_jiff;
+  long long prev_proc_jiff;
 } ProcEntry;
 
 static ProcEntry g_procs[PROC_MAX];
@@ -132,6 +154,11 @@ static void refresh_procs(void) {
     }
   }
 
+  /* Keep old entries for history merging */
+  ProcEntry old[PROC_MAX];
+  int       old_count = g_proc_count;
+  memcpy(old, g_procs, sizeof(ProcEntry) * (size_t)old_count);
+
   g_proc_count = 0;
   DIR *d       = opendir("/proc");
   if(!d) return;
@@ -157,16 +184,51 @@ static void refresh_procs(void) {
     fclose(f);
     if(matched != 4) continue;
     strncpy(pe.comm, comm_buf, sizeof(pe.comm) - 1);
-    pe.cpu_pct =
-        cpu_total > 0 ? (float)(utime + stime) * 100.f / (float)cpu_total : 0.f;
+
+    long long proc_jiff  = utime + stime;
+    /* Find previous entry for delta */
+    long long prev_total = 0, prev_proc = 0;
+    for(int oi = 0; oi < old_count; oi++) {
+      if(old[oi].pid == pid) {
+        prev_total = old[oi].prev_total_jiff;
+        prev_proc  = old[oi].prev_proc_jiff;
+        /* carry history */
+        memcpy(pe.cpu_hist, old[oi].cpu_hist, sizeof(pe.cpu_hist));
+        pe.hist_head  = old[oi].hist_head;
+        pe.hist_count = old[oi].hist_count;
+        break;
+      }
+    }
+    pe.prev_total_jiff = cpu_total;
+    pe.prev_proc_jiff  = proc_jiff;
+
+    long long dtotal = cpu_total - prev_total;
+    long long dproc  = proc_jiff - prev_proc;
+    pe.cpu_pct       = (dtotal > 0) ? (float)dproc * 100.f / (float)dtotal : 0.f;
+    if(pe.cpu_pct < 0.f) pe.cpu_pct = 0.f;
+
+    /* Push to sparkline history */
+    pe.cpu_hist[pe.hist_head] = pe.cpu_pct;
+    pe.hist_head              = (pe.hist_head + 1) % PROC_HIST;
+    if(pe.hist_count < PROC_HIST) pe.hist_count++;
+
     pe.rss_kb               = rss * (long)(sysconf(_SC_PAGESIZE) / 1024);
     g_procs[g_proc_count++] = pe;
   }
   closedir(d);
+
+  /* Sort */
   for(int i = 1; i < g_proc_count; i++) {
-    ProcEntry key = g_procs[i];
-    int       j   = i - 1;
-    while(j >= 0 && g_procs[j].cpu_pct < key.cpu_pct) {
+    ProcEntry key    = g_procs[i];
+    int       j      = i - 1;
+    bool      before = false;
+    while(j >= 0) {
+      switch(g_proc_sort) {
+        case PROC_SORT_CPU: before = g_procs[j].cpu_pct < key.cpu_pct; break;
+        case PROC_SORT_RSS: before = g_procs[j].rss_kb < key.rss_kb; break;
+        case PROC_SORT_PID: before = g_procs[j].pid > key.pid; break;
+      }
+      if(!before) break;
       g_procs[j + 1] = g_procs[j];
       j--;
     }
@@ -175,30 +237,42 @@ static void refresh_procs(void) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §2  Git state
+ * §2  Git state — status, diff, stage/unstage
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 #define GIT_LINE_MAX  128
 #define GIT_LINES_MAX 64
+#define GIT_DIFF_MAX  256
+#define GIT_FILE_MAX  32
+
+typedef struct {
+  char xy[3]; /* two-char status code e.g. "M ", " M", "??" */
+  char path[GIT_LINE_MAX];
+  bool staged; /* index modified */
+} GitFile;
 
 typedef struct {
   char    branch[GIT_LINE_MAX];
-  char    lines[GIT_LINES_MAX][GIT_LINE_MAX]; /* status + log lines */
+  char    lines[GIT_LINES_MAX][GIT_LINE_MAX]; /* log lines */
   int     line_count;
+  GitFile files[GIT_FILE_MAX];
+  int     file_count;
+  char    diff[GIT_DIFF_MAX][GIT_LINE_MAX]; /* diff of selected file */
+  int     diff_count;
+  int     diff_for; /* file index the diff belongs to (-1 = none) */
+  bool    show_diff;
   int64_t fetched_ms;
   bool    valid;
 } GitState;
 
 static GitState g_git;
 
-/* Run cmd, capture up to max_lines lines into out[].  Returns line count. */
 static int run_capture(const char *cmd, char out[][GIT_LINE_MAX], int max_lines) {
   FILE *f = popen(cmd, "r");
   if(!f) return 0;
   int n = 0;
   while(n < max_lines) {
     if(!fgets(out[n], GIT_LINE_MAX, f)) break;
-    /* strip trailing newline */
     size_t l = strlen(out[n]);
     while(l > 0 && (out[n][l - 1] == '\n' || out[n][l - 1] == '\r'))
       out[n][--l] = '\0';
@@ -208,16 +282,31 @@ static int run_capture(const char *cmd, char out[][GIT_LINE_MAX], int max_lines)
   return n;
 }
 
+static void git_load_diff(int file_idx) {
+  if(file_idx < 0 || file_idx >= g_git.file_count) return;
+  if(g_git.diff_for == file_idx && g_git.diff_count > 0) return; /* cached */
+
+  GitFile *gf = &g_git.files[file_idx];
+  char     cmd[512];
+  /* staged diff vs HEAD, or working-tree diff */
+  if(gf->staged)
+    snprintf(cmd, sizeof(cmd), "git diff --cached -- '%s' 2>/dev/null", gf->path);
+  else
+    snprintf(cmd, sizeof(cmd), "git diff -- '%s' 2>/dev/null", gf->path);
+
+  g_git.diff_count = run_capture(cmd, g_git.diff, GIT_DIFF_MAX);
+  g_git.diff_for   = file_idx;
+}
+
 static void refresh_git(void) {
   int64_t now = ov_now_ms();
   if(g_git.valid && now - g_git.fetched_ms < 5000) return;
 
   memset(&g_git, 0, sizeof(g_git));
+  g_git.diff_for = -1;
 
   /* Branch name */
   {
-    char tmp[GIT_LINE_MAX][1];
-    (void)tmp; /* silence unused warning */
     FILE *f = popen("git rev-parse --abbrev-ref HEAD 2>/dev/null", "r");
     if(!f) {
       strcpy(g_git.branch, "(not a git repo)");
@@ -234,70 +323,283 @@ static void refresh_git(void) {
       g_git.branch[--bl] = '\0';
   }
 
-  int n = 0;
-
-  /* Short status */
+  /* Porcelain status → populate file list */
   {
-    char st[GIT_LINES_MAX][GIT_LINE_MAX];
-    int  sc = run_capture("git status --short 2>/dev/null", st, GIT_LINES_MAX);
-    if(sc == 0) {
-      strncpy(g_git.lines[n++], "  (clean)", GIT_LINE_MAX - 1);
-    } else {
-      for(int i = 0; i < sc && n < GIT_LINES_MAX - 1; i++) {
-        char buf[GIT_LINE_MAX];
-        snprintf(buf, sizeof(buf), "  %s", st[i]);
-        strncpy(g_git.lines[n++], buf, GIT_LINE_MAX - 1);
-      }
+    char st[GIT_FILE_MAX][GIT_LINE_MAX];
+    int  sc = run_capture("git status --porcelain 2>/dev/null", st, GIT_FILE_MAX);
+    for(int i = 0; i < sc && g_git.file_count < GIT_FILE_MAX; i++) {
+      if(strlen(st[i]) < 4) continue;
+      GitFile *gf = &g_git.files[g_git.file_count++];
+      gf->xy[0]   = st[i][0];
+      gf->xy[1]   = st[i][1];
+      gf->xy[2]   = '\0';
+      strncpy(gf->path, st[i] + 3, sizeof(gf->path) - 1);
+      gf->staged = (st[i][0] != ' ' && st[i][0] != '?');
+    }
+    if(g_git.file_count == 0) {
+      strncpy(g_git.lines[g_git.line_count++], "  (clean)", GIT_LINE_MAX - 1);
     }
   }
 
-  /* Separator */
-  if(n < GIT_LINES_MAX) strncpy(g_git.lines[n++], "", GIT_LINE_MAX - 1);
-
-  /* Last 10 commits — oneline */
+  /* Last 10 commits */
   {
     char cl[GIT_LINES_MAX][GIT_LINE_MAX];
     int  cc = run_capture("git log --oneline -10 2>/dev/null", cl, GIT_LINES_MAX);
-    if(n < GIT_LINES_MAX)
-      strncpy(g_git.lines[n++], "Recent commits:", GIT_LINE_MAX - 1);
-    for(int i = 0; i < cc && n < GIT_LINES_MAX; i++) {
+    if(g_git.line_count < GIT_LINES_MAX)
+      strncpy(g_git.lines[g_git.line_count++], "Recent commits:", GIT_LINE_MAX - 1);
+    for(int i = 0; i < cc && g_git.line_count < GIT_LINES_MAX; i++) {
       char buf[GIT_LINE_MAX];
       snprintf(buf, sizeof(buf), "  %s", cl[i]);
-      strncpy(g_git.lines[n++], buf, GIT_LINE_MAX - 1);
+      strncpy(g_git.lines[g_git.line_count++], buf, GIT_LINE_MAX - 1);
     }
   }
 
-  g_git.line_count = n;
   g_git.fetched_ms = now;
   g_git.valid      = true;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §3  Build runner
+ * §3  Build runner — async pthread, error parser, auto-detect build system
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define BUILD_CMD_MAX 256
+#define BUILD_CMD_MAX  256
+#define BUILD_ERR_MAX  128 /* max parsed error entries per build */
+#define BUILD_ERR_LINE 256 /* max chars in an error message */
 
 typedef struct {
-  char    cmd[BUILD_CMD_MAX];
-  bool    running;
-  bool    done;
-  int     exit_code;
-  int64_t started_ms;
-  int64_t finished_ms;
+  char file[256];
+  int  line; /* 1-based; 0 = no location */
+  int  col;
+  char msg[BUILD_ERR_LINE];
+  bool is_warning;
+} BuildError;
+
+typedef struct {
+  char            cmd[BUILD_CMD_MAX];
+  atomic_bool     running;
+  bool            done;
+  int             exit_code;
+  int64_t         started_ms;
+  int64_t         finished_ms;
+  /* parsed diagnostics */
+  BuildError      errors[BUILD_ERR_MAX];
+  int             err_count;
+  pthread_mutex_t err_lock;
+  pthread_t       thread;
+  bool            thread_valid;
 } BuildState;
 
 static BuildState g_build;
 
-/* Synchronous build — runs popen and streams lines into log ring.
- * For a compositor this is fine; the frame loop continues on the next frame.
- * If you need async, move this to a pthread. */
-static void run_build(void) {
-  if(!g_build.cmd[0]) return;
-  g_build.running    = true;
-  g_build.done       = false;
-  g_build.exit_code  = -1;
-  g_build.started_ms = ov_now_ms();
+/* ── Error-line parsers ─────────────────────────────────────────────────
+ * Each returns true and fills *out if the line matches the language pattern.
+ *
+ * C / C++ (gcc/clang):   file:line:col: error|warning: msg
+ * Rust (rustc / cargo):  --> file:line:col   OR   error[...]: msg
+ * Go:                    file:line:col: msg
+ * Java (javac / Maven):  file:line: error: msg  OR  [ERROR] file:[line,col]
+ */
+
+static bool parse_error_c(const char *ln, BuildError *out) {
+  /* pattern: <file>:<line>:<col>: error|warning: <msg> */
+  const char *p = ln;
+  char        file[256];
+  int         fi = 0;
+  /* extract file — stop at ':' followed by digit */
+  while(*p && fi < 255) {
+    if(*p == ':' && *(p + 1) >= '0' && *(p + 1) <= '9') {
+      file[fi] = '\0';
+      p++;
+      break;
+    }
+    file[fi++] = *p++;
+  }
+  if(!fi || !*p) return false;
+  int line = 0, col = 0;
+  if(sscanf(p, "%d:%d:", &line, &col) < 1) return false;
+  /* advance past line:col: */
+  while(*p && *p != ':')
+    p++;
+  if(*p == ':') p++;
+  while(*p && *p != ':')
+    p++;
+  if(*p == ':') p++;
+  while(*p == ' ')
+    p++;
+  bool warn = (strncmp(p, "warning", 7) == 0);
+  bool err  = (strncmp(p, "error", 5) == 0) || (strncmp(p, "fatal", 5) == 0);
+  if(!warn && !err) return false;
+  /* skip to message after next ': ' */
+  while(*p && !(*p == ':' && *(p + 1) == ' '))
+    p++;
+  if(*p) p += 2;
+  strncpy(out->file, file, sizeof(out->file) - 1);
+  out->line       = line;
+  out->col        = col;
+  out->is_warning = warn;
+  strncpy(out->msg, p, sizeof(out->msg) - 1);
+  return true;
+}
+
+static bool parse_error_rust(const char *ln, BuildError *out) {
+  /* rustc: "  --> src/main.rs:10:5" */
+  const char *p = ln;
+  while(*p == ' ')
+    p++;
+  if(strncmp(p, "--> ", 4) == 0) {
+    p += 4;
+    char file[256];
+    int  fi = 0;
+    while(*p && *p != ':' && fi < 255)
+      file[fi++] = *p++;
+    file[fi] = '\0';
+    int line = 0, col = 0;
+    if(*p == ':') {
+      p++;
+      sscanf(p, "%d:%d", &line, &col);
+    }
+    strncpy(out->file, file, sizeof(out->file) - 1);
+    out->line       = line;
+    out->col        = col;
+    out->is_warning = false;
+    strncpy(out->msg, "(see above)", sizeof(out->msg) - 1);
+    return fi > 0 && line > 0;
+  }
+  /* cargo: "error[E0xxx]: message" or "warning: message" at start of line */
+  if(strncmp(ln, "error", 5) == 0 || strncmp(ln, "warning", 7) == 0) {
+    bool        warn  = (ln[0] == 'w');
+    const char *colon = strchr(ln, ':');
+    if(!colon) return false;
+    colon++;
+    while(*colon == ' ')
+      colon++;
+    if(!*colon) return false;
+    out->file[0]    = '\0';
+    out->line       = 0;
+    out->col        = 0;
+    out->is_warning = warn;
+    strncpy(out->msg, colon, sizeof(out->msg) - 1);
+    return true;
+  }
+  return false;
+}
+
+static bool parse_error_go(const char *ln, BuildError *out) {
+  /* go: "./file.go:10:5: message" */
+  const char *p = ln;
+  if(*p == '.') p++;
+  if(*p == '/') p++;
+  char file[256];
+  int  fi = 0;
+  while(*p && *p != ':' && fi < 255)
+    file[fi++] = *p++;
+  file[fi] = '\0';
+  if(!fi || *p != ':') return false;
+  p++;
+  int line = 0, col = 0;
+  if(sscanf(p, "%d:%d:", &line, &col) < 1) return false;
+  if(line <= 0) return false;
+  while(*p && *p != ':')
+    p++;
+  if(*p) p++;
+  while(*p && *p != ':')
+    p++;
+  if(*p) p++;
+  while(*p == ' ')
+    p++;
+  /* basic sanity: file should end in .go */
+  if(!strstr(file, ".go")) return false;
+  strncpy(out->file, file, sizeof(out->file) - 1);
+  out->line       = line;
+  out->col        = col;
+  out->is_warning = false;
+  strncpy(out->msg, p, sizeof(out->msg) - 1);
+  return true;
+}
+
+static bool parse_error_java(const char *ln, BuildError *out) {
+  /* javac: "File.java:10: error: message" */
+  const char *p = ln;
+  /* Maven [ERROR]: skip prefix */
+  if(strncmp(p, "[ERROR] ", 8) == 0)
+    p += 8;
+  else if(strncmp(p, "[WARNING] ", 10) == 0)
+    p += 10;
+  char file[256];
+  int  fi = 0;
+  while(*p && *p != ':' && fi < 255)
+    file[fi++] = *p++;
+  file[fi] = '\0';
+  if(!fi || *p != ':') return false;
+  p++;
+  int line = 0;
+  if(sscanf(p, "%d:", &line) < 1) return false;
+  if(line <= 0) return false;
+  if(!strstr(file, ".java")) return false;
+  while(*p && *p != ':')
+    p++;
+  if(*p) p++;
+  while(*p == ' ')
+    p++;
+  bool warn = (strncmp(p, "warning", 7) == 0);
+  bool err  = (strncmp(p, "error", 5) == 0);
+  if(warn || err) {
+    while(*p && !(*p == ':' && *(p + 1) == ' '))
+      p++;
+    if(*p) p += 2;
+  }
+  strncpy(out->file, file, sizeof(out->file) - 1);
+  out->line       = line;
+  out->col        = 0;
+  out->is_warning = warn;
+  strncpy(out->msg, p, sizeof(out->msg) - 1);
+  return true;
+}
+
+static void build_try_parse_error(const char *ln) {
+  BuildError e  = { 0 };
+  bool       ok = parse_error_c(ln, &e) || parse_error_rust(ln, &e) ||
+            parse_error_go(ln, &e) || parse_error_java(ln, &e);
+  if(!ok) return;
+  pthread_mutex_lock(&g_build.err_lock);
+  if(g_build.err_count < BUILD_ERR_MAX) g_build.errors[g_build.err_count++] = e;
+  pthread_mutex_unlock(&g_build.err_lock);
+}
+
+/* ── Auto-detect build system ────────────────────────────────────────── */
+static void build_autodetect(char *cmd_out, size_t sz) {
+  struct stat st;
+  if(stat("build.ninja", &st) == 0 || stat("meson.build", &st) == 0) {
+    snprintf(cmd_out, sz, "meson compile -C builddir 2>&1");
+    return;
+  }
+  if(stat("Cargo.toml", &st) == 0) {
+    snprintf(cmd_out, sz, "cargo build 2>&1");
+    return;
+  }
+  if(stat("go.mod", &st) == 0) {
+    snprintf(cmd_out, sz, "go build ./... 2>&1");
+    return;
+  }
+  if(stat("pom.xml", &st) == 0) {
+    snprintf(cmd_out, sz, "mvn compile -q 2>&1");
+    return;
+  }
+  if(stat("build.gradle", &st) == 0 || stat("build.gradle.kts", &st) == 0) {
+    snprintf(cmd_out, sz, "./gradlew build 2>&1");
+    return;
+  }
+  if(stat("Makefile", &st) == 0 || stat("makefile", &st) == 0) {
+    snprintf(cmd_out, sz, "make -j$(nproc) 2>&1");
+    return;
+  }
+  /* fallback */
+  snprintf(cmd_out, sz, "make -j$(nproc) 2>&1");
+}
+
+/* ── Async build thread ──────────────────────────────────────────────── */
+static void *build_thread(void *arg) {
+  (void)arg;
 
   char header[LOG_LINE_MAX];
   snprintf(header, sizeof(header), "==> build: %s", g_build.cmd);
@@ -306,43 +608,105 @@ static void run_build(void) {
   FILE *f = popen(g_build.cmd, "r");
   if(!f) {
     log_ring_push("==> build: popen failed");
-    g_build.running = false;
-    g_build.done    = true;
-    return;
+    atomic_store(&g_build.running, false);
+    g_build.done = true;
+    return NULL;
   }
+
   char buf[LOG_LINE_MAX];
   while(fgets(buf, sizeof(buf), f)) {
     size_t l = strlen(buf);
     while(l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
       buf[--l] = '\0';
     log_ring_push(buf);
+    build_try_parse_error(buf);
   }
+
   int status          = pclose(f);
   g_build.exit_code   = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-  g_build.running     = false;
-  g_build.done        = true;
   g_build.finished_ms = ov_now_ms();
+  atomic_store(&g_build.running, false);
+  g_build.done = true;
 
   char footer[LOG_LINE_MAX];
   snprintf(footer,
            sizeof(footer),
-           "==> build finished: exit %d (%.1fs)",
+           "==> build finished: exit %d (%.1fs)  errors: %d",
            g_build.exit_code,
-           (double)(g_build.finished_ms - g_build.started_ms) / 1000.0);
+           (double)(g_build.finished_ms - g_build.started_ms) / 1000.0,
+           g_build.err_count);
   log_ring_push(footer);
+  return NULL;
+}
+
+static void run_build(void) {
+  if(!g_build.cmd[0]) build_autodetect(g_build.cmd, sizeof(g_build.cmd));
+  if(atomic_load(&g_build.running)) return; /* already in progress */
+
+  /* Reset state */
+  pthread_mutex_lock(&g_build.err_lock);
+  g_build.err_count = 0;
+  memset(g_build.errors, 0, sizeof(g_build.errors));
+  pthread_mutex_unlock(&g_build.err_lock);
+
+  g_build.done        = false;
+  g_build.exit_code   = -1;
+  g_build.started_ms  = ov_now_ms();
+  g_build.finished_ms = 0;
+  atomic_store(&g_build.running, true);
+
+  if(g_build.thread_valid) {
+    pthread_join(g_build.thread, NULL);
+    g_build.thread_valid = false;
+  }
+  if(pthread_create(&g_build.thread, NULL, build_thread, NULL) == 0)
+    g_build.thread_valid = true;
+  else {
+    atomic_store(&g_build.running, false);
+    log_ring_push("==> build: pthread_create failed");
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §4  Notes
+ * §4  Notes — multi-file with Markdown rendering
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define NOTES_MAX 4096
+#define NOTES_MAX      8192 /* bytes per note */
+#define NOTES_FILES    8    /* max open notes */
+#define NOTES_NAME_MAX 64
 
-static char g_notes[NOTES_MAX];
-static int  g_notes_len  = 0;
-static bool g_notes_edit = false;
+typedef struct {
+  char name[NOTES_NAME_MAX]; /* display name / filename stem */
+  char text[NOTES_MAX];
+  int  len;
+  bool dirty;
+} NoteFile;
 
-static void notes_path(char *out, size_t sz) {
+static NoteFile g_notes_files[NOTES_FILES];
+static int      g_notes_count  = 0;
+static int      g_notes_active = 0; /* which note is shown */
+static bool     g_notes_edit   = false;
+static bool     g_notes_rename = false; /* typing a new name */
+static char     g_notes_rename_buf[NOTES_NAME_MAX];
+static int      g_notes_rename_len = 0;
+
+/* Convenience accessor */
+static inline NoteFile *cur_note(void) {
+  return (g_notes_count > 0) ? &g_notes_files[g_notes_active] : NULL;
+}
+
+static void notes_dir(char *out, size_t sz) {
+  const char *xdg = getenv("XDG_CONFIG_HOME");
+  if(xdg)
+    snprintf(out, sz, "%s/trixie/notes", xdg);
+  else {
+    const char *home = getenv("HOME");
+    snprintf(out, sz, "%s/.config/trixie/notes", home ? home : "/root");
+  }
+}
+
+/* Legacy single-file path (for migration) */
+static void notes_legacy_path(char *out, size_t sz) {
   const char *xdg = getenv("XDG_CONFIG_HOME");
   if(xdg)
     snprintf(out, sz, "%s/trixie/notes.txt", xdg);
@@ -352,33 +716,699 @@ static void notes_path(char *out, size_t sz) {
   }
 }
 
-static void notes_load(void) {
-  char path[512];
-  notes_path(path, sizeof(path));
-  FILE *f = fopen(path, "r");
-  if(!f) {
-    g_notes[0]  = '\0';
-    g_notes_len = 0;
-    return;
-  }
-  g_notes_len = (int)fread(g_notes, 1, NOTES_MAX - 1, f);
-  if(g_notes_len < 0) g_notes_len = 0;
-  g_notes[g_notes_len] = '\0';
+static void notes_file_path(const NoteFile *nf, char *out, size_t sz) {
+  char dir[512];
+  notes_dir(dir, sizeof(dir));
+  snprintf(out, sz, "%s/%s.md", dir, nf->name);
+}
+
+static void notes_save_one(NoteFile *nf) {
+  if(!nf->dirty) return;
+  char dir[512], path[600];
+  notes_dir(dir, sizeof(dir));
+  mkdir(dir, 0755);
+  notes_file_path(nf, path, sizeof(path));
+  FILE *f = fopen(path, "w");
+  if(!f) return;
+  fwrite(nf->text, 1, (size_t)nf->len, f);
   fclose(f);
+  nf->dirty = false;
 }
 
 static void notes_save(void) {
-  char path[512];
-  notes_path(path, sizeof(path));
-  FILE *f = fopen(path, "w");
-  if(!f) return;
-  fwrite(g_notes, 1, (size_t)g_notes_len, f);
-  fclose(f);
+  for(int i = 0; i < g_notes_count; i++)
+    notes_save_one(&g_notes_files[i]);
+}
+
+static void note_add(const char *name, const char *text, int len) {
+  if(g_notes_count >= NOTES_FILES) return;
+  NoteFile *nf = &g_notes_files[g_notes_count++];
+  strncpy(nf->name, name, NOTES_NAME_MAX - 1);
+  if(text && len > 0) {
+    int copy = len < NOTES_MAX - 1 ? len : NOTES_MAX - 1;
+    memcpy(nf->text, text, (size_t)copy);
+    nf->len        = copy;
+    nf->text[copy] = '\0';
+  }
+  nf->dirty = false;
+}
+
+static void notes_load(void) {
+  char dir[512];
+  notes_dir(dir, sizeof(dir));
+  mkdir(dir, 0755);
+
+  /* Migrate legacy notes.txt if notes dir is empty */
+  g_notes_count  = 0;
+  g_notes_active = 0;
+
+  DIR *d = opendir(dir);
+  if(d) {
+    struct dirent *ent;
+    while((ent = readdir(d)) != NULL && g_notes_count < NOTES_FILES) {
+      const char *nm = ent->d_name;
+      size_t      nl = strlen(nm);
+      if(nl < 4 || strcmp(nm + nl - 3, ".md") != 0) continue;
+      char stem[NOTES_NAME_MAX];
+      int  sl = (int)(nl - 3);
+      if(sl >= NOTES_NAME_MAX) sl = NOTES_NAME_MAX - 1;
+      strncpy(stem, nm, (size_t)sl);
+      stem[sl] = '\0';
+      char path[700];
+      snprintf(path, sizeof(path), "%s/%s", dir, nm);
+      FILE *f = fopen(path, "r");
+      if(!f) continue;
+      char buf[NOTES_MAX];
+      int  rd = (int)fread(buf, 1, NOTES_MAX - 1, f);
+      if(rd < 0) rd = 0;
+      buf[rd] = '\0';
+      fclose(f);
+      note_add(stem, buf, rd);
+    }
+    closedir(d);
+  }
+
+  /* Migrate legacy single file */
+  if(g_notes_count == 0) {
+    char legacy[512];
+    notes_legacy_path(legacy, sizeof(legacy));
+    FILE *f = fopen(legacy, "r");
+    if(f) {
+      char buf[NOTES_MAX];
+      int  rd = (int)fread(buf, 1, NOTES_MAX - 1, f);
+      if(rd < 0) rd = 0;
+      buf[rd] = '\0';
+      fclose(f);
+      note_add("notes", buf, rd);
+      notes_save_one(&g_notes_files[0]);
+    }
+  }
+
+  /* Always have at least one note */
+  if(g_notes_count == 0) note_add("notes", NULL, 0);
+}
+
+static void notes_new(const char *name) {
+  if(g_notes_count >= NOTES_FILES) return;
+  notes_save();
+  note_add(name, NULL, 0);
+  g_notes_active                      = g_notes_count - 1;
+  g_notes_files[g_notes_active].dirty = true;
+  notes_save_one(&g_notes_files[g_notes_active]);
+}
+
+static void notes_delete_current(void) {
+  if(g_notes_count <= 1) return; /* keep at least one */
+  NoteFile *nf = &g_notes_files[g_notes_active];
+  char      path[700];
+  notes_file_path(nf, path, sizeof(path));
+  unlink(path);
+  /* Shift array */
+  for(int i = g_notes_active; i < g_notes_count - 1; i++)
+    g_notes_files[i] = g_notes_files[i + 1];
+  g_notes_count--;
+  if(g_notes_active >= g_notes_count) g_notes_active = g_notes_count - 1;
+}
+
+/* ── Markdown token types for rendering ─────────────────────────────── */
+typedef enum {
+  MD_NORMAL,
+  MD_H1,     /* # */
+  MD_H2,     /* ## */
+  MD_H3,     /* ### */
+  MD_BULLET, /* - or * at start */
+  MD_CODE,   /* ```...``` block or `inline` */
+  MD_BOLD,   /* **text** */
+  MD_ITALIC, /* *text* or _text_ */
+  MD_HR,     /* --- or *** */
+} MdStyle;
+
+/* Analyse a single display line and return its dominant style */
+static MdStyle md_line_style(const char *ln) {
+  if(strncmp(ln, "### ", 4) == 0) return MD_H3;
+  if(strncmp(ln, "## ", 3) == 0) return MD_H2;
+  if(strncmp(ln, "# ", 2) == 0) return MD_H1;
+  if(strncmp(ln, "- ", 2) == 0 || strncmp(ln, "* ", 2) == 0) return MD_BULLET;
+  if(strncmp(ln, "```", 3) == 0) return MD_CODE;
+  if(strncmp(ln, "---", 3) == 0 || strncmp(ln, "***", 3) == 0) return MD_HR;
+  return MD_NORMAL;
+}
+
+/* Strip markdown prefix chars to get display text */
+static const char *md_display(const char *ln, MdStyle s) {
+  switch(s) {
+    case MD_H1: return ln + 2;
+    case MD_H2: return ln + 3;
+    case MD_H3: return ln + 4;
+    case MD_BULLET: return ln + 2;
+    case MD_CODE: return ln + 3;
+    default: return ln;
+  }
+}
+
+/* Map style to a colour (r,g,b) — Catppuccin-flavoured */
+static void
+md_colour(MdStyle s, bool in_code_block, uint8_t *r, uint8_t *g, uint8_t *b) {
+  if(in_code_block) {
+    *r = 0xa6;
+    *g = 0xe3;
+    *b = 0xa1;
+    return;
+  } /* green */
+  switch(s) {
+    case MD_H1:
+      *r = 0xcb;
+      *g = 0xa6;
+      *b = 0xf7;
+      return; /* mauve */
+    case MD_H2:
+      *r = 0x89;
+      *g = 0xdc;
+      *b = 0xeb;
+      return; /* sky */
+    case MD_H3:
+      *r = 0x74;
+      *g = 0xc7;
+      *b = 0xec;
+      return; /* sapphire */
+    case MD_BULLET:
+      *r = 0xf9;
+      *g = 0xe2;
+      *b = 0xaf;
+      return; /* yellow */
+    case MD_CODE:
+      *r = 0xa6;
+      *g = 0xe3;
+      *b = 0xa1;
+      return; /* green */
+    case MD_HR:
+      *r = 0x58;
+      *g = 0x5b;
+      *b = 0x70;
+      return; /* surface2 */
+    default:
+      *r = 0xcd;
+      *g = 0xd6;
+      *b = 0xf4;
+      return; /* text */
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §5  FreeType singleton
+ * §5  Search panel — ripgrep/grep live file search
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define SEARCH_RESULTS_MAX 256
+#define SEARCH_QUERY_MAX   128
+#define SEARCH_LINE_MAX    256
+
+typedef struct {
+  char file[256];
+  int  line;
+  char text[SEARCH_LINE_MAX]; /* matching line content */
+} SearchResult;
+
+typedef struct {
+  char            query[SEARCH_QUERY_MAX];
+  int             query_len;
+  SearchResult    results[SEARCH_RESULTS_MAX];
+  int             result_count;
+  bool            running;   /* search in progress */
+  bool            file_only; /* -l mode: filenames only */
+  int64_t         last_run_ms;
+  pthread_t       thread;
+  bool            thread_valid;
+  pthread_mutex_t lock;
+  /* double-buffer: write to pending, swap on done */
+  SearchResult    pending[SEARCH_RESULTS_MAX];
+  int             pending_count;
+  bool            pending_ready;
+} SearchState;
+
+static SearchState g_search;
+
+static void *search_thread(void *arg) {
+  (void)arg;
+  char query[SEARCH_QUERY_MAX];
+  bool file_only;
+  pthread_mutex_lock(&g_search.lock);
+  strncpy(query, g_search.query, sizeof(query) - 1);
+  file_only              = g_search.file_only;
+  g_search.pending_count = 0;
+  pthread_mutex_unlock(&g_search.lock);
+
+  if(!query[0]) {
+    pthread_mutex_lock(&g_search.lock);
+    g_search.pending_count = 0;
+    g_search.pending_ready = true;
+    g_search.running       = false;
+    pthread_mutex_unlock(&g_search.lock);
+    return NULL;
+  }
+
+  /* Try rg first, fall back to grep */
+  char cmd[512];
+  bool has_rg = (system("which rg >/dev/null 2>&1") == 0);
+  if(has_rg) {
+    if(file_only)
+      snprintf(cmd,
+               sizeof(cmd),
+               "rg -l --color=never -i '%s' 2>/dev/null | head -256",
+               query);
+    else
+      snprintf(cmd,
+               sizeof(cmd),
+               "rg -n --color=never -i --no-heading '%s' 2>/dev/null | head -256",
+               query);
+  } else {
+    if(file_only)
+      snprintf(
+          cmd, sizeof(cmd), "grep -r -l -i '%s' . 2>/dev/null | head -256", query);
+    else
+      snprintf(
+          cmd, sizeof(cmd), "grep -r -n -i '%s' . 2>/dev/null | head -256", query);
+  }
+
+  FILE *f = popen(cmd, "r");
+  int   n = 0;
+  if(f) {
+    char line[512];
+    while(fgets(line, sizeof(line), f) && n < SEARCH_RESULTS_MAX) {
+      size_t l = strlen(line);
+      while(l > 0 && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+        line[--l] = '\0';
+
+      SearchResult *sr = &g_search.pending[n];
+      if(file_only) {
+        strncpy(sr->file, line, sizeof(sr->file) - 1);
+        sr->line    = 0;
+        sr->text[0] = '\0';
+      } else {
+        /* file:line:text */
+        char *colon1 = strchr(line, ':');
+        if(!colon1) continue;
+        *colon1 = '\0';
+        strncpy(sr->file, line, sizeof(sr->file) - 1);
+        char *colon2 = strchr(colon1 + 1, ':');
+        if(!colon2) {
+          sr->line = 0;
+          strncpy(sr->text, colon1 + 1, sizeof(sr->text) - 1);
+        } else {
+          *colon2  = '\0';
+          sr->line = atoi(colon1 + 1);
+          strncpy(sr->text, colon2 + 1, sizeof(sr->text) - 1);
+        }
+      }
+      n++;
+    }
+    pclose(f);
+  }
+
+  pthread_mutex_lock(&g_search.lock);
+  g_search.pending_count = n;
+  g_search.pending_ready = true;
+  g_search.running       = false;
+  pthread_mutex_unlock(&g_search.lock);
+  return NULL;
+}
+
+static void search_run(void) {
+  if(g_search.running) return;
+  g_search.running = true;
+  if(g_search.thread_valid) {
+    pthread_join(g_search.thread, NULL);
+    g_search.thread_valid = false;
+  }
+  if(pthread_create(&g_search.thread, NULL, search_thread, NULL) == 0)
+    g_search.thread_valid = true;
+  else
+    g_search.running = false;
+}
+
+/* Call from render loop to swap pending results */
+static void search_poll(void) {
+  if(!g_search.pending_ready) return;
+  pthread_mutex_lock(&g_search.lock);
+  memcpy(g_search.results,
+         g_search.pending,
+         sizeof(SearchResult) * (size_t)g_search.pending_count);
+  g_search.result_count  = g_search.pending_count;
+  g_search.pending_ready = false;
+  pthread_mutex_unlock(&g_search.lock);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §6  Run panel — named async run configurations
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define RUN_CONFIGS_MAX 12
+#define RUN_CMD_MAX     256
+#define RUN_NAME_MAX    32
+
+typedef struct {
+  char    name[RUN_NAME_MAX];
+  char    cmd[RUN_CMD_MAX];
+  pid_t   pid; /* 0 = not running */
+  bool    running;
+  int64_t started_ms;
+  int     exit_code;
+  bool    exited;
+} RunConfig;
+
+static RunConfig g_run_configs[RUN_CONFIGS_MAX];
+static int       g_run_count = 0;
+
+static void run_configs_init(void) {
+  /* Auto-populate with sensible language presets on first call */
+  if(g_run_count > 0) return;
+  struct stat st;
+
+  if(stat("Cargo.toml", &st) == 0) {
+    strncpy(g_run_configs[g_run_count].name, "cargo run", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "cargo run 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+    strncpy(g_run_configs[g_run_count].name, "cargo test", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "cargo test 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+  }
+  if(stat("go.mod", &st) == 0) {
+    strncpy(g_run_configs[g_run_count].name, "go run .", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "go run . 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+    strncpy(g_run_configs[g_run_count].name, "go test ./...", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "go test ./... 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+  }
+  if(stat("pom.xml", &st) == 0) {
+    strncpy(g_run_configs[g_run_count].name, "mvn exec:java", RUN_NAME_MAX - 1);
+    strncpy(
+        g_run_configs[g_run_count].cmd, "mvn exec:java -q 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+    strncpy(g_run_configs[g_run_count].name, "mvn test", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "mvn test -q 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+  }
+  if(stat("build.gradle", &st) == 0 || stat("build.gradle.kts", &st) == 0) {
+    strncpy(g_run_configs[g_run_count].name, "gradle run", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "./gradlew run 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+    strncpy(g_run_configs[g_run_count].name, "gradle test", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[g_run_count].cmd, "./gradlew test 2>&1", RUN_CMD_MAX - 1);
+    g_run_count++;
+  }
+  if(g_run_count == 0) {
+    /* Generic fallback */
+    strncpy(g_run_configs[0].name, "run", RUN_NAME_MAX - 1);
+    strncpy(g_run_configs[0].cmd, "./run.sh 2>&1", RUN_CMD_MAX - 1);
+    g_run_count = 1;
+  }
+}
+
+static void run_config_start(int idx) {
+  if(idx < 0 || idx >= g_run_count) return;
+  RunConfig *rc = &g_run_configs[idx];
+  if(rc->running) return;
+
+  /* Fork + exec via sh so shell expansions work */
+  pid_t pid = fork();
+  if(pid == 0) {
+    /* child: redirect stdout/stderr to log ring via a pipe would be ideal,
+     * but for simplicity run via popen-style: use sh -c and setsid */
+    setsid();
+    execlp("sh", "sh", "-c", rc->cmd, NULL);
+    _exit(127);
+  } else if(pid > 0) {
+    rc->pid        = pid;
+    rc->running    = true;
+    rc->exited     = false;
+    rc->started_ms = ov_now_ms();
+    char logline[256];
+    snprintf(logline, sizeof(logline), "==> run [%s]: pid %d", rc->name, (int)pid);
+    log_ring_push(logline);
+  }
+}
+
+static void run_config_stop(int idx) {
+  if(idx < 0 || idx >= g_run_count) return;
+  RunConfig *rc = &g_run_configs[idx];
+  if(!rc->running || rc->pid <= 0) return;
+  kill(rc->pid, SIGTERM);
+  char logline[256];
+  snprintf(logline,
+           sizeof(logline),
+           "==> run [%s]: SIGTERM pid %d",
+           rc->name,
+           (int)rc->pid);
+  log_ring_push(logline);
+}
+
+/* Non-blocking reap — call each frame */
+static void run_configs_poll(void) {
+  for(int i = 0; i < g_run_count; i++) {
+    RunConfig *rc = &g_run_configs[i];
+    if(!rc->running || rc->pid <= 0) continue;
+    int   status;
+    pid_t r = waitpid(rc->pid, &status, WNOHANG);
+    if(r == rc->pid) {
+      rc->running   = false;
+      rc->exited    = true;
+      rc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+      char logline[256];
+      snprintf(logline,
+               sizeof(logline),
+               "==> run [%s]: exit %d (%.1fs)",
+               rc->name,
+               rc->exit_code,
+               (double)(ov_now_ms() - rc->started_ms) / 1000.0);
+      log_ring_push(logline);
+    }
+  }
+}
+
+/* Editing state for adding a new run config */
+static bool g_run_editing    = false;
+static int  g_run_edit_field = 0; /* 0=name, 1=cmd */
+static char g_run_edit_name[RUN_NAME_MAX];
+static int  g_run_edit_name_len = 0;
+static char g_run_edit_cmd[RUN_CMD_MAX];
+static int  g_run_edit_cmd_len = 0;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §7  Deps panel — dependency inspector
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define DEPS_MAX      128
+#define DEPS_LINE_MAX 128
+
+typedef enum { DEPS_UNKNOWN, DEPS_RUST, DEPS_GO, DEPS_MAVEN, DEPS_GRADLE } DepsLang;
+
+typedef struct {
+  char name[64];
+  char version[32];
+  char latest[32]; /* empty = not checked */
+  bool outdated;
+} DepEntry;
+
+typedef struct {
+  DepsLang  lang;
+  DepEntry  entries[DEPS_MAX];
+  int       count;
+  bool      checking; /* outdated check running */
+  bool      valid;
+  int64_t   fetched_ms;
+  pthread_t thread;
+  bool      thread_valid;
+} DepsState;
+
+static DepsState g_deps;
+
+static DepsLang deps_detect(void) {
+  struct stat st;
+  if(stat("Cargo.toml", &st) == 0) return DEPS_RUST;
+  if(stat("go.mod", &st) == 0) return DEPS_GO;
+  if(stat("pom.xml", &st) == 0) return DEPS_MAVEN;
+  if(stat("build.gradle", &st) == 0 || stat("build.gradle.kts", &st) == 0)
+    return DEPS_GRADLE;
+  return DEPS_UNKNOWN;
+}
+
+static void deps_parse_cargo(void) {
+  FILE *f = fopen("Cargo.toml", "r");
+  if(!f) return;
+  char line[256];
+  bool in_deps = false;
+  while(fgets(line, sizeof(line), f) && g_deps.count < DEPS_MAX) {
+    if(strncmp(line, "[dependencies]", 14) == 0 ||
+       strncmp(line, "[dev-dependencies]", 18) == 0 ||
+       strncmp(line, "[build-dependencies]", 20) == 0) {
+      in_deps = true;
+      continue;
+    }
+    if(line[0] == '[') {
+      in_deps = false;
+      continue;
+    }
+    if(!in_deps) continue;
+    /* name = "version" or name = { version = "..." } */
+    char *eq = strchr(line, '=');
+    if(!eq) continue;
+    char name[64] = { 0 }, ver[32] = { 0 };
+    int  nlen = (int)(eq - line);
+    while(nlen > 0 && line[nlen - 1] == ' ')
+      nlen--;
+    strncpy(name, line, (size_t)(nlen < 63 ? nlen : 63));
+    /* skip leading spaces in value */
+    char *val = eq + 1;
+    while(*val == ' ')
+      val++;
+    if(*val == '"') {
+      val++;
+      char *end = strchr(val, '"');
+      if(end) {
+        strncpy(ver, val, (size_t)((end - val) < 31 ? (end - val) : 31));
+      }
+    } else if(strstr(val, "version")) {
+      char *vs = strstr(val, "\"");
+      if(vs) {
+        vs++;
+        char *ve = strchr(vs, '"');
+        if(ve) strncpy(ver, vs, (size_t)((ve - vs) < 31 ? (ve - vs) : 31));
+      }
+    } else
+      continue;
+    if(!name[0]) continue;
+    strncpy(g_deps.entries[g_deps.count].name, name, 63);
+    strncpy(g_deps.entries[g_deps.count].version, ver, 31);
+    g_deps.count++;
+  }
+  fclose(f);
+}
+
+static void deps_parse_go(void) {
+  char lines[DEPS_MAX][DEPS_LINE_MAX];
+  int  n = run_capture("go list -m all 2>/dev/null", lines, DEPS_MAX);
+  for(int i = 1; i < n && g_deps.count < DEPS_MAX; i++) { /* skip first (self) */
+    char *sp = strchr(lines[i], ' ');
+    if(!sp) continue;
+    *sp = '\0';
+    strncpy(g_deps.entries[g_deps.count].name, lines[i], 63);
+    strncpy(g_deps.entries[g_deps.count].version, sp + 1, 31);
+    g_deps.count++;
+  }
+}
+
+static void deps_parse_maven(void) {
+  char lines[DEPS_MAX][DEPS_LINE_MAX];
+  int  n = run_capture("mvn dependency:list -q 2>/dev/null | grep '\\[INFO\\]' | "
+                       "grep ':' | head -128",
+                      lines,
+                      DEPS_MAX);
+  for(int i = 0; i < n && g_deps.count < DEPS_MAX; i++) {
+    /* [INFO]    groupId:artifactId:type:version:scope */
+    char *p = strstr(lines[i], "   ");
+    if(!p) continue;
+    while(*p == ' ')
+      p++;
+    /* extract artifactId and version */
+    char  parts[5][64] = { { 0 } };
+    int   pi           = 0;
+    char *tok          = strtok(p, ":");
+    while(tok && pi < 5) {
+      strncpy(parts[pi++], tok, 63);
+      tok = strtok(NULL, ":");
+    }
+    if(pi < 4) continue;
+    strncpy(g_deps.entries[g_deps.count].name, parts[1], 63);
+    strncpy(g_deps.entries[g_deps.count].version, parts[3], 31);
+    g_deps.count++;
+  }
+}
+
+static void *deps_check_thread(void *arg) {
+  (void)arg;
+  /* Language-specific outdated check */
+  if(g_deps.lang == DEPS_RUST) {
+    /* cargo outdated --format json would be ideal; use plain text */
+    char lines[DEPS_MAX][DEPS_LINE_MAX];
+    int  n = run_capture("cargo outdated 2>/dev/null | tail -n +3", lines, DEPS_MAX);
+    for(int i = 0; i < n; i++) {
+      /* Name  Current  Compat  Latest  Kind  Platform */
+      char name[64] = { 0 }, cur[32] = { 0 }, latest[32] = { 0 };
+      if(sscanf(lines[i], "%63s %31s %*s %31s", name, cur, latest) < 3) continue;
+      if(strcmp(latest, "---") == 0) continue;
+      for(int j = 0; j < g_deps.count; j++) {
+        if(strcmp(g_deps.entries[j].name, name) == 0) {
+          strncpy(g_deps.entries[j].latest, latest, 31);
+          g_deps.entries[j].outdated = (strcmp(cur, latest) != 0);
+          break;
+        }
+      }
+    }
+  } else if(g_deps.lang == DEPS_GO) {
+    char lines[DEPS_MAX][DEPS_LINE_MAX];
+    int  n = run_capture("go list -u -m all 2>/dev/null", lines, DEPS_MAX);
+    for(int i = 1; i < n; i++) {
+      /* module version [newversion] */
+      char name[64] = { 0 }, ver[32] = { 0 }, latest[32] = { 0 };
+      sscanf(lines[i], "%63s %31s %31s", name, ver, latest);
+      /* latest has brackets: [v1.2.3] */
+      if(latest[0] == '[') {
+        size_t ll = strlen(latest);
+        if(ll > 2) {
+          memmove(latest, latest + 1, ll - 2);
+          latest[ll - 2] = '\0';
+        }
+        for(int j = 0; j < g_deps.count; j++) {
+          if(strcmp(g_deps.entries[j].name, name) == 0) {
+            strncpy(g_deps.entries[j].latest, latest, 31);
+            g_deps.entries[j].outdated = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  g_deps.checking = false;
+  return NULL;
+}
+
+static void deps_load(void) {
+  int64_t now = ov_now_ms();
+  if(g_deps.valid && now - g_deps.fetched_ms < 30000) return;
+  g_deps.count = 0;
+  g_deps.lang  = deps_detect();
+  switch(g_deps.lang) {
+    case DEPS_RUST: deps_parse_cargo(); break;
+    case DEPS_GO: deps_parse_go(); break;
+    case DEPS_MAVEN: deps_parse_maven(); break;
+    default: break;
+  }
+  g_deps.valid      = true;
+  g_deps.fetched_ms = now;
+}
+
+static void deps_check_outdated(void) {
+  if(g_deps.checking) return;
+  g_deps.checking = true;
+  if(g_deps.thread_valid) {
+    pthread_join(g_deps.thread, NULL);
+    g_deps.thread_valid = false;
+  }
+  if(pthread_create(&g_deps.thread, NULL, deps_check_thread, NULL) == 0)
+    g_deps.thread_valid = true;
+  else
+    g_deps.checking = false;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §8  Log filter state
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define LOG_FILTER_MAX 64
+static char g_log_filter[LOG_FILTER_MAX];
+static int  g_log_filter_len  = 0;
+static bool g_log_filter_mode = false;
+
 
 static FT_Library g_ov_ft   = NULL;
 static FT_Face    g_ov_face = NULL;
@@ -558,12 +1588,16 @@ typedef enum {
   PANEL_GIT,
   PANEL_BUILD,
   PANEL_NOTES,
+  PANEL_SEARCH,
+  PANEL_RUN,
+  PANEL_DEPS,
   PANEL_COUNT,
 } PanelId;
 
-static const char *panel_names[PANEL_COUNT] = { "[1] WS",   "[2] Cmds", "[3] Procs",
-                                                "[4] Log",  "[5] Git",  "[6] Build",
-                                                "[7] Notes" };
+static const char *panel_names[PANEL_COUNT] = {
+  "[1] WS",  "[2] Cmds",  "[3] Procs",  "[4] Log", "[5] Git",
+  "[6] Bld", "[7] Notes", "[8] Search", "[9] Run", "[0] Deps"
+};
 
 /* ─── Built-in commands (palette) ──────────────────────────────────────── */
 
@@ -620,9 +1654,15 @@ struct TrixieOverlay {
   int                      match_count;
   /* build panel */
   char                     build_cmd[BUILD_CMD_MAX];
-  int                      build_cmd_editing; /* 0=no,1=typing cmd */
+  int                      build_cmd_editing;
+  int                      build_err_cursor;
+  bool                     build_show_errors;
   /* notes */
   bool                     notes_loaded;
+  /* search panel */
+  bool                     search_active; /* typing query */
+  /* run panel — cursor is shared o->cursor */
+  /* deps panel — cursor is shared o->cursor */
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -648,14 +1688,41 @@ overlay_create(struct wlr_scene_tree *layer, int w, int h, const Config *cfg) {
     log_installed = true;
   }
 
-  /* Default build command — override with 'b' key prompt */
-  strncpy(o->build_cmd, "make -j$(nproc) 2>&1", sizeof(o->build_cmd) - 1);
+  pthread_mutex_init(&g_build.err_lock, NULL);
+  atomic_init(&g_build.running, false);
+  pthread_mutex_init(&g_search.lock, NULL);
+
+  build_autodetect(g_build.cmd, sizeof(g_build.cmd));
+  strncpy(o->build_cmd, g_build.cmd, sizeof(o->build_cmd) - 1);
+
+  run_configs_init();
+  deps_load();
 
   return o;
 }
 
 void overlay_destroy(TrixieOverlay *o) {
   if(!o) return;
+  if(g_build.thread_valid) {
+    pthread_join(g_build.thread, NULL);
+    g_build.thread_valid = false;
+  }
+  pthread_mutex_destroy(&g_build.err_lock);
+  if(g_search.thread_valid) {
+    pthread_join(g_search.thread, NULL);
+    g_search.thread_valid = false;
+  }
+  pthread_mutex_destroy(&g_search.lock);
+  if(g_deps.thread_valid) {
+    pthread_join(g_deps.thread, NULL);
+    g_deps.thread_valid = false;
+  }
+  /* Kill any running run configs */
+  for(int i = 0; i < g_run_count; i++) {
+    if(g_run_configs[i].running && g_run_configs[i].pid > 0)
+      kill(g_run_configs[i].pid, SIGTERM);
+  }
+  notes_save();
   wlr_scene_node_destroy(&o->scene_buf->node);
   if(g_ov_face) {
     FT_Done_Face(g_ov_face);
@@ -672,7 +1739,6 @@ void overlay_toggle(TrixieOverlay *o) {
   if(!o) return;
   o->visible = !o->visible;
   wlr_scene_node_set_enabled(&o->scene_buf->node, o->visible);
-  /* Lazy-load notes on first show */
   if(o->visible && !o->notes_loaded) {
     notes_load();
     o->notes_loaded = true;
@@ -733,25 +1799,68 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
   if(!o || !o->visible) return false;
   (void)mods;
 
-  /* ── Notes edit mode swallows printable keys + backspace ── */
-  if(o->panel == PANEL_NOTES && g_notes_edit) {
+  /* ── Notes rename mode swallows keys ── */
+  if(o->panel == PANEL_NOTES && g_notes_rename) {
     if(sym == XKB_KEY_Escape) {
-      g_notes_edit = false;
-      notes_save();
+      g_notes_rename = false;
       return true;
     }
-    if(sym == XKB_KEY_Return && g_notes_len < NOTES_MAX - 1) {
-      g_notes[g_notes_len++] = '\n';
-      g_notes[g_notes_len]   = '\0';
+    if(sym == XKB_KEY_Return && g_notes_rename_len > 0) {
+      g_notes_rename_buf[g_notes_rename_len] = '\0';
+      if(g_notes_count == 0) {
+        notes_new(g_notes_rename_buf);
+      } else {
+        /* rename in-place: delete old file, update name, save */
+        NoteFile *nf = cur_note();
+        char      old_path[700];
+        notes_file_path(nf, old_path, sizeof(old_path));
+        unlink(old_path);
+        strncpy(nf->name, g_notes_rename_buf, NOTES_NAME_MAX - 1);
+        nf->dirty = true;
+        notes_save_one(nf);
+      }
+      g_notes_rename = false;
       return true;
     }
     if(sym == XKB_KEY_BackSpace) {
-      if(g_notes_len > 0) g_notes[--g_notes_len] = '\0';
+      if(g_notes_rename_len > 0) g_notes_rename_buf[--g_notes_rename_len] = '\0';
       return true;
     }
-    if(sym >= 0x20 && sym < 0x7f && g_notes_len < NOTES_MAX - 1) {
-      g_notes[g_notes_len++] = (char)sym;
-      g_notes[g_notes_len]   = '\0';
+    if(sym >= 0x20 && sym < 0x7f && g_notes_rename_len < NOTES_NAME_MAX - 1) {
+      /* restrict to filename-safe chars */
+      char c = (char)sym;
+      if(c == ' ') c = '_';
+      g_notes_rename_buf[g_notes_rename_len++] = c;
+      g_notes_rename_buf[g_notes_rename_len]   = '\0';
+    }
+    return true;
+  }
+
+  /* ── Notes edit mode swallows printable keys + backspace ── */
+  if(o->panel == PANEL_NOTES && g_notes_edit) {
+    NoteFile *nf = cur_note();
+    if(!nf) {
+      g_notes_edit = false;
+      return true;
+    }
+    if(sym == XKB_KEY_Escape) {
+      g_notes_edit = false;
+      nf->dirty    = true;
+      notes_save_one(nf);
+      return true;
+    }
+    if(sym == XKB_KEY_Return && nf->len < NOTES_MAX - 1) {
+      nf->text[nf->len++] = '\n';
+      nf->text[nf->len]   = '\0';
+      return true;
+    }
+    if(sym == XKB_KEY_BackSpace) {
+      if(nf->len > 0) nf->text[--nf->len] = '\0';
+      return true;
+    }
+    if(sym >= 0x20 && sym < 0x7f && nf->len < NOTES_MAX - 1) {
+      nf->text[nf->len++] = (char)sym;
+      nf->text[nf->len]   = '\0';
       return true;
     }
     return true;
@@ -765,8 +1874,9 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
     }
     if(sym == XKB_KEY_Return) {
       o->build_cmd_editing = 0;
+      if(o->build_cmd[0]) strncpy(g_build.cmd, o->build_cmd, BUILD_CMD_MAX - 1);
       run_build();
-      o->panel = PANEL_LOG; /* switch to log to watch output */
+      o->panel = PANEL_LOG;
       return true;
     }
     int l = (int)strlen(o->build_cmd);
@@ -783,21 +1893,30 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
 
   /* ── Global keys ── */
   if(sym == XKB_KEY_Tab) {
-    o->panel       = (PanelId)((o->panel + 1) % PANEL_COUNT);
-    o->cursor      = 0;
-    o->scroll      = 0;
-    o->filter[0]   = '\0';
-    o->filter_len  = 0;
-    o->filter_mode = false;
+    o->panel         = (PanelId)((o->panel + 1) % PANEL_COUNT);
+    o->cursor        = 0;
+    o->scroll        = 0;
+    o->filter[0]     = '\0';
+    o->filter_len    = 0;
+    o->filter_mode   = false;
+    o->search_active = false;
     return true;
   }
-  if(sym >= XKB_KEY_1 && sym <= XKB_KEY_7) {
-    o->panel       = (PanelId)(sym - XKB_KEY_1);
-    o->cursor      = 0;
-    o->scroll      = 0;
-    o->filter[0]   = '\0';
-    o->filter_len  = 0;
-    o->filter_mode = false;
+  if(sym >= XKB_KEY_1 && sym <= XKB_KEY_9) {
+    o->panel         = (PanelId)(sym - XKB_KEY_1);
+    o->cursor        = 0;
+    o->scroll        = 0;
+    o->filter[0]     = '\0';
+    o->filter_len    = 0;
+    o->filter_mode   = false;
+    o->search_active = false;
+    return true;
+  }
+  if(sym == XKB_KEY_0) {
+    o->panel         = PANEL_DEPS;
+    o->cursor        = 0;
+    o->scroll        = 0;
+    o->search_active = false;
     return true;
   }
   if(sym == XKB_KEY_Escape || sym == XKB_KEY_grave) {
@@ -816,6 +1935,113 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
 
   /* ── Panel-specific keys ── */
   switch(o->panel) {
+    case PANEL_PROCESSES:
+      if(sym == XKB_KEY_Return) {
+        /* SIGTERM selected process */
+        if(o->cursor >= 0 && o->cursor < g_proc_count) {
+          kill(g_procs[o->cursor].pid, SIGTERM);
+          char msg[64];
+          snprintf(msg,
+                   sizeof(msg),
+                   "==> SIGTERM pid %d (%s)",
+                   g_procs[o->cursor].pid,
+                   g_procs[o->cursor].comm);
+          log_ring_push(msg);
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_K) {
+        if(o->cursor >= 0 && o->cursor < g_proc_count) {
+          kill(g_procs[o->cursor].pid, SIGKILL);
+          char msg[64];
+          snprintf(msg,
+                   sizeof(msg),
+                   "==> SIGKILL pid %d (%s)",
+                   g_procs[o->cursor].pid,
+                   g_procs[o->cursor].comm);
+          log_ring_push(msg);
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_s) {
+        g_proc_sort    = (ProcSort)((g_proc_sort + 1) % 3);
+        g_proc_next_ms = 0; /* force refresh */
+        return true;
+      }
+      break;
+    case PANEL_LOG:
+      if(sym == XKB_KEY_slash) {
+        g_log_filter_mode = true;
+        return true;
+      }
+      if(sym == XKB_KEY_c && !g_log_filter_mode) {
+        g_log_ring.head  = 0;
+        g_log_ring.count = 0;
+        return true;
+      }
+      if(g_log_filter_mode) {
+        if(sym == XKB_KEY_Escape || sym == XKB_KEY_Return) {
+          g_log_filter_mode = false;
+          return true;
+        }
+        if(sym == XKB_KEY_BackSpace) {
+          if(g_log_filter_len > 0) g_log_filter[--g_log_filter_len] = '\0';
+          return true;
+        }
+        if(sym >= 0x20 && sym < 0x7f && g_log_filter_len < LOG_FILTER_MAX - 1) {
+          g_log_filter[g_log_filter_len++] = (char)sym;
+          g_log_filter[g_log_filter_len]   = '\0';
+        }
+        return true;
+      }
+      break;
+    case PANEL_GIT:
+      if(sym == XKB_KEY_r) {
+        g_git.valid = false;
+        refresh_git();
+        return true;
+      }
+      if(sym == XKB_KEY_d) {
+        /* Toggle diff view for selected file */
+        if(o->cursor >= 0 && o->cursor < g_git.file_count) {
+          if(g_git.show_diff && g_git.diff_for == o->cursor) {
+            g_git.show_diff = false;
+          } else {
+            git_load_diff(o->cursor);
+            g_git.show_diff = true;
+          }
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_s) {
+        /* Stage selected file */
+        if(o->cursor >= 0 && o->cursor < g_git.file_count) {
+          char cmd[512];
+          snprintf(cmd,
+                   sizeof(cmd),
+                   "git add -- '%s' 2>/dev/null",
+                   g_git.files[o->cursor].path);
+          system(cmd);
+          g_git.valid = false; /* force refresh */
+          refresh_git();
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_u) {
+        /* Unstage selected file */
+        if(o->cursor >= 0 && o->cursor < g_git.file_count) {
+          char cmd[512];
+          snprintf(cmd,
+                   sizeof(cmd),
+                   "git restore --staged -- '%s' 2>/dev/null",
+                   g_git.files[o->cursor].path);
+          system(cmd);
+          g_git.valid = false;
+          refresh_git();
+        }
+        return true;
+      }
+      break;
     case PANEL_COMMANDS:
       if(sym == XKB_KEY_slash) {
         o->filter_mode = true;
@@ -839,29 +2065,245 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
         return true;
       }
       break;
-    case PANEL_GIT:
+    case PANEL_SEARCH:
+      if(sym == XKB_KEY_slash || (!o->search_active && sym >= 0x20 && sym < 0x7f)) {
+        o->search_active = true;
+        if(sym != XKB_KEY_slash && g_search.query_len < SEARCH_QUERY_MAX - 1) {
+          g_search.query[g_search.query_len++] = (char)sym;
+          g_search.query[g_search.query_len]   = '\0';
+          search_run();
+        }
+        return true;
+      }
+      if(o->search_active) {
+        if(sym == XKB_KEY_Escape) {
+          o->search_active = false;
+          return true;
+        }
+        if(sym == XKB_KEY_Return) {
+          o->search_active = false;
+          return true;
+        }
+        if(sym == XKB_KEY_BackSpace) {
+          if(g_search.query_len > 0) {
+            g_search.query[--g_search.query_len] = '\0';
+            search_run();
+          }
+          return true;
+        }
+        if(sym >= 0x20 && sym < 0x7f && g_search.query_len < SEARCH_QUERY_MAX - 1) {
+          g_search.query[g_search.query_len++] = (char)sym;
+          g_search.query[g_search.query_len]   = '\0';
+          search_run();
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_Return && !o->search_active) {
+        /* Open selected result in $EDITOR */
+        search_poll();
+        if(o->cursor >= 0 && o->cursor < g_search.result_count) {
+          SearchResult *sr     = &g_search.results[o->cursor];
+          const char   *editor = getenv("EDITOR");
+          if(!editor) editor = "vi";
+          char cmd[512];
+          if(sr->line > 0)
+            snprintf(cmd, sizeof(cmd), "%s +%d '%s' &", editor, sr->line, sr->file);
+          else
+            snprintf(cmd, sizeof(cmd), "%s '%s' &", editor, sr->file);
+          system(cmd);
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_f) {
+        g_search.file_only = !g_search.file_only;
+        if(g_search.query_len > 0) search_run();
+        return true;
+      }
+      break;
+    case PANEL_RUN:
+      if(sym == XKB_KEY_Return) {
+        if(o->cursor >= 0 && o->cursor < g_run_count) {
+          if(g_run_configs[o->cursor].running)
+            run_config_stop(o->cursor);
+          else
+            run_config_start(o->cursor);
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_a) {
+        /* Start adding a new config */
+        g_run_editing       = true;
+        g_run_edit_field    = 0;
+        g_run_edit_name[0]  = '\0';
+        g_run_edit_name_len = 0;
+        g_run_edit_cmd[0]   = '\0';
+        g_run_edit_cmd_len  = 0;
+        return true;
+      }
+      if(sym == XKB_KEY_d && !g_run_editing) {
+        /* Delete selected config (stop first) */
+        if(o->cursor >= 0 && o->cursor < g_run_count) {
+          run_config_stop(o->cursor);
+          for(int i = o->cursor; i < g_run_count - 1; i++)
+            g_run_configs[i] = g_run_configs[i + 1];
+          g_run_count--;
+          if(o->cursor >= g_run_count && o->cursor > 0) o->cursor--;
+        }
+        return true;
+      }
+      if(g_run_editing) {
+        /* Route keystrokes to name / cmd input fields */
+        char *buf = (g_run_edit_field == 0) ? g_run_edit_name : g_run_edit_cmd;
+        int  *buflen =
+            (g_run_edit_field == 0) ? &g_run_edit_name_len : &g_run_edit_cmd_len;
+        int bufsz = (g_run_edit_field == 0) ? RUN_NAME_MAX : RUN_CMD_MAX;
+        if(sym == XKB_KEY_Escape) {
+          g_run_editing = false;
+          return true;
+        }
+        if(sym == XKB_KEY_Tab && g_run_edit_field == 0) {
+          g_run_edit_field = 1;
+          return true;
+        }
+        if(sym == XKB_KEY_Return) {
+          if(g_run_edit_field == 0) {
+            g_run_edit_field = 1;
+            return true;
+          }
+          /* Commit */
+          if(g_run_edit_name[0] && g_run_edit_cmd[0] &&
+             g_run_count < RUN_CONFIGS_MAX) {
+            strncpy(
+                g_run_configs[g_run_count].name, g_run_edit_name, RUN_NAME_MAX - 1);
+            strncpy(g_run_configs[g_run_count].cmd, g_run_edit_cmd, RUN_CMD_MAX - 1);
+            g_run_count++;
+          }
+          g_run_editing = false;
+          return true;
+        }
+        if(sym == XKB_KEY_BackSpace) {
+          if(*buflen > 0) buf[--(*buflen)] = '\0';
+          return true;
+        }
+        if(sym >= 0x20 && sym < 0x7f && *buflen < bufsz - 1) {
+          buf[(*buflen)++] = (char)sym;
+          buf[*buflen]     = '\0';
+        }
+        return true;
+      }
+      break;
+    case PANEL_DEPS:
+      if(sym == XKB_KEY_u) {
+        deps_check_outdated();
+        return true;
+      }
       if(sym == XKB_KEY_r) {
-        g_git.valid = false;
-        refresh_git();
+        g_deps.valid = false;
+        deps_load();
         return true;
       }
       break;
     case PANEL_BUILD:
       if(sym == XKB_KEY_b) {
-        /* clear cmd and enter edit mode */
         o->build_cmd[0]      = '\0';
         o->build_cmd_editing = 1;
         return true;
       }
-      if(sym == XKB_KEY_Return) {
-        run_build();
-        o->panel = PANEL_LOG;
+      if(sym == XKB_KEY_e) {
+        /* Toggle between error list and log view */
+        o->build_show_errors = !o->build_show_errors;
+        o->build_err_cursor  = 0;
         return true;
+      }
+      if(sym == XKB_KEY_Return) {
+        if(o->build_show_errors && g_build.err_count > 0) {
+          /* Jump to error in editor via $EDITOR file:line */
+          pthread_mutex_lock(&g_build.err_lock);
+          int ei = o->build_err_cursor;
+          if(ei < g_build.err_count) {
+            BuildError *be = &g_build.errors[ei];
+            if(be->file[0] && be->line > 0) {
+              char        jump_cmd[512];
+              const char *editor = getenv("EDITOR");
+              if(!editor) editor = "vi";
+              snprintf(jump_cmd,
+                       sizeof(jump_cmd),
+                       "%s +%d '%s' &",
+                       editor,
+                       be->line,
+                       be->file);
+              system(jump_cmd);
+            }
+          }
+          pthread_mutex_unlock(&g_build.err_lock);
+        } else {
+          if(o->build_cmd[0]) strncpy(g_build.cmd, o->build_cmd, BUILD_CMD_MAX - 1);
+          run_build();
+          o->build_show_errors = false;
+          o->panel             = PANEL_LOG;
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_j || sym == XKB_KEY_Down) {
+        if(o->build_show_errors) {
+          pthread_mutex_lock(&g_build.err_lock);
+          int mx = g_build.err_count - 1;
+          pthread_mutex_unlock(&g_build.err_lock);
+          if(o->build_err_cursor < mx) o->build_err_cursor++;
+          return true;
+        }
+      }
+      if(sym == XKB_KEY_k || sym == XKB_KEY_Up) {
+        if(o->build_show_errors) {
+          if(o->build_err_cursor > 0) o->build_err_cursor--;
+          return true;
+        }
       }
       break;
     case PANEL_NOTES:
-      if(sym == XKB_KEY_e) {
+      if(sym == XKB_KEY_e && !g_notes_edit) {
         g_notes_edit = true;
+        return true;
+      }
+      if(sym == XKB_KEY_bracketleft) {
+        /* previous note */
+        if(g_notes_active > 0) {
+          notes_save_one(cur_note());
+          g_notes_active--;
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_bracketright) {
+        /* next note */
+        if(g_notes_active < g_notes_count - 1) {
+          notes_save_one(cur_note());
+          g_notes_active++;
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_n) {
+        /* new note or rename current */
+        g_notes_rename     = true;
+        g_notes_rename_len = 0;
+        /* pre-fill with current name for rename */
+        NoteFile *nf       = cur_note();
+        if(nf) {
+          strncpy(g_notes_rename_buf, nf->name, NOTES_NAME_MAX - 1);
+          g_notes_rename_len = (int)strlen(g_notes_rename_buf);
+        } else {
+          g_notes_rename_buf[0] = '\0';
+        }
+        return true;
+      }
+      if(sym == XKB_KEY_N) {
+        /* capital N = new blank note */
+        g_notes_rename        = true;
+        g_notes_rename_len    = 0;
+        g_notes_rename_buf[0] = '\0';
+        return true;
+      }
+      if(sym == XKB_KEY_d && !g_notes_edit) {
+        notes_delete_current();
         return true;
       }
       break;
@@ -1086,6 +2528,7 @@ static void draw_panel_commands(uint32_t      *px,
 }
 
 /* ── [3] Processes ────────────────────────────────────────────────────── */
+/* ── [3] Processes ────────────────────────────────────────────────────── */
 static void draw_panel_processes(uint32_t      *px,
                                  int            stride,
                                  int            px0,
@@ -1095,51 +2538,25 @@ static void draw_panel_processes(uint32_t      *px,
                                  TrixieOverlay *o,
                                  const Config  *cfg) {
   refresh_procs();
+  run_configs_poll(); /* reap finished run configs */
   Color ac = cfg->colors.active_border;
   Color bg = cfg->colors.pane_bg;
   int   y  = py0 + HEADER_H + PAD;
 
-  /* Header row */
+  /* Sort indicator */
+  static const char *sort_labels[] = { "CPU%", "RSS", "PID" };
+  char               hdr[64];
+  snprintf(hdr,
+           sizeof(hdr),
+           "PID      COMMAND              CPU%%   RSS     GRAPH  sort:%s",
+           sort_labels[g_proc_sort]);
   ov_draw_text(px,
                stride,
                px0 + PAD,
                y + g_ov_asc,
                stride,
                py0 + ph,
-               "PID",
-               ac.r,
-               ac.g,
-               ac.b,
-               0xff);
-  ov_draw_text(px,
-               stride,
-               px0 + PAD + 60,
-               y + g_ov_asc,
-               stride,
-               py0 + ph,
-               "COMMAND",
-               ac.r,
-               ac.g,
-               ac.b,
-               0xff);
-  ov_draw_text(px,
-               stride,
-               px0 + pw - PAD - 120,
-               y + g_ov_asc,
-               stride,
-               py0 + ph,
-               "CPU%",
-               ac.r,
-               ac.g,
-               ac.b,
-               0xff);
-  ov_draw_text(px,
-               stride,
-               px0 + pw - PAD - 56,
-               y + g_ov_asc,
-               stride,
-               py0 + ph,
-               "RSS",
+               hdr,
                ac.r,
                ac.g,
                ac.b,
@@ -1157,10 +2574,16 @@ static void draw_panel_processes(uint32_t      *px,
 
     char pid_s[16], cpu_s[16], rss_s[16];
     snprintf(pid_s, sizeof(pid_s), "%d", pe->pid);
-    snprintf(cpu_s, sizeof(cpu_s), "%.1f", pe->cpu_pct);
-    snprintf(rss_s, sizeof(rss_s), "%ldM", pe->rss_kb / 1024);
+    snprintf(cpu_s, sizeof(cpu_s), "%5.1f", pe->cpu_pct);
+    if(pe->rss_kb >= 1024)
+      snprintf(rss_s, sizeof(rss_s), "%ldM", pe->rss_kb / 1024);
+    else
+      snprintf(rss_s, sizeof(rss_s), "%ldK", pe->rss_kb);
 
-    uint8_t fr = sel ? ac.r : 0xa6, fg = sel ? ac.g : 0xad, fb = sel ? ac.b : 0xc8;
+    uint8_t fr = sel ? ac.r : 0xa6;
+    uint8_t fg = sel ? ac.g : 0xad;
+    uint8_t fb = sel ? ac.b : 0xc8;
+
     ov_draw_text(px,
                  stride,
                  px0 + PAD,
@@ -1174,7 +2597,7 @@ static void draw_panel_processes(uint32_t      *px,
                  0xff);
     ov_draw_text(px,
                  stride,
-                 px0 + PAD + 60,
+                 px0 + PAD + 64,
                  ry + g_ov_asc + 2,
                  stride,
                  py0 + ph,
@@ -1185,7 +2608,7 @@ static void draw_panel_processes(uint32_t      *px,
                  0xff);
     ov_draw_text(px,
                  stride,
-                 px0 + pw - PAD - 120,
+                 px0 + PAD + 220,
                  ry + g_ov_asc + 2,
                  stride,
                  py0 + ph,
@@ -1196,7 +2619,7 @@ static void draw_panel_processes(uint32_t      *px,
                  0xff);
     ov_draw_text(px,
                  stride,
-                 px0 + pw - PAD - 56,
+                 px0 + PAD + 282,
                  ry + g_ov_asc + 2,
                  stride,
                  py0 + ph,
@@ -1205,6 +2628,43 @@ static void draw_panel_processes(uint32_t      *px,
                  0xe3,
                  0xa1,
                  0xff);
+
+    /* Sparkline — 16 bars, each 4px wide, max height = ROW_H-2 */
+    int   spark_x    = px0 + PAD + 350;
+    int   bar_w      = 3;
+    int   bar_max    = ROW_H - 3;
+    int   hist_start = (pe->hist_head - pe->hist_count + PROC_HIST * 2) % PROC_HIST;
+    /* Find max for scaling */
+    float hmax       = 0.1f;
+    for(int hi = 0; hi < pe->hist_count; hi++) {
+      int idx = (hist_start + hi) % PROC_HIST;
+      if(pe->cpu_hist[idx] > hmax) hmax = pe->cpu_hist[idx];
+    }
+    for(int hi = 0; hi < pe->hist_count; hi++) {
+      int   idx = (hist_start + hi) % PROC_HIST;
+      float v   = pe->cpu_hist[idx] / hmax;
+      int   bh  = (int)(v * bar_max);
+      if(bh < 1) bh = 1;
+      int     bx  = spark_x + hi * (bar_w + 1);
+      int     by  = ry + ROW_H - 1 - bh;
+      /* colour: green → yellow → red by cpu% */
+      float   pct = pe->cpu_hist[idx];
+      uint8_t br  = pct > 50.f ? 0xf3 : (pct > 20.f ? 0xf9 : 0xa6);
+      uint8_t bg2 = pct > 50.f ? 0x8b : (pct > 20.f ? 0xe2 : 0xe3);
+      uint8_t bb  = pct > 50.f ? 0xa8 : (pct > 20.f ? 0xaf : 0xa1);
+      ov_fill_rect(px,
+                   stride,
+                   bx,
+                   by,
+                   bar_w,
+                   bh,
+                   br,
+                   bg2,
+                   bb,
+                   sel ? 0xff : 0xcc,
+                   stride,
+                   py0 + ph);
+    }
   }
 }
 
@@ -1217,17 +2677,55 @@ static void draw_panel_log(uint32_t      *px,
                            int            ph,
                            TrixieOverlay *o,
                            const Config  *cfg) {
-  (void)pw;
-  Color ac           = cfg->colors.active_border;
-  int   y            = py0 + HEADER_H + PAD;
-  int   visible_rows = (ph - (y - py0) - PAD) / ROW_H;
-  int   scroll_base  = g_log_ring.count - visible_rows - o->cursor;
+  Color ac = cfg->colors.active_border;
+  int   y  = py0 + HEADER_H + PAD;
+
+  /* Filter bar */
+  char filter_disp[LOG_FILTER_MAX + 32];
+  if(g_log_filter_mode)
+    snprintf(filter_disp, sizeof(filter_disp), "/ %s_", g_log_filter);
+  else if(g_log_filter[0])
+    snprintf(filter_disp,
+             sizeof(filter_disp),
+             "filter: %s  (/ edit  c clear-log)",
+             g_log_filter);
+  else
+    snprintf(filter_disp, sizeof(filter_disp), "/ filter  c clear  j/k scroll");
+
+  uint8_t fr = g_log_filter[0] ? 0xf9 : ac.r;
+  uint8_t fg = g_log_filter[0] ? 0xe2 : ac.g;
+  uint8_t fb = g_log_filter[0] ? 0xaf : ac.b;
+  ov_draw_text(px,
+               stride,
+               px0 + PAD,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               filter_disp,
+               fr,
+               fg,
+               fb,
+               0xff);
+  y += ROW_H;
+
+  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
+
+  /* Collect filtered indices */
+  int indices[LOG_RING_SIZE];
+  int idx_count = 0;
+  for(int i = 0; i < g_log_ring.count && idx_count < LOG_RING_SIZE; i++) {
+    const char *line = log_ring_get(i);
+    if(g_log_filter[0] && !strstr(line, g_log_filter)) continue;
+    indices[idx_count++] = i;
+  }
+
+  int scroll_base = idx_count - visible_rows - o->cursor;
   if(scroll_base < 0) scroll_base = 0;
 
   for(int i = 0; i < visible_rows; i++) {
-    int li = scroll_base + i;
-    if(li >= g_log_ring.count) break;
-    const char *line = log_ring_get(li);
+    int fi = scroll_base + i;
+    if(fi >= idx_count) break;
+    const char *line = log_ring_get(indices[fi]);
     int         ry   = y + i * ROW_H;
     uint8_t     lr = 0xa6, lg = 0xad, lb = 0xc8;
     if(strstr(line, "ERROR") || strstr(line, "error"))
@@ -1250,6 +2748,7 @@ static void draw_panel_log(uint32_t      *px,
                  lb,
                  0xff);
   }
+  (void)pw;
 }
 
 /* ── [5] Git ──────────────────────────────────────────────────────────── */
@@ -1261,16 +2760,16 @@ static void draw_panel_git(uint32_t      *px,
                            int            ph,
                            TrixieOverlay *o,
                            const Config  *cfg) {
-  (void)pw;
   refresh_git();
   Color ac = cfg->colors.active_border;
+  Color bg = cfg->colors.pane_bg;
   int   y  = py0 + HEADER_H + PAD;
 
-  /* Branch line */
-  char branch_label[GIT_LINE_MAX + 16];
+  /* Branch + hint */
+  char branch_label[GIT_LINE_MAX + 48];
   snprintf(branch_label,
            sizeof(branch_label),
-           "branch: %s  (r to refresh)",
+           "  %s  r=refresh  s=stage  u=unstage  d=diff",
            g_git.branch);
   ov_draw_text(px,
                stride,
@@ -1285,7 +2784,6 @@ static void draw_panel_git(uint32_t      *px,
                0xff);
   y += ROW_H;
 
-  /* Separator */
   ov_fill_rect(px,
                stride,
                px0 + PAD,
@@ -1300,38 +2798,199 @@ static void draw_panel_git(uint32_t      *px,
                py0 + ph);
   y += 4;
 
-  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
-  int start        = o->cursor; /* scroll via j/k */
-  if(start > g_git.line_count - visible_rows)
-    start = g_git.line_count - visible_rows;
-  if(start < 0) start = 0;
+  int avail_h      = ph - (y - py0) - PAD;
+  int visible_rows = avail_h / ROW_H;
 
-  for(int i = 0; i < visible_rows && (start + i) < g_git.line_count; i++) {
-    const char *line = g_git.lines[start + i];
-    int         ry   = y + i * ROW_H;
-    /* Colour: lines starting with M/A/D/? are status flags */
-    uint8_t     lr = 0xa6, lg = 0xad, lb = 0xc8;
-    if(line[0] == 'M' || line[1] == 'M')
-      lr = 0xf9, lg = 0xe2, lb = 0xaf;
-    else if(line[0] == 'A' || line[1] == 'A')
-      lr = 0xa6, lg = 0xe3, lb = 0xa1;
-    else if(line[0] == 'D' || line[1] == 'D')
-      lr = 0xf3, lg = 0x8b, lb = 0xa8;
-    else if(line[0] == '?' && line[1] == '?')
-      lr = 0x58, lg = 0x5b, lb = 0x70;
-    else if(strncmp(line, "Recent", 6) == 0)
-      lr = ac.r, lg = ac.g, lb = ac.b;
-    ov_draw_text(px,
+  if(g_git.show_diff && g_git.diff_count > 0) {
+    /* Split view: left = file list (40%), right = diff (60%) */
+    int left_w  = pw * 2 / 5;
+    int right_w = pw - left_w - PAD;
+    int right_x = px0 + left_w + PAD;
+
+    /* Vertical separator */
+    ov_fill_rect(px,
+                 stride,
+                 px0 + left_w,
+                 y,
+                 1,
+                 avail_h,
+                 ac.r,
+                 ac.g,
+                 ac.b,
+                 0x40,
+                 stride,
+                 py0 + ph);
+
+    /* Left: file list */
+    int scroll = o->cursor - visible_rows + 1;
+    if(scroll < 0) scroll = 0;
+    for(int i = 0; i < visible_rows && (i + scroll) < g_git.file_count; i++) {
+      GitFile *gf  = &g_git.files[i + scroll];
+      bool     sel = (i + scroll == o->cursor);
+      int      ry  = y + i * ROW_H;
+      if(sel)
+        draw_cursor_line(px, stride, px0, ry, left_w, ac, bg, stride, py0 + ph);
+
+      uint8_t xr, xg, xb;
+      if(gf->xy[0] == 'A') {
+        xr = 0xa6;
+        xg = 0xe3;
+        xb = 0xa1;
+      } else if(gf->xy[0] == 'M') {
+        xr = 0xf9;
+        xg = 0xe2;
+        xb = 0xaf;
+      } else if(gf->xy[0] == 'D') {
+        xr = 0xf3;
+        xg = 0x8b;
+        xb = 0xa8;
+      } else {
+        xr = 0x58;
+        xg = 0x5b;
+        xb = 0x70;
+      }
+
+      char label[GIT_LINE_MAX + 4];
+      snprintf(label, sizeof(label), "%s %s", gf->xy, gf->path);
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD + 4,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   label,
+                   sel ? ac.r : xr,
+                   sel ? ac.g : xg,
+                   sel ? ac.b : xb,
+                   0xff);
+    }
+
+    /* Right: diff content */
+    int diff_scroll = 0; /* TODO: separate diff scroll */
+    for(int i = 0; i < visible_rows && (i + diff_scroll) < g_git.diff_count; i++) {
+      const char *dl = g_git.diff[i + diff_scroll];
+      int         ry = y + i * ROW_H;
+      uint8_t     lr = 0xa6, lg = 0xad, lb = 0xc8;
+      if(dl[0] == '+' && dl[1] != '+') {
+        lr = 0xa6;
+        lg = 0xe3;
+        lb = 0xa1;
+      } else if(dl[0] == '-' && dl[1] != '-') {
+        lr = 0xf3;
+        lg = 0x8b;
+        lb = 0xa8;
+      } else if(dl[0] == '@') {
+        lr = 0x89;
+        lg = 0xdc;
+        lb = 0xeb;
+      } else if(strncmp(dl, "diff ", 5) == 0 || strncmp(dl, "index ", 6) == 0 ||
+                strncmp(dl, "--- ", 4) == 0 || strncmp(dl, "+++ ", 4) == 0) {
+        lr = ac.r;
+        lg = ac.g;
+        lb = ac.b;
+      }
+      /* Truncate long diff lines */
+      char dtrunc[GIT_LINE_MAX];
+      strncpy(dtrunc, dl, sizeof(dtrunc) - 1);
+      while(ov_measure(dtrunc) > right_w - PAD && strlen(dtrunc) > 3)
+        dtrunc[strlen(dtrunc) - 1] = '\0';
+      ov_draw_text(px,
+                   stride,
+                   right_x + PAD,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   dtrunc,
+                   lr,
+                   lg,
+                   lb,
+                   0xff);
+    }
+  } else {
+    /* Normal view: file list then log */
+    int scroll = o->cursor - visible_rows + 1;
+    if(scroll < 0) scroll = 0;
+
+    /* File list section */
+    int fi_rows =
+        g_git.file_count < visible_rows ? g_git.file_count : visible_rows / 2;
+    for(int i = 0; i < fi_rows && (i + scroll) < g_git.file_count; i++) {
+      GitFile *gf  = &g_git.files[i + scroll];
+      bool     sel = (i + scroll == o->cursor);
+      int      ry  = y + i * ROW_H;
+      if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
+
+      uint8_t xr, xg, xb;
+      char    staged_mark = gf->staged ? '*' : ' ';
+      if(gf->xy[0] == 'A' || gf->xy[1] == 'A') {
+        xr = 0xa6;
+        xg = 0xe3;
+        xb = 0xa1;
+      } else if(gf->xy[0] == 'M' || gf->xy[1] == 'M') {
+        xr = 0xf9;
+        xg = 0xe2;
+        xb = 0xaf;
+      } else if(gf->xy[0] == 'D' || gf->xy[1] == 'D') {
+        xr = 0xf3;
+        xg = 0x8b;
+        xb = 0xa8;
+      } else {
+        xr = 0x58;
+        xg = 0x5b;
+        xb = 0x70;
+      }
+
+      char label[GIT_LINE_MAX + 8];
+      snprintf(label, sizeof(label), "%s%c %s", gf->xy, staged_mark, gf->path);
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   label,
+                   sel ? ac.r : xr,
+                   sel ? ac.g : xg,
+                   sel ? ac.b : xb,
+                   0xff);
+    }
+
+    /* Separator + log */
+    int log_y = y + fi_rows * ROW_H + 4;
+    ov_fill_rect(px,
                  stride,
                  px0 + PAD,
-                 ry + g_ov_asc + 2,
+                 log_y - 2,
+                 pw - PAD * 2,
+                 1,
+                 ac.r,
+                 ac.g,
+                 ac.b,
+                 0x30,
                  stride,
-                 py0 + ph,
-                 line,
-                 lr,
-                 lg,
-                 lb,
-                 0xff);
+                 py0 + ph);
+    int log_rows = (ph - (log_y - py0) - PAD) / ROW_H;
+    for(int i = 0; i < log_rows && i < g_git.line_count; i++) {
+      const char *line = g_git.lines[i];
+      int         ry   = log_y + i * ROW_H;
+      uint8_t     lr = 0xa6, lg = 0xad, lb = 0xc8;
+      if(strncmp(line, "Recent", 6) == 0) {
+        lr = ac.r;
+        lg = ac.g;
+        lb = ac.b;
+      }
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   line,
+                   lr,
+                   lg,
+                   lb,
+                   0xff);
+    }
   }
 }
 
@@ -1344,20 +3003,19 @@ static void draw_panel_build(uint32_t      *px,
                              int            ph,
                              TrixieOverlay *o,
                              const Config  *cfg) {
-  (void)pw;
   Color ac = cfg->colors.active_border;
+  Color bg = cfg->colors.pane_bg;
   int   y  = py0 + HEADER_H + PAD;
 
-  /* Command line */
-  char cmd_display[BUILD_CMD_MAX + 20];
+  /* ── Command line ── */
+  char cmd_display[BUILD_CMD_MAX + 32];
   if(o->build_cmd_editing)
     snprintf(cmd_display, sizeof(cmd_display), "cmd: %s_", o->build_cmd);
   else
     snprintf(cmd_display,
              sizeof(cmd_display),
-             "cmd: %s  (b=edit  Enter=run)",
-             o->build_cmd);
-
+             "cmd: %s  (b=edit  Enter=run  e=errors)",
+             o->build_cmd[0] ? o->build_cmd : g_build.cmd);
   ov_draw_text(px,
                stride,
                px0 + PAD,
@@ -1371,15 +3029,39 @@ static void draw_panel_build(uint32_t      *px,
                0xff);
   y += ROW_H;
 
-  /* Last build status */
-  if(g_build.done) {
-    char   status[64];
+  /* ── Build status ── */
+  bool running = atomic_load(&g_build.running);
+  if(running) {
+    static const char *spin[] = { "|", "/", "-", "\\" };
+    int64_t            si     = (ov_now_ms() / 120) % 4;
+    char               status[64];
+    double             elapsed = (double)(ov_now_ms() - g_build.started_ms) / 1000.0;
+    snprintf(status, sizeof(status), "%s  building...  %.1fs", spin[si], elapsed);
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 status,
+                 0xf9,
+                 0xe2,
+                 0xaf,
+                 0xff);
+    y += ROW_H;
+  } else if(g_build.done) {
+    char   status[80];
     double elapsed = (double)(g_build.finished_ms - g_build.started_ms) / 1000.0;
+    pthread_mutex_lock(&g_build.err_lock);
+    int ec = g_build.err_count;
+    pthread_mutex_unlock(&g_build.err_lock);
     snprintf(status,
              sizeof(status),
-             "last exit: %d  (%.1fs)",
+             "exit: %d  %.1fs  %d diagnostic%s",
              g_build.exit_code,
-             elapsed);
+             elapsed,
+             ec,
+             ec == 1 ? "" : "s");
     uint8_t sr = g_build.exit_code == 0 ? 0xa6 : 0xf3;
     uint8_t sg = g_build.exit_code == 0 ? 0xe3 : 0x8b;
     uint8_t sb = g_build.exit_code == 0 ? 0xa1 : 0xa8;
@@ -1395,21 +3077,9 @@ static void draw_panel_build(uint32_t      *px,
                  sb,
                  0xff);
     y += ROW_H;
-  } else if(g_build.running) {
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD,
-                 y + g_ov_asc,
-                 stride,
-                 py0 + ph,
-                 "building...",
-                 0xf9,
-                 0xe2,
-                 0xaf,
-                 0xff);
-    y += ROW_H;
   }
 
+  /* ── Separator ── */
   ov_fill_rect(px,
                stride,
                px0 + PAD,
@@ -1424,9 +3094,99 @@ static void draw_panel_build(uint32_t      *px,
                py0 + ph);
   y += 6;
 
-  /* Last N log lines as build output preview */
   int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
-  int start        = g_log_ring.count - visible_rows;
+
+  /* ── Error list mode (toggled with 'e') ── */
+  if(o->build_show_errors) {
+    pthread_mutex_lock(&g_build.err_lock);
+    int  ec = g_build.err_count;
+    char hdr[64];
+    snprintf(hdr,
+             sizeof(hdr),
+             "%d diagnostic%s  (Enter=jump  e=log)",
+             ec,
+             ec == 1 ? "" : "s");
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 hdr,
+                 ac.r,
+                 ac.g,
+                 ac.b,
+                 0xff);
+    y += ROW_H;
+    visible_rows--;
+
+    int scroll = o->build_err_cursor - visible_rows + 1;
+    if(scroll < 0) scroll = 0;
+
+    for(int i = 0; i < visible_rows && (i + scroll) < ec; i++) {
+      BuildError *be  = &g_build.errors[i + scroll];
+      bool        sel = (i + scroll == o->build_err_cursor);
+      int         ry  = y + i * ROW_H;
+      if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
+
+      uint8_t ir = be->is_warning ? 0xf9 : 0xf3;
+      uint8_t ig = be->is_warning ? 0xe2 : 0x8b;
+      uint8_t ib = be->is_warning ? 0xaf : 0xa8;
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD + 4,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   be->is_warning ? "W" : "E",
+                   ir,
+                   ig,
+                   ib,
+                   0xff);
+
+      char loc[128];
+      if(be->line > 0)
+        snprintf(loc, sizeof(loc), "%s:%d", be->file, be->line);
+      else
+        strncpy(loc, be->file[0] ? be->file : "(unknown)", sizeof(loc) - 1);
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD + 20,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   loc,
+                   0x89,
+                   0xdc,
+                   0xeb,
+                   0xff);
+
+      int loc_w = ov_measure(loc) + 24 + PAD;
+      int msg_w = pw - loc_w - PAD * 2;
+      if(msg_w > 40) {
+        char msg[BUILD_ERR_LINE];
+        strncpy(msg, be->msg, sizeof(msg) - 1);
+        while(ov_measure(msg) > msg_w && strlen(msg) > 4)
+          msg[strlen(msg) - 1] = '\0';
+        ov_draw_text(px,
+                     stride,
+                     px0 + PAD + loc_w,
+                     ry + g_ov_asc + 2,
+                     stride,
+                     py0 + ph,
+                     msg,
+                     sel ? ac.r : 0xa6,
+                     sel ? ac.g : 0xad,
+                     sel ? ac.b : 0xc8,
+                     0xff);
+      }
+    }
+    pthread_mutex_unlock(&g_build.err_lock);
+    return;
+  }
+
+  /* ── Log preview (default) ── */
+  int start = g_log_ring.count - visible_rows;
   if(start < 0) start = 0;
   for(int i = 0; i < visible_rows; i++) {
     int li = start + i;
@@ -1463,18 +3223,112 @@ static void draw_panel_notes(uint32_t      *px,
                              int            ph,
                              TrixieOverlay *o,
                              const Config  *cfg) {
-  (void)pw;
   Color ac = cfg->colors.active_border;
   int   y  = py0 + HEADER_H + PAD;
 
-  const char *hint = g_notes_edit ? "INSERT MODE — Esc to save & exit"
-                                  : "e to edit  Esc to dismiss  (auto-saved)";
-  uint8_t     hr   = g_notes_edit ? 0xa6 : ac.r;
-  uint8_t     hg   = g_notes_edit ? 0xe3 : ac.g;
-  uint8_t     hb   = g_notes_edit ? 0xa1 : ac.b;
+  /* ── Tab bar for notes ── */
+  {
+    int tx = px0 + PAD;
+    for(int i = 0; i < g_notes_count; i++) {
+      bool        sel = (i == g_notes_active);
+      const char *nm  = g_notes_files[i].name;
+      int         nw  = ov_measure(nm) + 10;
+      if(sel) {
+        ov_fill_rect(px,
+                     stride,
+                     tx - 2,
+                     y,
+                     nw + 4,
+                     ROW_H,
+                     ac.r,
+                     ac.g,
+                     ac.b,
+                     0xff,
+                     stride,
+                     py0 + ph);
+        ov_draw_text(px,
+                     stride,
+                     tx + 2,
+                     y + g_ov_asc + 1,
+                     stride,
+                     py0 + ph,
+                     nm,
+                     cfg->colors.pane_bg.r,
+                     cfg->colors.pane_bg.g,
+                     cfg->colors.pane_bg.b,
+                     0xff);
+      } else {
+        ov_fill_rect(px,
+                     stride,
+                     tx - 2,
+                     y,
+                     nw + 4,
+                     ROW_H,
+                     0x31,
+                     0x32,
+                     0x44,
+                     0xff,
+                     stride,
+                     py0 + ph);
+        ov_draw_text(px,
+                     stride,
+                     tx + 2,
+                     y + g_ov_asc + 1,
+                     stride,
+                     py0 + ph,
+                     nm,
+                     0x58,
+                     0x5b,
+                     0x70,
+                     0xff);
+      }
+      tx += nw + 6;
+    }
+  }
+  y += ROW_H + 2;
+
+  /* ── Hint / mode line ── */
+  const char *hint;
+  uint8_t     hr, hg, hb;
+  if(g_notes_rename) {
+    hint = "rename/new:  (Enter=confirm  Esc=cancel)";
+    hr   = 0xf9;
+    hg   = 0xe2;
+    hb   = 0xaf;
+  } else if(g_notes_edit) {
+    hint = "INSERT — Esc saves";
+    hr   = 0xa6;
+    hg   = 0xe3;
+    hb   = 0xa1;
+  } else {
+    hint = "e=edit  n=rename  N=new  d=del  [/]=switch  Markdown rendered";
+    hr   = ac.r;
+    hg   = ac.g;
+    hb   = ac.b;
+  }
   ov_draw_text(
       px, stride, px0 + PAD, y + g_ov_asc, stride, py0 + ph, hint, hr, hg, hb, 0xff);
-  y += ROW_H + 4;
+  y += ROW_H;
+
+  /* ── Rename input box ── */
+  if(g_notes_rename) {
+    char rbuf[NOTES_NAME_MAX + 8];
+    snprintf(rbuf, sizeof(rbuf), "> %s_", g_notes_rename_buf);
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 rbuf,
+                 0xf9,
+                 0xe2,
+                 0xaf,
+                 0xff);
+    y += ROW_H;
+  }
+
+  /* ── Separator ── */
   ov_fill_rect(px,
                stride,
                px0 + PAD,
@@ -1489,50 +3343,122 @@ static void draw_panel_notes(uint32_t      *px,
                py0 + ph);
   y += 6;
 
-  /* Render notes text line by line */
+  /* ── Render note content with Markdown ── */
+  NoteFile *nf = cur_note();
+  if(!nf) return;
+
   int  visible_rows = (ph - (y - py0) - PAD - ROW_H) / ROW_H;
-  /* Scroll to bottom when editing */
   int  line_idx     = 0;
-  char line_buf[256];
-  int  buf_i = 0;
-  int  row   = 0;
-  int  skip  = 0;
+  char line_buf[512];
+  int  buf_i         = 0;
+  int  row           = 0;
+  bool in_code_block = false;
 
-  /* Count total lines first for scroll offset */
+  /* Count total lines for scroll-to-bottom in edit mode */
   int total_lines = 1;
-  for(int ci = 0; ci < g_notes_len; ci++)
-    if(g_notes[ci] == '\n') total_lines++;
-  if(g_notes_edit) skip = total_lines - visible_rows;
-  if(skip < 0) skip = 0;
-  (void)o; /* scroll via skip above */
+  for(int ci = 0; ci < nf->len; ci++)
+    if(nf->text[ci] == '\n') total_lines++;
+  int skip = 0;
+  if(g_notes_edit) {
+    skip = total_lines - visible_rows;
+    if(skip < 0) skip = 0;
+  } else {
+    skip = o->scroll;
+    if(skip > total_lines - visible_rows) skip = total_lines - visible_rows;
+    if(skip < 0) skip = 0;
+  }
 
-  for(int ci = 0; ci <= g_notes_len; ci++) {
-    char c = ci < g_notes_len ? g_notes[ci] : '\0';
+  for(int ci = 0; ci <= nf->len; ci++) {
+    char c = ci < nf->len ? nf->text[ci] : '\0';
     if(c == '\n' || c == '\0') {
       line_buf[buf_i] = '\0';
+
+      /* Toggle code-block fence */
+      if(strncmp(line_buf, "```", 3) == 0) in_code_block = !in_code_block;
+
       if(line_idx >= skip && row < visible_rows) {
-        int ry = y + row * ROW_H;
-        ov_draw_text(px,
-                     stride,
-                     px0 + PAD,
-                     ry + g_ov_asc + 2,
-                     stride,
-                     py0 + ph,
-                     line_buf,
-                     0xa6,
-                     0xad,
-                     0xc8,
-                     0xff);
+        MdStyle     ms     = in_code_block ? MD_CODE : md_line_style(line_buf);
+        const char *disp   = md_display(line_buf, ms);
+        int         indent = 0;
+        if(ms == MD_BULLET) indent = 8; /* extra indent for bullets */
+        /* Bullet marker */
+        if(ms == MD_BULLET) {
+          ov_draw_text(px,
+                       stride,
+                       px0 + PAD - 2,
+                       y + row * ROW_H + g_ov_asc + 2,
+                       stride,
+                       py0 + ph,
+                       "•",
+                       0xf9,
+                       0xe2,
+                       0xaf,
+                       0xff);
+        }
+        /* Horizontal rule */
+        if(ms == MD_HR) {
+          int ry = y + row * ROW_H + (ROW_H / 2);
+          ov_fill_rect(px,
+                       stride,
+                       px0 + PAD,
+                       ry,
+                       pw - PAD * 2,
+                       1,
+                       0x58,
+                       0x5b,
+                       0x70,
+                       0xff,
+                       stride,
+                       py0 + ph);
+        } else {
+          uint8_t lr, lg, lb;
+          md_colour(ms, in_code_block && ms != MD_CODE, &lr, &lg, &lb);
+
+          /* Code-block background tint */
+          if(in_code_block || ms == MD_CODE) {
+            ov_fill_rect(px,
+                         stride,
+                         px0 + PAD,
+                         y + row * ROW_H,
+                         pw - PAD * 2,
+                         ROW_H,
+                         0x18,
+                         0x18,
+                         0x25,
+                         0x80,
+                         stride,
+                         py0 + ph);
+          }
+
+          /* H1 size simulation: draw twice offset by 1 px */
+          int draw_x = px0 + PAD + indent;
+          int draw_y = y + row * ROW_H + g_ov_asc + 2;
+          if(ms == MD_H1) {
+            ov_draw_text(px,
+                         stride,
+                         draw_x + 1,
+                         draw_y,
+                         stride,
+                         py0 + ph,
+                         disp,
+                         lr,
+                         lg,
+                         lb,
+                         0x80);
+          }
+          ov_draw_text(
+              px, stride, draw_x, draw_y, stride, py0 + ph, disp, lr, lg, lb, 0xff);
+        }
         row++;
       }
       line_idx++;
       buf_i = 0;
-    } else if(buf_i < 255) {
+    } else if(buf_i < 511) {
       line_buf[buf_i++] = c;
     }
   }
 
-  /* Cursor blink indicator at end in edit mode */
+  /* ── Blinking cursor in edit mode ── */
   if(g_notes_edit && row <= visible_rows) {
     int64_t ms = ov_now_ms();
     if((ms / 500) % 2 == 0) {
@@ -1552,9 +3478,544 @@ static void draw_panel_notes(uint32_t      *px,
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §14  overlay_update
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ── [8] Search ───────────────────────────────────────────────────────── */
+static void draw_panel_search(uint32_t      *px,
+                              int            stride,
+                              int            px0,
+                              int            py0,
+                              int            pw,
+                              int            ph,
+                              TrixieOverlay *o,
+                              const Config  *cfg) {
+  search_poll(); /* swap in fresh results */
+  Color ac = cfg->colors.active_border;
+  Color bg = cfg->colors.pane_bg;
+  int   y  = py0 + HEADER_H + PAD;
+
+  /* Query bar */
+  char        qdisp[SEARCH_QUERY_MAX + 48];
+  const char *mode_tag = g_search.file_only ? "[files] " : "[text]  ";
+  if(o->search_active)
+    snprintf(qdisp, sizeof(qdisp), "%s> %s_", mode_tag, g_search.query);
+  else if(g_search.query[0])
+    snprintf(qdisp,
+             sizeof(qdisp),
+             "%s  %s  (/ to edit  f=toggle mode  Enter=open)",
+             mode_tag,
+             g_search.query);
+  else
+    snprintf(qdisp,
+             sizeof(qdisp),
+             "%s  / to search  f=toggle files/text  Enter=open",
+             mode_tag);
+
+  uint8_t qr = o->search_active ? 0xf9 : ac.r;
+  uint8_t qg = o->search_active ? 0xe2 : ac.g;
+  uint8_t qb = o->search_active ? 0xaf : ac.b;
+  ov_draw_text(px,
+               stride,
+               px0 + PAD,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               qdisp,
+               qr,
+               qg,
+               qb,
+               0xff);
+  y += ROW_H;
+
+  /* Result count */
+  if(g_search.running) {
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 "searching...",
+                 0xf9,
+                 0xe2,
+                 0xaf,
+                 0xff);
+  } else if(g_search.result_count > 0) {
+    char cnt[48];
+    snprintf(cnt,
+             sizeof(cnt),
+             "%d result%s",
+             g_search.result_count,
+             g_search.result_count == 1 ? "" : "s");
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 cnt,
+                 0x58,
+                 0x5b,
+                 0x70,
+                 0xff);
+  }
+  y += ROW_H;
+
+  ov_fill_rect(px,
+               stride,
+               px0 + PAD,
+               y,
+               pw - PAD * 2,
+               1,
+               ac.r,
+               ac.g,
+               ac.b,
+               0x40,
+               stride,
+               py0 + ph);
+  y += 6;
+
+  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
+  if(o->cursor >= g_search.result_count && g_search.result_count > 0)
+    o->cursor = g_search.result_count - 1;
+
+  int scroll = o->cursor - visible_rows + 1;
+  if(scroll < 0) scroll = 0;
+
+  for(int i = 0; i < visible_rows && (i + scroll) < g_search.result_count; i++) {
+    SearchResult *sr  = &g_search.results[i + scroll];
+    bool          sel = (i + scroll == o->cursor);
+    int           ry  = y + i * ROW_H;
+    if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
+
+    /* file:line */
+    char loc[300];
+    if(sr->line > 0)
+      snprintf(loc, sizeof(loc), "%s:%d", sr->file, sr->line);
+    else
+      strncpy(loc, sr->file, sizeof(loc) - 1);
+
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD + 4,
+                 ry + g_ov_asc + 2,
+                 stride,
+                 py0 + ph,
+                 loc,
+                 0x89,
+                 0xdc,
+                 0xeb,
+                 0xff);
+
+    if(sr->text[0]) {
+      int  lw = ov_measure(loc) + PAD + 8;
+      char txt[SEARCH_LINE_MAX];
+      strncpy(txt, sr->text, sizeof(txt) - 1);
+      /* strip leading whitespace */
+      char *tp = txt;
+      while(*tp == ' ' || *tp == '\t')
+        tp++;
+      int avail = pw - lw - PAD * 2;
+      while(ov_measure(tp) > avail && strlen(tp) > 3)
+        tp[strlen(tp) - 1] = '\0';
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD + lw,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   tp,
+                   sel ? ac.r : 0xa6,
+                   sel ? ac.g : 0xad,
+                   sel ? ac.b : 0xc8,
+                   0xff);
+    }
+  }
+}
+
+/* ── [9] Run ──────────────────────────────────────────────────────────── */
+static void draw_panel_run(uint32_t      *px,
+                           int            stride,
+                           int            px0,
+                           int            py0,
+                           int            pw,
+                           int            ph,
+                           TrixieOverlay *o,
+                           const Config  *cfg) {
+  Color ac = cfg->colors.active_border;
+  Color bg = cfg->colors.pane_bg;
+  int   y  = py0 + HEADER_H + PAD;
+
+  ov_draw_text(px,
+               stride,
+               px0 + PAD,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               "Enter=start/stop  a=add  d=delete",
+               ac.r,
+               ac.g,
+               ac.b,
+               0xff);
+  y += ROW_H;
+  ov_fill_rect(px,
+               stride,
+               px0 + PAD,
+               y,
+               pw - PAD * 2,
+               1,
+               ac.r,
+               ac.g,
+               ac.b,
+               0x40,
+               stride,
+               py0 + ph);
+  y += 6;
+
+  /* Add config form */
+  if(g_run_editing) {
+    char namedisp[RUN_NAME_MAX + 16], cmddisp[RUN_CMD_MAX + 16];
+    snprintf(namedisp,
+             sizeof(namedisp),
+             "name: %s%s",
+             g_run_edit_name,
+             g_run_edit_field == 0 ? "_" : "");
+    snprintf(cmddisp,
+             sizeof(cmddisp),
+             " cmd: %s%s",
+             g_run_edit_cmd,
+             g_run_edit_field == 1 ? "_" : "");
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 namedisp,
+                 g_run_edit_field == 0 ? 0xf9 : ac.r,
+                 g_run_edit_field == 0 ? 0xe2 : ac.g,
+                 g_run_edit_field == 0 ? 0xaf : ac.b,
+                 0xff);
+    y += ROW_H;
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 cmddisp,
+                 g_run_edit_field == 1 ? 0xf9 : ac.r,
+                 g_run_edit_field == 1 ? 0xe2 : ac.g,
+                 g_run_edit_field == 1 ? 0xaf : ac.b,
+                 0xff);
+    y += ROW_H + 4;
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD,
+                 y + g_ov_asc,
+                 stride,
+                 py0 + ph,
+                 "Tab=next field  Enter=confirm  Esc=cancel",
+                 0x58,
+                 0x5b,
+                 0x70,
+                 0xff);
+    y += ROW_H + 4;
+    ov_fill_rect(px,
+                 stride,
+                 px0 + PAD,
+                 y,
+                 pw - PAD * 2,
+                 1,
+                 ac.r,
+                 ac.g,
+                 ac.b,
+                 0x30,
+                 stride,
+                 py0 + ph);
+    y += 6;
+  }
+
+  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
+  if(o->cursor >= g_run_count && g_run_count > 0) o->cursor = g_run_count - 1;
+
+  for(int i = 0; i < g_run_count && i < visible_rows; i++) {
+    RunConfig *rc  = &g_run_configs[i];
+    bool       sel = (i == o->cursor);
+    int        ry  = y + i * ROW_H;
+    if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
+
+    /* Status bullet */
+    uint8_t     sr, sg2, sb;
+    const char *status;
+    if(rc->running) {
+      sr     = 0xa6;
+      sg2    = 0xe3;
+      sb     = 0xa1; /* green */
+      status = "● ";
+    } else if(rc->exited && rc->exit_code != 0) {
+      sr     = 0xf3;
+      sg2    = 0x8b;
+      sb     = 0xa8; /* red */
+      status = "✗ ";
+    } else if(rc->exited) {
+      sr     = 0x58;
+      sg2    = 0x5b;
+      sb     = 0x70; /* dim */
+      status = "✓ ";
+    } else {
+      sr     = 0x58;
+      sg2    = 0x5b;
+      sb     = 0x70;
+      status = "○ ";
+    }
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD + 4,
+                 ry + g_ov_asc + 2,
+                 stride,
+                 py0 + ph,
+                 status,
+                 sr,
+                 sg2,
+                 sb,
+                 0xff);
+
+    /* Name */
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD + 24,
+                 ry + g_ov_asc + 2,
+                 stride,
+                 py0 + ph,
+                 rc->name,
+                 sel ? ac.r : 0xa6,
+                 sel ? ac.g : 0xad,
+                 sel ? ac.b : 0xc8,
+                 0xff);
+
+    /* Elapsed if running */
+    if(rc->running) {
+      char elapsed[32];
+      snprintf(elapsed,
+               sizeof(elapsed),
+               "%.1fs",
+               (double)(ov_now_ms() - rc->started_ms) / 1000.0);
+      int ew = ov_measure(elapsed);
+      ov_draw_text(px,
+                   stride,
+                   px0 + pw - PAD - ew,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   elapsed,
+                   0xa6,
+                   0xe3,
+                   0xa1,
+                   0xff);
+    } else if(rc->exited) {
+      char exit_s[24];
+      snprintf(exit_s, sizeof(exit_s), "exit %d", rc->exit_code);
+      int     ew = ov_measure(exit_s);
+      uint8_t er = rc->exit_code == 0 ? 0x58 : 0xf3;
+      uint8_t eg = rc->exit_code == 0 ? 0x5b : 0x8b;
+      uint8_t eb = rc->exit_code == 0 ? 0x70 : 0xa8;
+      ov_draw_text(px,
+                   stride,
+                   px0 + pw - PAD - ew,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   exit_s,
+                   er,
+                   eg,
+                   eb,
+                   0xff);
+    }
+
+    /* cmd preview */
+    int name_w    = ov_measure(rc->name) + 40;
+    int cmd_avail = pw - name_w - PAD * 2 - 80;
+    if(cmd_avail > 40) {
+      char cmd_trunc[RUN_CMD_MAX];
+      strncpy(cmd_trunc, rc->cmd, sizeof(cmd_trunc) - 1);
+      while(ov_measure(cmd_trunc) > cmd_avail && strlen(cmd_trunc) > 3)
+        cmd_trunc[strlen(cmd_trunc) - 1] = '\0';
+      ov_draw_text(px,
+                   stride,
+                   px0 + PAD + name_w,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   cmd_trunc,
+                   0x58,
+                   0x5b,
+                   0x70,
+                   0xff);
+    }
+  }
+}
+
+/* ── [0] Deps ─────────────────────────────────────────────────────────── */
+static void draw_panel_deps(uint32_t      *px,
+                            int            stride,
+                            int            px0,
+                            int            py0,
+                            int            pw,
+                            int            ph,
+                            TrixieOverlay *o,
+                            const Config  *cfg) {
+  deps_load();
+  Color ac = cfg->colors.active_border;
+  Color bg = cfg->colors.pane_bg;
+  int   y  = py0 + HEADER_H + PAD;
+
+  static const char *lang_names[] = { "?", "Rust", "Go", "Maven", "Gradle" };
+  const char        *ln = (g_deps.lang < 5) ? lang_names[g_deps.lang] : "?";
+  char               hdr[128];
+  if(g_deps.checking)
+    snprintf(
+        hdr, sizeof(hdr), "%s — %d deps  checking outdated...", ln, g_deps.count);
+  else
+    snprintf(hdr,
+             sizeof(hdr),
+             "%s — %d deps  u=check outdated  r=refresh",
+             ln,
+             g_deps.count);
+  ov_draw_text(px,
+               stride,
+               px0 + PAD,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               hdr,
+               ac.r,
+               ac.g,
+               ac.b,
+               0xff);
+  y += ROW_H;
+
+  ov_fill_rect(px,
+               stride,
+               px0 + PAD,
+               y,
+               pw - PAD * 2,
+               1,
+               ac.r,
+               ac.g,
+               ac.b,
+               0x40,
+               stride,
+               py0 + ph);
+  y += 6;
+
+  /* Column headers */
+  ov_draw_text(px,
+               stride,
+               px0 + PAD,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               "PACKAGE",
+               ac.r,
+               ac.g,
+               ac.b,
+               0xff);
+  ov_draw_text(px,
+               stride,
+               px0 + pw - PAD - 160,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               "CURRENT",
+               ac.r,
+               ac.g,
+               ac.b,
+               0xff);
+  ov_draw_text(px,
+               stride,
+               px0 + pw - PAD - 64,
+               y + g_ov_asc,
+               stride,
+               py0 + ph,
+               "LATEST",
+               ac.r,
+               ac.g,
+               ac.b,
+               0xff);
+  y += ROW_H;
+
+  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
+  if(o->cursor >= g_deps.count && g_deps.count > 0) o->cursor = g_deps.count - 1;
+  int scroll = o->cursor - visible_rows + 1;
+  if(scroll < 0) scroll = 0;
+
+  for(int i = 0; i < visible_rows && (i + scroll) < g_deps.count; i++) {
+    DepEntry *de  = &g_deps.entries[i + scroll];
+    bool      sel = (i + scroll == o->cursor);
+    int       ry  = y + i * ROW_H;
+    if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
+
+    uint8_t nr = sel ? ac.r : 0xa6;
+    uint8_t ng = sel ? ac.g : 0xad;
+    uint8_t nb = sel ? ac.b : 0xc8;
+    if(de->outdated) {
+      nr = 0xf9;
+      ng = 0xe2;
+      nb = 0xaf;
+    } /* yellow if outdated */
+
+    ov_draw_text(px,
+                 stride,
+                 px0 + PAD + 4,
+                 ry + g_ov_asc + 2,
+                 stride,
+                 py0 + ph,
+                 de->name,
+                 nr,
+                 ng,
+                 nb,
+                 0xff);
+    ov_draw_text(px,
+                 stride,
+                 px0 + pw - PAD - 160,
+                 ry + g_ov_asc + 2,
+                 stride,
+                 py0 + ph,
+                 de->version,
+                 0x58,
+                 0x5b,
+                 0x70,
+                 0xff);
+    if(de->latest[0]) {
+      uint8_t lr = de->outdated ? 0xa6 : 0x58;
+      uint8_t lg = de->outdated ? 0xe3 : 0x5b;
+      uint8_t lb = de->outdated ? 0xa1 : 0x70;
+      ov_draw_text(px,
+                   stride,
+                   px0 + pw - PAD - 64,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   de->latest,
+                   lr,
+                   lg,
+                   lb,
+                   0xff);
+    } else if(g_deps.checking) {
+      ov_draw_text(px,
+                   stride,
+                   px0 + pw - PAD - 64,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   py0 + ph,
+                   "...",
+                   0x58,
+                   0x5b,
+                   0x70,
+                   0xff);
+    }
+  }
+}
+
 
 void overlay_update(TrixieOverlay *o,
                     TwmState      *twm,
@@ -1646,6 +4107,9 @@ void overlay_update(TrixieOverlay *o,
     case PANEL_GIT: draw_panel_git(px, w, px0, py0, pw, ph, o, cfg); break;
     case PANEL_BUILD: draw_panel_build(px, w, px0, py0, pw, ph, o, cfg); break;
     case PANEL_NOTES: draw_panel_notes(px, w, px0, py0, pw, ph, o, cfg); break;
+    case PANEL_SEARCH: draw_panel_search(px, w, px0, py0, pw, ph, o, cfg); break;
+    case PANEL_RUN: draw_panel_run(px, w, px0, py0, pw, ph, o, cfg); break;
+    case PANEL_DEPS: draw_panel_deps(px, w, px0, py0, pw, ph, o, cfg); break;
     default: break;
   }
 
@@ -1658,12 +4122,15 @@ void overlay_update(TrixieOverlay *o,
 
     static const char *hints[PANEL_COUNT] = {
       "j/k scroll  Tab next panel",
-      "/ filter  j/k navigate  Enter exec  Tab next panel",
-      "j/k select  Tab next panel",
-      "j/k scroll  Tab next panel",
-      "r refresh  j/k scroll  Tab next panel",
-      "b edit cmd  Enter run  Tab next panel",
-      "e edit  Esc save  Tab next panel",
+      "/ filter  j/k navigate  Enter exec",
+      "j/k select  Enter=SIGTERM  K=SIGKILL  s=sort",
+      "/ filter  c clear  j/k scroll",
+      "r refresh  d diff  s stage  u unstage  j/k navigate",
+      "b=cmd  Enter=run  e=errors  j/k errors",
+      "e=edit  n=rename  N=new  d=del  [/]=note  j/k scroll",
+      "/ search  f=files  j/k navigate  Enter=open",
+      "Enter=start/stop  a=add  d=delete  j/k navigate",
+      "u=outdated  r=refresh  j/k navigate",
     };
     const char *hint = (o->panel < PANEL_COUNT) ? hints[o->panel] : "";
     ov_draw_text(px,

@@ -709,7 +709,10 @@ void server_apply_config_reload(TrixieServer *s) {
                                  s->idle_timeout_ms > 0 ? s->idle_timeout_ms : 0);
   }
   TrixieOutput *o;
-  wl_list_for_each(o, &s->outputs, link) if(o->bar) bar_mark_dirty(o->bar);
+  wl_list_for_each(o, &s->outputs, link) {
+    if(o->bar) bar_mark_dirty(o->bar);
+    if(o->overlay) overlay_resize(o->overlay, o->logical_w, o->logical_h);
+  }
   twm_reflow(&s->twm);
   server_sync_windows(s);
   server_request_redraw(s);
@@ -755,12 +758,39 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
   uint32_t mods     = wlr_mods_to_trixie(raw_mods);
 
   if(event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-    /* Emergency exit */
+    /* Emergency exit — always processed first, overlay or not. */
     for(int i = 0; i < nsyms; i++) {
       if(syms[i] == XKB_KEY_Print && (mods & MOD_SUPER) && (mods & MOD_SHIFT)) {
         s->running = false;
         wl_display_terminate(s->display);
         return;
+      }
+    }
+
+    /* If any overlay is visible, feed the key there first. */
+    {
+      TrixieOutput *o;
+      wl_list_for_each(o, &s->outputs, link) {
+        if(o->overlay && overlay_visible(o->overlay)) {
+          /* Try backtick / Escape to dismiss */
+          bool dismiss = false;
+          for(int i = 0; i < nsyms; i++) {
+            if(syms[i] == XKB_KEY_grave || syms[i] == XKB_KEY_Escape) dismiss = true;
+          }
+          if(dismiss) {
+            overlay_toggle(o->overlay);
+            server_request_redraw(s);
+            handled = true;
+          } else {
+            for(int i = 0; i < nsyms && !handled; i++)
+              if(overlay_key(o->overlay, syms[i], mods)) handled = true;
+            for(int i = 0; i < nbase && !handled; i++)
+              if(overlay_key(o->overlay, base_syms[i], mods)) handled = true;
+          }
+          server_request_redraw(s);
+          if(handled) goto key_done;
+          break;
+        }
       }
     }
 
@@ -792,6 +822,8 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
       }
     }
   }
+
+key_done:
 
   if(!handled) {
     wlr_seat_set_keyboard(s->seat, kb->wlr_keyboard);
@@ -1070,6 +1102,7 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
 
   if(o->bar) bar_update(o->bar, &s->twm, &s->cfg);
   if(o->deco) deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
+  if(o->overlay) overlay_update(o->overlay, &s->twm, &s->cfg, &s->bar_workers);
 
   wlr_scene_output_commit(o->scene_output, NULL);
   struct timespec now;
@@ -1095,6 +1128,7 @@ static void output_handle_destroy(struct wl_listener *listener, void *data) {
   wl_list_remove(&o->link);
   if(o->bar) bar_destroy(o->bar);
   if(o->deco) deco_destroy(o->deco);
+  if(o->overlay) overlay_destroy(o->overlay);
   free(o);
   if(!wl_list_empty(&s->outputs)) {
     TrixieOutput *next = wl_container_of(s->outputs.next, next, link);
@@ -1173,8 +1207,9 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
     }
   }
 
-  o->bar  = bar_create(s->layer_overlay, ow, oh, &s->cfg, &s->bar_workers);
-  o->deco = deco_create(s->layer_overlay);
+  o->bar     = bar_create(s->layer_overlay, ow, oh, &s->cfg, &s->bar_workers);
+  o->deco    = deco_create(s->layer_overlay);
+  o->overlay = overlay_create(s->layer_overlay, o->logical_w, o->logical_h, &s->cfg);
 
   /* Resize the background rect to cover the full output. */
   if(s->bg_rect) wlr_scene_rect_set_size(s->bg_rect, ow, oh);

@@ -207,5 +207,6 @@ exe = executable(
 executable(
   'trixiectl',
   sources: ['src/trixiectl.c'],
+  install: true,
   # no special deps needed — just libc
 )

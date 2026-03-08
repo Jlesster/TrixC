@@ -5,19 +5,17 @@
  * 0.1.0  Initial
  * 0.2.0  Async bar workers, XWayland completion, TUI overlay, multi-monitor
  *        stubs, cursor-shape protocol, theme system, powerline separators.
- * 0.2.1  Fix: modifier keybinds (base-level sym lookup + mod masking)
- *        Fix: window rule exact-match via rule_matches()
- *        Fix: modules_left/center/right reset-in-loop bug
- *        Feat: per-workspace layout/ratio config blocks
- *        Feat: ACTION_RESIZE_RATIO, ACTION_FOCUS_URGENT
- *        Feat: ws_urgent_mask for bar urgency dots
+ * 0.3.0  Dev suite: Search, Run, Deps panels; process sparklines+kill;
+ *        log filter; git split-diff+stage/unstage; async ripgrep search;
+ *        named run configs (Cargo/Go/Maven/Gradle); dep inspector with
+ *        outdated checks; IPC overlay/build commands; full key routing.
  */
 #pragma once
 
 #define TRIXIE_VERSION_MAJOR 0
-#define TRIXIE_VERSION_MINOR 2
-#define TRIXIE_VERSION_PATCH 1
-#define TRIXIE_VERSION_STR   "0.2.1"
+#define TRIXIE_VERSION_MINOR 3
+#define TRIXIE_VERSION_PATCH 0
+#define TRIXIE_VERSION_STR   "0.3.0"
 
 #include <pthread.h>
 #include <stdatomic.h>

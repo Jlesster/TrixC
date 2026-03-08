@@ -740,6 +740,9 @@
     "dependencies": [],
     "depends": [],
     "win_subsystem": "console",
-    "installed": false
+    "installed": true,
+    "install_filename": [
+      "/usr/local/bin/trixiectl"
+    ]
   }
 ]

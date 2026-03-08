@@ -529,6 +529,49 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
      * ipc_dispatch() (no fd), we reply with an informational error. */
     REPLY("err: use ipc_subscribe() directly (internal call path required)");
 
+    /* ── Overlay ───────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "overlay")) {
+    /* overlay [toggle|show|hide|panel <1-0>] */
+    TrixieOutput *o;
+    if(!rest || !strcmp(rest, "toggle")) {
+      wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+          overlay_toggle(o->overlay);
+      server_request_redraw(s);
+      REPLY("ok: overlay toggled");
+    } else if(!strcmp(rest, "show")) {
+      wl_list_for_each(
+          o, &s->outputs, link) if(o->overlay && !overlay_visible(o->overlay))
+          overlay_toggle(o->overlay);
+      server_request_redraw(s);
+      REPLY("ok: overlay shown");
+    } else if(!strcmp(rest, "hide")) {
+      wl_list_for_each(
+          o, &s->outputs, link) if(o->overlay && overlay_visible(o->overlay))
+          overlay_toggle(o->overlay);
+      server_request_redraw(s);
+      REPLY("ok: overlay hidden");
+    } else {
+      REPLY("err: usage: overlay [toggle|show|hide]");
+    }
+
+    /* ── Build ─────────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "build")) {
+    /* build [run]  — trigger async build; open overlay on build panel */
+    TrixieOutput *o;
+    wl_list_for_each(o, &s->outputs, link) {
+      if(o->overlay) {
+        if(!overlay_visible(o->overlay)) overlay_toggle(o->overlay);
+        /* Feed a synthetic 'Enter' keypress to trigger the build — the
+         * overlay's build panel starts a build on Enter when not editing. */
+        overlay_key(o->overlay, XKB_KEY_6, 0); /* switch to panel 6 (build) */
+        overlay_key(o->overlay, XKB_KEY_Return, 0);
+      }
+    }
+    server_request_redraw(s);
+    REPLY("ok: build triggered");
+
   } else {
     REPLY("err: unknown command '%s'", cmd);
   }

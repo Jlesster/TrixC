@@ -1,3 +1,11 @@
 {
-  "targets": {}
+  "targets": {
+    "/home/jless/Code/c-cpp/c/Trixie/build/trixiectl": {
+      "destination": "{bindir}/trixiectl",
+      "tag": "runtime",
+      "subproject": null,
+      "install_rpath": null,
+      "build_rpaths": []
+    }
+  }
 }

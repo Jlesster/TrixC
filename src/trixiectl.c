@@ -105,6 +105,10 @@ static void usage(void) {
           "  reload                     hot-reload config\n"
           "  quit                       terminate compositor\n"
           "\n"
+          "Overlay dev suite:\n"
+          "  overlay [toggle|show|hide] show/hide the dev overlay\n"
+          "  build                      trigger async build (opens overlay)\n"
+          "\n"
           "Status:\n"
           "  status                     human-readable status\n"
           "  status_json                machine-readable JSON\n");
