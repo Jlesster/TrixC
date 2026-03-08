@@ -1,5 +1,9 @@
 /* run_panel.c — Run-configurations panel for the Trixie overlay.
  *
+ * Also contains:
+ *   - run_configs_init(const OverlayCfg *)  — config-aware preset detection
+ *   - nvim_get_diag_snapshot()              — bridge for lsp_panel
+ *
  * Owns everything related to the [9] Run tab:
  *   - RunConfig struct + global state
  *   - stdout/stderr capture via pipe + reader thread (the main fix)
@@ -34,6 +38,7 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+#include "nvim_panel.h"
 #include "overlay_internal.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +46,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon.h>
@@ -172,46 +179,112 @@ static void add_preset(const char *name, const char *cmd) {
   strncpy(rc->cmd, cmd, RUN_CMD_MAX - 1);
 }
 
-void run_configs_init(void) {
+/* ── Utility: find DevLangCfg by name ──────────────────────────────────── */
+static const DevLangCfg *find_lang(const OverlayCfg *ov, const char *name) {
+  if(!ov) return NULL;
+  for(int i = 0; i < ov->lang_count; i++)
+    if(!strcasecmp(ov->langs[i].name, name)) return &ov->langs[i];
+  return NULL;
+}
+
+static void add_lang_preset(const char *label, const char *cmd) {
+  if(!cmd || !cmd[0]) return;
+  add_preset(label, cmd);
+}
+
+void run_configs_init(const OverlayCfg *ov_cfg) {
   if(g_run_count > 0) return;
+
+  /* Optionally switch to project root so stat() finds the right files */
+  char old_cwd[1024] = { 0 };
+  if(ov_cfg && ov_cfg->project_root[0]) {
+    if(getcwd(old_cwd, sizeof(old_cwd)) == NULL) old_cwd[0] = '\0';
+    chdir(ov_cfg->project_root);
+  }
 
   struct stat st;
 
+  /* ── Rust / Cargo ── */
   if(stat("Cargo.toml", &st) == 0) {
-    add_preset("cargo run", "cargo run");
-    add_preset("cargo test", "cargo test");
-    add_preset("cargo build", "cargo build");
+    const DevLangCfg *lc = find_lang(ov_cfg, "rust");
+    add_lang_preset("cargo build", lc ? lc->build : "cargo build 2>&1");
+    add_lang_preset("cargo run", lc ? lc->run : "cargo run");
+    add_lang_preset("cargo test", lc ? lc->test : "cargo test");
+    if(lc && lc->fmt[0]) add_lang_preset("cargo fmt", lc->fmt);
+    if(lc && lc->lint[0]) add_lang_preset("cargo clippy", lc->lint);
   }
+
+  /* ── Go ── */
   if(stat("go.mod", &st) == 0) {
-    add_preset("go run .", "go run .");
-    add_preset("go test ./...", "go test ./...");
-    add_preset("go build ./...", "go build ./...");
+    const DevLangCfg *lc = find_lang(ov_cfg, "go");
+    add_lang_preset("go build", lc ? lc->build : "go build ./... 2>&1");
+    add_lang_preset("go run", lc ? lc->run : "go run .");
+    add_lang_preset("go test", lc ? lc->test : "go test ./...");
+    if(lc && lc->fmt[0]) add_lang_preset("gofmt", lc->fmt);
+    if(lc && lc->lint[0]) add_lang_preset("golangci-lint", lc->lint);
   }
+
+  /* ── Java (Maven) ── */
   if(stat("pom.xml", &st) == 0) {
-    add_preset("mvn compile", "mvn compile -q");
-    add_preset("mvn test", "mvn test -q");
-    add_preset("mvn package", "mvn package -q");
+    const DevLangCfg *lc = find_lang(ov_cfg, "java");
+    add_lang_preset("mvn compile", lc ? lc->build : "mvn compile -q");
+    add_lang_preset("mvn run", lc ? lc->run : "mvn exec:java -q");
+    add_lang_preset("mvn test", lc ? lc->test : "mvn test -q");
+    if(lc && lc->fmt[0]) add_lang_preset("java fmt", lc->fmt);
+    if(lc && lc->lint[0]) add_lang_preset("checkstyle", lc->lint);
   }
+
+  /* ── Java (Gradle) ── */
   if(stat("build.gradle", &st) == 0 || stat("build.gradle.kts", &st) == 0) {
-    add_preset("gradle build", "./gradlew build");
-    add_preset("gradle test", "./gradlew test");
-    add_preset("gradle run", "./gradlew run");
+    const DevLangCfg *lc = find_lang(ov_cfg, "java");
+    add_lang_preset("gradle build", lc ? lc->build : "./gradlew build");
+    add_lang_preset("gradle run", lc ? lc->run : "./gradlew run");
+    add_lang_preset("gradle test", lc ? lc->test : "./gradlew test");
   }
-  if(stat("pyproject.toml", &st) == 0 || stat("setup.py", &st) == 0) {
-    add_preset("python run", "python -m main");
-    add_preset("pytest", "pytest -v");
-    add_preset("pip install", "pip install -e .");
-  } else if(stat("requirements.txt", &st) == 0) {
-    add_preset("python run", "python main.py");
-    add_preset("pytest", "pytest -v");
+
+  /* ── Python ── */
+  if(stat("pyproject.toml", &st) == 0 || stat("setup.py", &st) == 0 ||
+     stat("requirements.txt", &st) == 0) {
+    const DevLangCfg *lc = find_lang(ov_cfg, "python");
+    add_lang_preset("python run", lc ? lc->run : "python -m main");
+    add_lang_preset("pytest", lc ? lc->test : "pytest -v");
+    add_lang_preset("pip install", "pip install -e .");
+    if(lc && lc->fmt[0]) add_lang_preset("black", lc->fmt);
+    if(lc && lc->lint[0]) add_lang_preset("ruff", lc->lint);
   }
+
+  /* ── C / C++ (Meson) ── */
+  if(stat("meson.build", &st) == 0 || stat("build.ninja", &st) == 0) {
+    const DevLangCfg *lc = find_lang(ov_cfg, "c");
+    add_lang_preset("meson build",
+                    lc ? lc->build : "meson compile -C builddir 2>&1");
+    add_lang_preset("meson test", lc ? lc->test : "meson test -C builddir");
+    if(lc && lc->run[0]) add_lang_preset("run binary", lc->run);
+    if(lc && lc->fmt[0]) add_lang_preset("clang-format", lc->fmt);
+    if(lc && lc->lint[0]) add_lang_preset("clang-tidy", lc->lint);
+  }
+
+  /* ── C / C++ (CMake) ── */
+  if(stat("CMakeLists.txt", &st) == 0) {
+    const DevLangCfg *lc = find_lang(ov_cfg, "cpp");
+    if(!lc) lc = find_lang(ov_cfg, "c");
+    add_lang_preset("cmake build", lc ? lc->build : "cmake --build build 2>&1");
+    add_lang_preset("ctest", lc ? lc->test : "ctest --test-dir build");
+    if(lc && lc->run[0]) add_lang_preset("run binary", lc->run);
+    if(lc && lc->fmt[0]) add_lang_preset("clang-format", lc->fmt);
+  }
+
+  /* ── Makefile ── */
   if(stat("Makefile", &st) == 0 || stat("makefile", &st) == 0) {
-    add_preset("make", "make -j$(nproc)");
-    add_preset("make test", "make test");
+    add_lang_preset("make", "make -j$(nproc)");
+    add_lang_preset("make test", "make test");
+    add_lang_preset("make clean", "make clean");
   }
-  if(g_run_count == 0) {
-    add_preset("run", "./run.sh");
-  }
+
+  if(g_run_count == 0) add_lang_preset("run", "./run.sh");
+
+  /* Restore cwd */
+  if(old_cwd[0]) chdir(old_cwd);
 }
 
 void run_config_start(int idx) {
@@ -692,27 +765,28 @@ void draw_panel_run(uint32_t     *px,
     const char *dot;
     uint8_t     dr, dg, db;
     if(rc->running) {
-      /* Animated spinner */
-      static const char *spin[] = { "◐", "◓", "◑", "◒" };
-      dot                       = spin[(ov_now_ms() / 150) % 4];
+      /* Animated spinner — nf-md-loading */
+      static const char *spin[] = { "󰪞", "󰪟", "󰪠", "󰪡",
+                                    "󰪢", "󰪣", "󰪤", "󰪥" };
+      dot                       = spin[(ov_now_ms() / 100) % 8];
       dr                        = 0xa6;
       dg                        = 0xe3;
       db                        = 0xa1;
     } else if(rc->exited && rc->exit_code != 0) {
-      dot = "✗";
+      dot = " ";
       dr  = 0xf3;
       dg  = 0x8b;
-      db  = 0xa8;
+      db  = 0xa8; /* nf-fa-times_circle */
     } else if(rc->exited) {
-      dot = "✓";
+      dot = " ";
       dr  = 0x89;
       dg  = 0xdc;
-      db  = 0xeb;
+      db  = 0xeb; /* nf-fa-check_circle */
     } else {
-      dot = "○";
+      dot = " ";
       dr  = 0x45;
       dg  = 0x47;
-      db  = 0x5a;
+      db  = 0x5a; /* nf-fa-circle_o — idle */
     }
     ov_draw_text(px,
                  stride,
@@ -831,24 +905,16 @@ void draw_panel_run(uint32_t     *px,
     ov_draw_text(
         px, stride, px0 + PAD, y + g_ov_asc, stride, bot, hdr, hr, hg, hb, 0xff);
 
-    /* "LIVE" badge if running */
+    /* "LIVE" badge if running — nf-fa-circle pulse */
     if(sel_idx >= 0 && g_run_configs[sel_idx].running) {
-      static const char *pulse[] = { "●", "○" };
-      int                px_     = px0 + pw - PAD - ov_measure("● LIVE");
+      static const char *pulse[] = { " ", " " }; /* nf-fa-circle / nf-fa-circle_o */
+      const char        *dot_    = pulse[(ov_now_ms() / 500) % 2];
+      int px_ = px0 + pw - PAD - ov_measure(" ") - ov_measure("LIVE") - 4;
+      ov_draw_text(
+          px, stride, px_, y + g_ov_asc, stride, bot, dot_, 0xa6, 0xe3, 0xa1, 0xff);
       ov_draw_text(px,
                    stride,
-                   px_,
-                   y + g_ov_asc,
-                   stride,
-                   bot,
-                   pulse[(ov_now_ms() / 600) % 2],
-                   0xa6,
-                   0xe3,
-                   0xa1,
-                   0xff);
-      ov_draw_text(px,
-                   stride,
-                   px_ + ov_measure("● "),
+                   px_ + ov_measure(" ") + 4,
                    y + g_ov_asc,
                    stride,
                    bot,

@@ -34,7 +34,11 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
-#include "trixie.h"
+#include "overlay_internal.h"
+#include "run_panel.h"
+#include "files_panel.h"
+#include "nvim_panel.h"
+#include "lsp_panel.h"
 #include <dirent.h>
 #include <drm_fourcc.h>
 #include <ft2build.h>
@@ -48,6 +52,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -58,23 +63,16 @@
  * §0  Log ring
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define LOG_RING_SIZE 512
-#define LOG_LINE_MAX  256
+LogRing g_log_ring;
 
-static struct {
-  char lines[LOG_RING_SIZE][LOG_LINE_MAX];
-  int  head;
-  int  count;
-} g_log_ring;
-
-static void log_ring_push(const char *line) {
+void log_ring_push(const char *line) {
   strncpy(g_log_ring.lines[g_log_ring.head], line, LOG_LINE_MAX - 1);
   g_log_ring.lines[g_log_ring.head][LOG_LINE_MAX - 1] = '\0';
   g_log_ring.head = (g_log_ring.head + 1) % LOG_RING_SIZE;
   if(g_log_ring.count < LOG_RING_SIZE) g_log_ring.count++;
 }
 
-static const char *log_ring_get(int idx) {
+const char *log_ring_get(int idx) {
   if(idx < 0 || idx >= g_log_ring.count) return "";
   int real =
       (g_log_ring.head - g_log_ring.count + idx + LOG_RING_SIZE * 2) % LOG_RING_SIZE;
@@ -122,7 +120,7 @@ static int       g_proc_count   = 0;
 static int64_t   g_proc_next_ms = 0;
 static long      g_clk_tck      = 0;
 
-static int64_t ov_now_ms(void) {
+int64_t ov_now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
@@ -263,9 +261,14 @@ typedef struct {
   bool    show_diff;
   int64_t fetched_ms;
   bool    valid;
+  char    root[1024]; /* git root used for this snapshot — invalidate on change */
 } GitState;
 
 static GitState g_git;
+
+/* Set by overlay_set_cwd() and initialised in overlay_create().
+ * git panel always runs against the git root of this directory. */
+static char g_git_cwd[1024] = { 0 };
 
 static int run_capture(const char *cmd, char out[][GIT_LINE_MAX], int max_lines) {
   FILE *f = popen(cmd, "r");
@@ -298,23 +301,68 @@ static void git_load_diff(int file_idx) {
   g_git.diff_for   = file_idx;
 }
 
+/* Resolve the git root for a given directory. Fills `out` (size outsz).
+ * Returns true on success. */
+static bool git_find_root(const char *dir, char *out, size_t outsz) {
+  char old_cwd[1024] = { 0 };
+  getcwd(old_cwd, sizeof(old_cwd));
+  if(chdir(dir) != 0) return false;
+  FILE *f = popen("git rev-parse --show-toplevel 2>/dev/null", "r");
+  bool ok = false;
+  if(f) {
+    if(fgets(out, (int)outsz, f)) {
+      size_t l = strlen(out);
+      while(l > 0 && (out[l-1] == '\n' || out[l-1] == '\r')) out[--l] = '\0';
+      ok = l > 0;
+    }
+    pclose(f);
+  }
+  if(old_cwd[0]) chdir(old_cwd);
+  return ok;
+}
+
 static void refresh_git(void) {
   int64_t now = ov_now_ms();
+
+  /* Resolve current git root from g_git_cwd */
+  char new_root[1024] = { 0 };
+  const char *search_dir = g_git_cwd[0] ? g_git_cwd : ".";
+  git_find_root(search_dir, new_root, sizeof(new_root));
+
+  /* Invalidate cache when root changes or cwd changed under us */
+  if(strcmp(new_root, g_git.root) != 0) {
+    memset(&g_git, 0, sizeof(g_git));
+    g_git.diff_for = -1;
+    strncpy(g_git.root, new_root, sizeof(g_git.root) - 1);
+  }
+
   if(g_git.valid && now - g_git.fetched_ms < 5000) return;
 
-  memset(&g_git, 0, sizeof(g_git));
-  g_git.diff_for = -1;
+  /* Save/restore cwd so git commands run in the right repo */
+  char old_cwd[1024] = { 0 };
+  getcwd(old_cwd, sizeof(old_cwd));
+  if(g_git.root[0]) chdir(g_git.root);
 
+  memset(&g_git.branch,    0, sizeof(g_git.branch));
+  memset(&g_git.lines,     0, sizeof(g_git.lines));
+  memset(&g_git.files,     0, sizeof(g_git.files));
+  g_git.line_count  = 0;
+  g_git.file_count  = 0;
+  g_git.diff_count  = 0;
+  g_git.diff_for    = -1;
+  g_git.show_diff   = false;
   /* Branch name */
   {
     FILE *f = popen("git rev-parse --abbrev-ref HEAD 2>/dev/null", "r");
     if(!f) {
       strcpy(g_git.branch, "(not a git repo)");
+      if(old_cwd[0]) chdir(old_cwd);
       return;
     }
     if(!fgets(g_git.branch, sizeof(g_git.branch), f)) {
       pclose(f);
       strcpy(g_git.branch, "(not a git repo)");
+      if(old_cwd[0]) chdir(old_cwd);
       return;
     }
     pclose(f);
@@ -356,6 +404,8 @@ static void refresh_git(void) {
 
   g_git.fetched_ms = now;
   g_git.valid      = true;
+
+  if(old_cwd[0]) chdir(old_cwd);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -947,6 +997,22 @@ typedef struct {
 
 static SearchState g_search;
 
+static bool find_in_path(const char *prog) {
+  const char *path_env = getenv("PATH");
+  if(!path_env) return false;
+  char path_copy[4096];
+  strncpy(path_copy, path_env, sizeof(path_copy) - 1);
+  char *save = NULL;
+  char *dir  = strtok_r(path_copy, ":", &save);
+  while(dir) {
+    char full[1024];
+    snprintf(full, sizeof(full), "%s/%s", dir, prog);
+    if(access(full, X_OK) == 0) return true;
+    dir = strtok_r(NULL, ":", &save);
+  }
+  return false;
+}
+
 static void *search_thread(void *arg) {
   (void)arg;
   char query[SEARCH_QUERY_MAX];
@@ -966,27 +1032,24 @@ static void *search_thread(void *arg) {
     return NULL;
   }
 
-  /* Try rg first, fall back to grep */
+  /* Probe for rg once via access() — no shell spawn needed */
+  bool has_rg = find_in_path("rg");
+
   char cmd[512];
-  bool has_rg = (system("which rg >/dev/null 2>&1") == 0);
   if(has_rg) {
     if(file_only)
-      snprintf(cmd,
-               sizeof(cmd),
-               "rg -l --color=never -i '%s' 2>/dev/null | head -256",
-               query);
+      snprintf(cmd, sizeof(cmd),
+               "rg -l --color=never -i '%s' 2>/dev/null | head -256", query);
     else
-      snprintf(cmd,
-               sizeof(cmd),
-               "rg -n --color=never -i --no-heading '%s' 2>/dev/null | head -256",
-               query);
+      snprintf(cmd, sizeof(cmd),
+               "rg -n --color=never -i --no-heading '%s' 2>/dev/null | head -256", query);
   } else {
     if(file_only)
-      snprintf(
-          cmd, sizeof(cmd), "grep -r -l -i '%s' . 2>/dev/null | head -256", query);
+      snprintf(cmd, sizeof(cmd),
+               "grep -r -l -i '%s' . 2>/dev/null | head -256", query);
     else
-      snprintf(
-          cmd, sizeof(cmd), "grep -r -n -i '%s' . 2>/dev/null | head -256", query);
+      snprintf(cmd, sizeof(cmd),
+               "grep -r -n -i '%s' . 2>/dev/null | head -256", query);
   }
 
   FILE *f = popen(cmd, "r");
@@ -995,7 +1058,7 @@ static void *search_thread(void *arg) {
     char line[512];
     while(fgets(line, sizeof(line), f) && n < SEARCH_RESULTS_MAX) {
       size_t l = strlen(line);
-      while(l > 0 && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+      while(l > 0 && (line[l-1] == '\n' || line[l-1] == '\r'))
         line[--l] = '\0';
 
       SearchResult *sr = &g_search.pending[n];
@@ -1004,7 +1067,6 @@ static void *search_thread(void *arg) {
         sr->line    = 0;
         sr->text[0] = '\0';
       } else {
-        /* file:line:text */
         char *colon1 = strchr(line, ':');
         if(!colon1) continue;
         *colon1 = '\0';
@@ -1056,142 +1118,6 @@ static void search_poll(void) {
   g_search.pending_ready = false;
   pthread_mutex_unlock(&g_search.lock);
 }
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §6  Run panel — named async run configurations
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-#define RUN_CONFIGS_MAX 12
-#define RUN_CMD_MAX     256
-#define RUN_NAME_MAX    32
-
-typedef struct {
-  char    name[RUN_NAME_MAX];
-  char    cmd[RUN_CMD_MAX];
-  pid_t   pid; /* 0 = not running */
-  bool    running;
-  int64_t started_ms;
-  int     exit_code;
-  bool    exited;
-} RunConfig;
-
-static RunConfig g_run_configs[RUN_CONFIGS_MAX];
-static int       g_run_count = 0;
-
-static void run_configs_init(void) {
-  /* Auto-populate with sensible language presets on first call */
-  if(g_run_count > 0) return;
-  struct stat st;
-
-  if(stat("Cargo.toml", &st) == 0) {
-    strncpy(g_run_configs[g_run_count].name, "cargo run", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "cargo run 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-    strncpy(g_run_configs[g_run_count].name, "cargo test", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "cargo test 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-  }
-  if(stat("go.mod", &st) == 0) {
-    strncpy(g_run_configs[g_run_count].name, "go run .", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "go run . 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-    strncpy(g_run_configs[g_run_count].name, "go test ./...", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "go test ./... 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-  }
-  if(stat("pom.xml", &st) == 0) {
-    strncpy(g_run_configs[g_run_count].name, "mvn exec:java", RUN_NAME_MAX - 1);
-    strncpy(
-        g_run_configs[g_run_count].cmd, "mvn exec:java -q 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-    strncpy(g_run_configs[g_run_count].name, "mvn test", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "mvn test -q 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-  }
-  if(stat("build.gradle", &st) == 0 || stat("build.gradle.kts", &st) == 0) {
-    strncpy(g_run_configs[g_run_count].name, "gradle run", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "./gradlew run 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-    strncpy(g_run_configs[g_run_count].name, "gradle test", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[g_run_count].cmd, "./gradlew test 2>&1", RUN_CMD_MAX - 1);
-    g_run_count++;
-  }
-  if(g_run_count == 0) {
-    /* Generic fallback */
-    strncpy(g_run_configs[0].name, "run", RUN_NAME_MAX - 1);
-    strncpy(g_run_configs[0].cmd, "./run.sh 2>&1", RUN_CMD_MAX - 1);
-    g_run_count = 1;
-  }
-}
-
-static void run_config_start(int idx) {
-  if(idx < 0 || idx >= g_run_count) return;
-  RunConfig *rc = &g_run_configs[idx];
-  if(rc->running) return;
-
-  /* Fork + exec via sh so shell expansions work */
-  pid_t pid = fork();
-  if(pid == 0) {
-    /* child: redirect stdout/stderr to log ring via a pipe would be ideal,
-     * but for simplicity run via popen-style: use sh -c and setsid */
-    setsid();
-    execlp("sh", "sh", "-c", rc->cmd, NULL);
-    _exit(127);
-  } else if(pid > 0) {
-    rc->pid        = pid;
-    rc->running    = true;
-    rc->exited     = false;
-    rc->started_ms = ov_now_ms();
-    char logline[256];
-    snprintf(logline, sizeof(logline), "==> run [%s]: pid %d", rc->name, (int)pid);
-    log_ring_push(logline);
-  }
-}
-
-static void run_config_stop(int idx) {
-  if(idx < 0 || idx >= g_run_count) return;
-  RunConfig *rc = &g_run_configs[idx];
-  if(!rc->running || rc->pid <= 0) return;
-  kill(rc->pid, SIGTERM);
-  char logline[256];
-  snprintf(logline,
-           sizeof(logline),
-           "==> run [%s]: SIGTERM pid %d",
-           rc->name,
-           (int)rc->pid);
-  log_ring_push(logline);
-}
-
-/* Non-blocking reap — call each frame */
-static void run_configs_poll(void) {
-  for(int i = 0; i < g_run_count; i++) {
-    RunConfig *rc = &g_run_configs[i];
-    if(!rc->running || rc->pid <= 0) continue;
-    int   status;
-    pid_t r = waitpid(rc->pid, &status, WNOHANG);
-    if(r == rc->pid) {
-      rc->running   = false;
-      rc->exited    = true;
-      rc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-      char logline[256];
-      snprintf(logline,
-               sizeof(logline),
-               "==> run [%s]: exit %d (%.1fs)",
-               rc->name,
-               rc->exit_code,
-               (double)(ov_now_ms() - rc->started_ms) / 1000.0);
-      log_ring_push(logline);
-    }
-  }
-}
-
-/* Editing state for adding a new run config */
-static bool g_run_editing    = false;
-static int  g_run_edit_field = 0; /* 0=name, 1=cmd */
-static char g_run_edit_name[RUN_NAME_MAX];
-static int  g_run_edit_name_len = 0;
-static char g_run_edit_cmd[RUN_CMD_MAX];
-static int  g_run_edit_cmd_len = 0;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §7  Deps panel — dependency inspector
@@ -1410,56 +1336,157 @@ static int  g_log_filter_len  = 0;
 static bool g_log_filter_mode = false;
 
 
-static FT_Library g_ov_ft   = NULL;
-static FT_Face    g_ov_face = NULL;
-static int        g_ov_asc  = 0;
-static int        g_ov_th   = 0;
+FT_Library g_ov_ft        = NULL;
+FT_Face    g_ov_face      = NULL;  /* primary text face   */
+FT_Face    g_ov_icon_face = NULL;  /* fallback icon face  */
+int        g_ov_asc       = 0;
+int        g_ov_th        = 0;
+
+/* ── UTF-8 decoder ──────────────────────────────────────────────────────────
+ * Decodes one Unicode codepoint from *pp, advancing *pp past the bytes used.
+ * Returns the codepoint, or the raw byte on invalid sequences (safe fallback).
+ * ─────────────────────────────────────────────────────────────────────────── */
+static uint32_t utf8_next(const char **pp) {
+  const unsigned char *p = (const unsigned char *)*pp;
+  uint32_t cp;
+  int      extra;
+  if(*p < 0x80) {
+    cp = *p++; extra = 0;
+  } else if((*p & 0xe0) == 0xc0) {
+    cp = *p++ & 0x1f; extra = 1;
+  } else if((*p & 0xf0) == 0xe0) {
+    cp = *p++ & 0x0f; extra = 2;
+  } else if((*p & 0xf8) == 0xf0) {
+    cp = *p++ & 0x07; extra = 3;
+  } else {
+    cp = *p++; extra = 0; /* invalid byte — pass through */
+  }
+  while(extra-- > 0 && (*p & 0xc0) == 0x80)
+    cp = (cp << 6) | (*p++ & 0x3f);
+  *pp = (const char *)p;
+  return cp;
+}
+
+/* ── Icon-font fallback paths (checked in order at init) ───────────────────
+ * Any Nerd Font or symbols-only font works here.  We try common distro paths.
+ * ─────────────────────────────────────────────────────────────────────────── */
+static const char *ICON_FONT_CANDIDATES[] = {
+  /* Arch/Manjaro */
+  "/usr/share/fonts/TTF/NerdFontsSymbolsOnly.ttf",
+  "/usr/share/fonts/TTF/Symbols-2048-em Nerd Font Complete.ttf",
+  "/usr/share/fonts/nerd-fonts-symbols/NerdFontsSymbolsOnly.ttf",
+  /* Ubuntu/Debian */
+  "/usr/share/fonts/truetype/nerd-fonts/NerdFontsSymbolsOnly.ttf",
+  /* Fedora */
+  "/usr/share/fonts/NerdFontsSymbolsOnly.ttf",
+  /* User-local */
+  NULL, /* filled from $HOME at runtime */
+  NULL,
+};
+
+static void ov_load_icon_face(float size_pt) {
+  /* Fill home-relative candidate */
+  static char home_path[512];
+  const char *home = getenv("HOME");
+  if(home) {
+    snprintf(home_path, sizeof(home_path),
+             "%s/.local/share/fonts/NerdFontsSymbolsOnly.ttf", home);
+    /* Last slot before terminal NULL */
+    ICON_FONT_CANDIDATES[5] = home_path;
+  }
+
+  if(g_ov_icon_face) { FT_Done_Face(g_ov_icon_face); g_ov_icon_face = NULL; }
+
+  for(int i = 0; ICON_FONT_CANDIDATES[i]; i++) {
+    if(FT_New_Face(g_ov_ft, ICON_FONT_CANDIDATES[i], 0, &g_ov_icon_face) == 0) {
+      FT_Set_Char_Size(g_ov_icon_face, 0, (FT_F26Dot6)(size_pt * 64.f), 96, 96);
+      wlr_log(WLR_INFO, "overlay: icon font → %s", ICON_FONT_CANDIDATES[i]);
+      return;
+    }
+  }
+
+  /* Last resort: if the primary face itself is a Nerd Font it already has the
+   * icons — leave g_ov_icon_face NULL and the render loop will retry on the
+   * primary face for any codepoint above U+E000. */
+  wlr_log(WLR_DEBUG, "overlay: no dedicated icon font found; "
+                     "icons will use primary face (works if it is a Nerd Font)");
+}
 
 static void ov_font_init(const char *path, float size_pt) {
   if(!g_ov_ft) FT_Init_FreeType(&g_ov_ft);
-  if(g_ov_face) {
-    FT_Done_Face(g_ov_face);
-    g_ov_face = NULL;
-  }
+  if(g_ov_face) { FT_Done_Face(g_ov_face); g_ov_face = NULL; }
   if(!path || !path[0]) return;
-  if(FT_New_Face(g_ov_ft, path, 0, &g_ov_face)) {
-    g_ov_face = NULL;
-    return;
-  }
+  if(FT_New_Face(g_ov_ft, path, 0, &g_ov_face)) { g_ov_face = NULL; return; }
   if(size_pt <= 0.f) size_pt = 13.f;
   FT_Set_Char_Size(g_ov_face, 0, (FT_F26Dot6)(size_pt * 64.f), 96, 96);
   g_ov_asc = (int)ceilf((float)g_ov_face->size->metrics.ascender / 64.f);
   int desc = (int)floorf((float)g_ov_face->size->metrics.descender / 64.f);
   g_ov_th  = g_ov_asc - desc;
+  ov_load_icon_face(size_pt);
 }
 
-static int ov_measure(const char *text) {
+/* Load a glyph for codepoint cp.  Tries primary face first; falls back to the
+ * icon face for codepoints in the PUA / high Unicode ranges used by Nerd Fonts
+ * (U+E000–U+F8FF, U+F0000–U+FFFFF, U+100000–U+10FFFF).
+ * Returns the face the glyph was loaded from, or NULL on failure.            */
+static FT_Face ov_load_glyph(uint32_t cp, int load_flags) {
+  bool is_icon = (cp >= 0xE000 && cp <= 0xF8FF)   /* BMP PUA           */
+              || (cp >= 0xE000 && cp <= 0xF8FF)
+              || (cp >= 0x1F300)                    /* emoji / misc syms */
+              || (cp >= 0xF0000);                   /* Supplementary PUA */
+
+  /* Try primary face unless it's a known icon codepoint */
+  if(!is_icon && g_ov_face) {
+    FT_UInt idx = FT_Get_Char_Index(g_ov_face, cp);
+    if(idx && FT_Load_Glyph(g_ov_face, idx, load_flags) == 0)
+      return g_ov_face;
+  }
+  /* Try icon face */
+  if(g_ov_icon_face) {
+    FT_UInt idx = FT_Get_Char_Index(g_ov_icon_face, cp);
+    if(idx && FT_Load_Glyph(g_ov_icon_face, idx, load_flags) == 0)
+      return g_ov_icon_face;
+  }
+  /* Final fallback: primary face for any codepoint (renders .notdef box) */
+  if(g_ov_face) {
+    if(FT_Load_Char(g_ov_face, cp, load_flags) == 0) return g_ov_face;
+  }
+  return NULL;
+}
+
+int ov_measure(const char *text) {
   if(!g_ov_face || !text) return 0;
-  int w = 0;
-  for(const char *p = text; *p; p++) {
-    if(FT_Load_Char(g_ov_face, (unsigned char)*p, FT_LOAD_ADVANCE_ONLY)) continue;
-    w += (int)(g_ov_face->glyph->advance.x >> 6);
+  int         w = 0;
+  const char *p = text;
+  while(*p) {
+    uint32_t  cp   = utf8_next(&p);
+    FT_Face   face = ov_load_glyph(cp, FT_LOAD_ADVANCE_ONLY);
+    if(face) w += (int)(face->glyph->advance.x >> 6);
   }
   return w;
 }
 
-static void ov_draw_text(uint32_t   *px,
-                         int         stride,
-                         int         x,
-                         int         y,
-                         int         clip_w,
-                         int         clip_h,
-                         const char *text,
-                         uint8_t     r,
-                         uint8_t     g,
-                         uint8_t     b,
-                         uint8_t     a) {
+void ov_draw_text(uint32_t   *px,
+                  int         stride,
+                  int         x,
+                  int         y,
+                  int         clip_w,
+                  int         clip_h,
+                  const char *text,
+                  uint8_t     r,
+                  uint8_t     g,
+                  uint8_t     b,
+                  uint8_t     a) {
   if(!g_ov_face || !text) return;
-  int pen = x;
-  for(const char *p = text; *p; p++) {
-    if(FT_Load_Char(g_ov_face, (unsigned char)*p, FT_LOAD_RENDER)) continue;
-    FT_GlyphSlot slot = g_ov_face->glyph;
-    int          gx = pen + slot->bitmap_left, gy = y - slot->bitmap_top;
+  int         pen = x;
+  const char *p   = text;
+  while(*p) {
+    uint32_t cp   = utf8_next(&p);
+    FT_Face  face = ov_load_glyph(cp, FT_LOAD_RENDER);
+    if(!face) continue;
+    FT_GlyphSlot slot = face->glyph;
+    int          gx   = pen + slot->bitmap_left;
+    int          gy   = y - slot->bitmap_top;
     for(int row = 0; row < (int)slot->bitmap.rows; row++) {
       int py = gy + row;
       if(py < 0 || py >= clip_h) continue;
@@ -1472,8 +1499,8 @@ static void ov_draw_text(uint32_t   *px,
         uint32_t *d   = &px[py * stride + px_x];
         uint32_t  inv = 255 - ba;
         uint8_t   or_ = (uint8_t)((r * ba + ((*d >> 16) & 0xff) * inv) / 255);
-        uint8_t   og  = (uint8_t)((g * ba + ((*d >> 8) & 0xff) * inv) / 255);
-        uint8_t   ob  = (uint8_t)((b * ba + (*d & 0xff) * inv) / 255);
+        uint8_t   og  = (uint8_t)((g * ba + ((*d >> 8)  & 0xff) * inv) / 255);
+        uint8_t   ob  = (uint8_t)((b * ba + (*d & 0xff)          * inv) / 255);
         *d = (0xffu << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
       }
     }
@@ -1485,7 +1512,7 @@ static void ov_draw_text(uint32_t   *px,
  * §6  Pixel helpers
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void ov_fill_rect(uint32_t *px,
+void ov_fill_rect(uint32_t *px,
                          int       stride,
                          int       x,
                          int       y,
@@ -1516,7 +1543,7 @@ static void ov_fill_rect(uint32_t *px,
   }
 }
 
-static void ov_fill_border(uint32_t *px,
+void ov_fill_border(uint32_t *px,
                            int       stride,
                            int       x,
                            int       y,
@@ -1591,13 +1618,12 @@ typedef enum {
   PANEL_SEARCH,
   PANEL_RUN,
   PANEL_DEPS,
+  PANEL_FILES,
+  PANEL_NVIM,
+  PANEL_LSP,
   PANEL_COUNT,
 } PanelId;
 
-static const char *panel_names[PANEL_COUNT] = {
-  "[1] WS",  "[2] Cmds",  "[3] Procs",  "[4] Log", "[5] Git",
-  "[6] Bld", "[7] Notes", "[8] Search", "[9] Run", "[0] Deps"
-};
 
 /* ─── Built-in commands (palette) ──────────────────────────────────────── */
 
@@ -1660,10 +1686,106 @@ struct TrixieOverlay {
   /* notes */
   bool                     notes_loaded;
   /* search panel */
-  bool                     search_active; /* typing query */
-  /* run panel — cursor is shared o->cursor */
-  /* deps panel — cursor is shared o->cursor */
+  bool                     search_active;
+  /* file browser panel */
+  char                     fb_cwd[1024];
+  char                     fb_filter[128];
+  int                      fb_filter_len;
+  bool                     fb_filter_mode;
+  /* workspace panel */
+  int                      ws_cursor;        /* selected workspace index */
+  int                      pending_ws_switch; /* -1 = none, else ws index to switch to */
+  /* nvim / lsp panels */
+  int                      nvim_cursor;
+  int                      lsp_cursor;
+  /* cached config pointer (set in overlay_create, valid for compositor lifetime) */
+  const Config            *cfg;
 };
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §9b  Dev-integration helpers — must precede overlay_create
+ *
+ * These are defined here rather than after §11 because overlay_create()
+ * calls panel_name_to_id() and lsp_tab_badge() is referenced in
+ * overlay_update().  Placing them here keeps a single definition with no
+ * forward-declaration gymnastics.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Returns the best editor to use: config → $EDITOR → nvim */
+static const char *overlay_editor(const OverlayCfg *ov_cfg) {
+  if(ov_cfg && ov_cfg->editor[0]) return ov_cfg->editor;
+  const char *env = getenv("EDITOR");
+  return (env && env[0]) ? env : "nvim";
+}
+
+/* Returns the terminal emulator to use: config → $TERM_PROGRAM → autodetect */
+static const char *overlay_terminal(const OverlayCfg *ov_cfg) {
+  if(ov_cfg && ov_cfg->terminal[0]) return ov_cfg->terminal;
+  const char *env = getenv("TERM_PROGRAM");
+  if(env && env[0]) return env;
+  static const char *candidates[] = {
+    "/usr/bin/kitty", "/usr/bin/foot", "/usr/bin/alacritty",
+    "/usr/bin/wezterm", "/usr/bin/xterm", NULL
+  };
+  for(int i = 0; candidates[i]; i++) {
+    if(access(candidates[i], X_OK) == 0) {
+      const char *slash = strrchr(candidates[i], '/');
+      return slash ? slash + 1 : candidates[i];
+    }
+  }
+  return "xterm";
+}
+
+/* Open a file at an optional line.  Prefers the live nvim socket; falls back
+ * to spawning a terminal with $EDITOR.  Used by search, files, and build
+ * panels instead of ad-hoc system() calls.                                   */
+void overlay_open_file(const char *path, int line, const OverlayCfg *ov_cfg) {
+  /* Prefer the live nvim bridge when available */
+  if(ov_cfg && ov_cfg->lsp_diagnostics && nvim_is_connected()) {
+    nvim_open_file(path, line);
+    return;
+  }
+
+  const char *editor = overlay_editor(ov_cfg);
+  const char *term   = overlay_terminal(ov_cfg);
+
+  /* Build the shell command string */
+  char cmd[1280];
+  if(line > 0)
+    snprintf(cmd, sizeof(cmd), "%s -e %s +%d \"%s\"", term, editor, line, path);
+  else
+    snprintf(cmd, sizeof(cmd), "%s -e %s \"%s\"", term, editor, path);
+
+  pid_t pid = fork();
+  if(pid == 0) {
+    setsid(); /* detach from compositor's process group */
+    int maxfd = (int)sysconf(_SC_OPEN_MAX);
+    for(int fd = 3; fd < maxfd; fd++) close(fd);
+    execl("/bin/sh", "sh", "-c", cmd, NULL);
+    _exit(1);
+  }
+  /* Parent returns immediately; log failure but don't crash */
+  if(pid < 0) log_ring_push("==> overlay: fork() failed opening file");
+}
+
+/* Map a panel name string (from config default_panel) to its PanelId */
+static int panel_name_to_id(const char *name) {
+  if(!name || !name[0])                                               return PANEL_RUN;
+  if(!strcasecmp(name, "workspaces") || !strcasecmp(name, "ws"))     return PANEL_WORKSPACES;
+  if(!strcasecmp(name, "commands")   || !strcasecmp(name, "cmd"))    return PANEL_COMMANDS;
+  if(!strcasecmp(name, "processes")  || !strcasecmp(name, "proc"))   return PANEL_PROCESSES;
+  if(!strcasecmp(name, "log")        || !strcasecmp(name, "logs"))   return PANEL_LOG;
+  if(!strcasecmp(name, "git"))                                        return PANEL_GIT;
+  if(!strcasecmp(name, "build"))                                      return PANEL_BUILD;
+  if(!strcasecmp(name, "notes"))                                      return PANEL_NOTES;
+  if(!strcasecmp(name, "search")     || !strcasecmp(name, "find"))   return PANEL_SEARCH;
+  if(!strcasecmp(name, "run"))                                        return PANEL_RUN;
+  if(!strcasecmp(name, "deps")       || !strcasecmp(name, "dep"))    return PANEL_DEPS;
+  if(!strcasecmp(name, "files"))                                      return PANEL_FILES;
+  if(!strcasecmp(name, "nvim")       || !strcasecmp(name, "neovim")) return PANEL_NVIM;
+  if(!strcasecmp(name, "lsp")        || !strcasecmp(name, "diag"))   return PANEL_LSP;
+  return PANEL_RUN;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §10  Lifecycle
@@ -1672,9 +1794,11 @@ struct TrixieOverlay {
 TrixieOverlay *
 overlay_create(struct wlr_scene_tree *layer, int w, int h, const Config *cfg) {
   TrixieOverlay *o = calloc(1, sizeof(*o));
-  o->w             = w;
-  o->h             = h;
-  o->panel         = PANEL_WORKSPACES;
+  o->w                  = w;
+  o->h                  = h;
+  o->cfg                = cfg;
+  o->panel              = PANEL_WORKSPACES;
+  o->pending_ws_switch  = -1;
   o->scene_buf     = wlr_scene_buffer_create(layer, NULL);
   wlr_scene_node_set_enabled(&o->scene_buf->node, false);
   ov_font_init(cfg->font_path,
@@ -1695,12 +1819,49 @@ overlay_create(struct wlr_scene_tree *layer, int w, int h, const Config *cfg) {
   build_autodetect(g_build.cmd, sizeof(g_build.cmd));
   strncpy(o->build_cmd, g_build.cmd, sizeof(o->build_cmd) - 1);
 
-  run_configs_init();
+  /* Apply project root before run_configs_init so stat() finds the right files */
+  if(cfg->overlay.project_root[0]) {
+    if(chdir(cfg->overlay.project_root) == 0) {
+      wlr_log(WLR_INFO, "overlay: project_root → %s", cfg->overlay.project_root);
+      strncpy(o->fb_cwd,   cfg->overlay.project_root, sizeof(o->fb_cwd)   - 1);
+      strncpy(g_git_cwd,   cfg->overlay.project_root, sizeof(g_git_cwd)   - 1);
+    } else {
+      wlr_log(WLR_ERROR, "overlay: chdir('%s') failed", cfg->overlay.project_root);
+    }
+  }
+
+  run_configs_init(cfg->overlay);
   deps_load();
+
+  /* Apply default_panel */
+  if(cfg->overlay.default_panel[0])
+    o->panel = (PanelId)panel_name_to_id(cfg->overlay.default_panel);
 
   return o;
 }
+/* Exposed for nvim_panel.c overlay_quickfix_json() */
+int overlay_build_err_count(void) {
+    return g_build.err_count;
+}
 
+void overlay_build_err_get(int idx, char *file, int fsz,
+                           int *line, int *col,
+                           char *msg,  int msz, bool *is_warning) {
+    if(idx < 0 || idx >= g_build.err_count) {
+        if(file) file[0] = '\0';
+        if(line) *line = 0;
+        if(col)  *col  = 0;
+        if(msg)  msg[0] = '\0';
+        if(is_warning) *is_warning = false;
+        return;
+    }
+    BuildError *e = &g_build.errors[idx];
+    if(file) { strncpy(file, e->file, fsz - 1); file[fsz-1] = '\0'; }
+    if(line) *line = e->line;
+    if(col)  *col  = e->col;
+    if(msg)  { strncpy(msg, e->msg, msz - 1); msg[msz-1] = '\0'; }
+    if(is_warning) *is_warning = e->is_warning;
+}
 void overlay_destroy(TrixieOverlay *o) {
   if(!o) return;
   if(g_build.thread_valid) {
@@ -1717,16 +1878,18 @@ void overlay_destroy(TrixieOverlay *o) {
     pthread_join(g_deps.thread, NULL);
     g_deps.thread_valid = false;
   }
-  /* Kill any running run configs */
-  for(int i = 0; i < g_run_count; i++) {
-    if(g_run_configs[i].running && g_run_configs[i].pid > 0)
-      kill(g_run_configs[i].pid, SIGTERM);
-  }
+  /* Clean up run panel (kills processes, joins reader threads) */
+  run_configs_destroy();
+  nvim_disconnect();
   notes_save();
   wlr_scene_node_destroy(&o->scene_buf->node);
   if(g_ov_face) {
     FT_Done_Face(g_ov_face);
     g_ov_face = NULL;
+  }
+  if(g_ov_icon_face) {
+    FT_Done_Face(g_ov_icon_face);
+    g_ov_icon_face = NULL;
   }
   if(g_ov_ft) {
     FT_Done_FreeType(g_ov_ft);
@@ -1752,6 +1915,74 @@ void overlay_resize(TrixieOverlay *o, int w, int h) {
     o->w = w;
     o->h = h;
   }
+}
+/* ── overlay_set_cwd ────────────────────────────────────────────────────────
+ * Called by the IPC "overlay cd <path>" command (and internally when the file
+ * browser navigates).  Updates the file browser cwd, invalidates the git
+ * cache so the git panel picks up the new repo, and re-runs language
+ * detection so the run panel reflects the new project.                       */
+void overlay_set_cwd(TrixieOverlay *o, const char *path) {
+  if(!path || !path[0]) return;
+
+  /* Expand ~/  */
+  char expanded[1024] = { 0 };
+  if(!strncmp(path, "~/", 2)) {
+    const char *home = getenv("HOME");
+    if(!home) home = "/root";
+    snprintf(expanded, sizeof(expanded), "%s/%s", home, path + 2);
+  } else {
+    strncpy(expanded, path, sizeof(expanded) - 1);
+  }
+
+  /* Update file browser and git cwd */
+  if(o) strncpy(o->fb_cwd, expanded, sizeof(o->fb_cwd) - 1);
+  strncpy(g_git_cwd, expanded, sizeof(g_git_cwd) - 1);
+
+  /* Invalidate git cache so next panel open re-queries */
+  g_git.valid = false;
+
+  /* Re-run language detection for the new directory */
+  if(o && o->cfg) run_configs_init(o->cfg->overlay);
+
+  log_ring_push("  cwd changed");
+  wlr_log(WLR_DEBUG, "overlay: cwd → %s", expanded);
+}
+
+/* ── overlay_notify ─────────────────────────────────────────────────────────
+ * Push a message into the overlay log ring.  Shows up in the Log panel.
+ * Called by the IPC "overlay notify <title> <msg>" command.                  */
+void overlay_notify(TrixieOverlay *o, const char *title, const char *msg) {
+  (void)o;
+  char line[LOG_LINE_MAX];
+  if(title && title[0] && msg && msg[0])
+    snprintf(line, sizeof(line), "  %s: %s", title, msg);
+  else if(msg && msg[0])
+    snprintf(line, sizeof(line), "  %s", msg);
+  else if(title && title[0])
+    snprintf(line, sizeof(line), "  %s", title);
+  else
+    return;
+  log_ring_push(line);
+}
+
+/* ── overlay_show_panel ─────────────────────────────────────────────────────
+ * Switch to a named panel, showing the overlay if hidden.                    */
+void overlay_show_panel(TrixieOverlay *o, const char *name) {
+  if(!o || !name || !name[0]) return;
+  int id = panel_name_to_id(name);
+  o->panel = (PanelId)id;
+  if(!o->visible) {
+    o->visible = true;
+    wlr_scene_node_set_enabled(&o->scene_buf->node, true);
+    if(!o->notes_loaded) { notes_load(); o->notes_loaded = true; }
+  }
+}
+
+/* ── overlay_git_invalidate ─────────────────────────────────────────────────
+ * Force the git panel to re-query on next open.                              */
+void overlay_git_invalidate(TrixieOverlay *o) {
+  (void)o;
+  g_git.valid = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1794,6 +2025,17 @@ static void rebuild_matches(TrixieOverlay *o) {
 /* ═══════════════════════════════════════════════════════════════════════════
  * §12  Key handling
  * ═══════════════════════════════════════════════════════════════════════════ */
+static void git_run_async(const char *cmd) {
+  pid_t pid = fork();
+  if(pid == 0) {
+    setsid();
+    int maxfd = (int)sysconf(_SC_OPEN_MAX);
+    for(int fd = 3; fd < maxfd; fd++) close(fd);
+    execl("/bin/sh", "sh", "-c", cmd, NULL);
+    _exit(1);
+  }
+  if(pid < 0) log_ring_push("==> git: fork() failed");
+}
 
 bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
   if(!o || !o->visible) return false;
@@ -1919,23 +2161,62 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
     o->search_active = false;
     return true;
   }
+  if(sym == XKB_KEY_minus) {
+    o->panel         = PANEL_FILES;
+    o->cursor        = 0;
+    o->scroll        = 0;
+    o->fb_filter[0]  = '\0';
+    o->fb_filter_len = 0;
+    o->fb_filter_mode= false;
+    return true;
+  }
+  /* F = also jump to files panel */
+  if(sym == XKB_KEY_F) {
+    o->panel  = PANEL_FILES;
+    o->cursor = 0;
+    return true;
+  }
+  /* N = nvim panel */
+  if(sym == XKB_KEY_N) {
+    o->panel  = PANEL_NVIM;
+    o->cursor = 0;
+    return true;
+  }
+  /* L = LSP diagnostics panel */
+  if(sym == XKB_KEY_L) {
+    o->panel  = PANEL_LSP;
+    o->cursor = 0;
+    return true;
+  }
   if(sym == XKB_KEY_Escape || sym == XKB_KEY_grave) {
     o->visible = false;
     wlr_scene_node_set_enabled(&o->scene_buf->node, false);
     return true;
   }
   if(sym == XKB_KEY_j || sym == XKB_KEY_Down) {
-    o->cursor++;
-    return true;
+    if(o->panel != PANEL_WORKSPACES) { o->cursor++; return true; }
   }
   if(sym == XKB_KEY_k || sym == XKB_KEY_Up) {
-    if(o->cursor > 0) o->cursor--;
-    return true;
+    if(o->panel != PANEL_WORKSPACES) { if(o->cursor > 0) o->cursor--; return true; }
   }
 
   /* ── Panel-specific keys ── */
   switch(o->panel) {
-    case PANEL_PROCESSES:
+    case PANEL_WORKSPACES:
+      /* j/k navigate workspace grid; Enter queues switch; 1-9 direct-jump */
+      if(sym == XKB_KEY_j || sym == XKB_KEY_Down) {
+        o->ws_cursor++;
+        return true;
+      }
+      if(sym == XKB_KEY_k || sym == XKB_KEY_Up) {
+        if(o->ws_cursor > 0) o->ws_cursor--;
+        return true;
+      }
+      if(sym == XKB_KEY_Return) {
+        o->pending_ws_switch = o->ws_cursor;
+        return true;
+      }
+      break;
       if(sym == XKB_KEY_Return) {
         /* SIGTERM selected process */
         if(o->cursor >= 0 && o->cursor < g_proc_count) {
@@ -2016,14 +2297,11 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
       if(sym == XKB_KEY_s) {
         /* Stage selected file */
         if(o->cursor >= 0 && o->cursor < g_git.file_count) {
-          char cmd[512];
-          snprintf(cmd,
-                   sizeof(cmd),
-                   "git add -- '%s' 2>/dev/null",
-                   g_git.files[o->cursor].path);
-          system(cmd);
-          g_git.valid = false; /* force refresh */
-          refresh_git();
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "git add -- '%s' 2>/dev/null",
+                 g_git.files[o->cursor].path);
+        git_run_async(cmd);
+        g_git.valid = false;
         }
         return true;
       }
@@ -2037,7 +2315,6 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
                    g_git.files[o->cursor].path);
           system(cmd);
           g_git.valid = false;
-          refresh_git();
         }
         return true;
       }
@@ -2099,18 +2376,11 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
         return true;
       }
       if(sym == XKB_KEY_Return && !o->search_active) {
-        /* Open selected result in $EDITOR */
+        /* Open selected result in editor */
         search_poll();
         if(o->cursor >= 0 && o->cursor < g_search.result_count) {
-          SearchResult *sr     = &g_search.results[o->cursor];
-          const char   *editor = getenv("EDITOR");
-          if(!editor) editor = "vi";
-          char cmd[512];
-          if(sr->line > 0)
-            snprintf(cmd, sizeof(cmd), "%s +%d '%s' &", editor, sr->line, sr->file);
-          else
-            snprintf(cmd, sizeof(cmd), "%s '%s' &", editor, sr->file);
-          system(cmd);
+          SearchResult *sr = &g_search.results[o->cursor];
+          overlay_open_file(sr->file, sr->line, o->cfg ? &o->cfg->overlay : NULL);
         }
         return true;
       }
@@ -2121,77 +2391,11 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
       }
       break;
     case PANEL_RUN:
-      if(sym == XKB_KEY_Return) {
-        if(o->cursor >= 0 && o->cursor < g_run_count) {
-          if(g_run_configs[o->cursor].running)
-            run_config_stop(o->cursor);
-          else
-            run_config_start(o->cursor);
-        }
-        return true;
-      }
-      if(sym == XKB_KEY_a) {
-        /* Start adding a new config */
-        g_run_editing       = true;
-        g_run_edit_field    = 0;
-        g_run_edit_name[0]  = '\0';
-        g_run_edit_name_len = 0;
-        g_run_edit_cmd[0]   = '\0';
-        g_run_edit_cmd_len  = 0;
-        return true;
-      }
-      if(sym == XKB_KEY_d && !g_run_editing) {
-        /* Delete selected config (stop first) */
-        if(o->cursor >= 0 && o->cursor < g_run_count) {
-          run_config_stop(o->cursor);
-          for(int i = o->cursor; i < g_run_count - 1; i++)
-            g_run_configs[i] = g_run_configs[i + 1];
-          g_run_count--;
-          if(o->cursor >= g_run_count && o->cursor > 0) o->cursor--;
-        }
-        return true;
-      }
-      if(g_run_editing) {
-        /* Route keystrokes to name / cmd input fields */
-        char *buf = (g_run_edit_field == 0) ? g_run_edit_name : g_run_edit_cmd;
-        int  *buflen =
-            (g_run_edit_field == 0) ? &g_run_edit_name_len : &g_run_edit_cmd_len;
-        int bufsz = (g_run_edit_field == 0) ? RUN_NAME_MAX : RUN_CMD_MAX;
-        if(sym == XKB_KEY_Escape) {
-          g_run_editing = false;
-          return true;
-        }
-        if(sym == XKB_KEY_Tab && g_run_edit_field == 0) {
-          g_run_edit_field = 1;
-          return true;
-        }
-        if(sym == XKB_KEY_Return) {
-          if(g_run_edit_field == 0) {
-            g_run_edit_field = 1;
-            return true;
-          }
-          /* Commit */
-          if(g_run_edit_name[0] && g_run_edit_cmd[0] &&
-             g_run_count < RUN_CONFIGS_MAX) {
-            strncpy(
-                g_run_configs[g_run_count].name, g_run_edit_name, RUN_NAME_MAX - 1);
-            strncpy(g_run_configs[g_run_count].cmd, g_run_edit_cmd, RUN_CMD_MAX - 1);
-            g_run_count++;
-          }
-          g_run_editing = false;
-          return true;
-        }
-        if(sym == XKB_KEY_BackSpace) {
-          if(*buflen > 0) buf[--(*buflen)] = '\0';
-          return true;
-        }
-        if(sym >= 0x20 && sym < 0x7f && *buflen < bufsz - 1) {
-          buf[(*buflen)++] = (char)sym;
-          buf[*buflen]     = '\0';
-        }
-        return true;
-      }
-      break;
+      return run_panel_key(&o->cursor, sym);
+    case PANEL_NVIM:
+      return nvim_panel_key(&o->nvim_cursor, sym, &o->cfg->overlay);
+    case PANEL_LSP:
+      return lsp_panel_key(&o->lsp_cursor, sym, &o->cfg->overlay);
     case PANEL_DEPS:
       if(sym == XKB_KEY_u) {
         deps_check_outdated();
@@ -2203,6 +2407,18 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
         return true;
       }
       break;
+    case PANEL_FILES: {
+      bool handled = files_panel_key(&o->cursor,
+                             o->fb_cwd, sizeof(o->fb_cwd),
+                             o->fb_filter, &o->fb_filter_len, &o->fb_filter_mode,
+                             sym, &o->cfg->overlay);
+      /* Sync git cwd whenever the file browser changes directory */
+      if(handled && strcmp(g_git_cwd, o->fb_cwd) != 0) {
+        strncpy(g_git_cwd, o->fb_cwd, sizeof(g_git_cwd) - 1);
+        g_git.valid = false;
+      }
+      return handled;
+    }
     case PANEL_BUILD:
       if(sym == XKB_KEY_b) {
         o->build_cmd[0]      = '\0';
@@ -2222,18 +2438,8 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
           int ei = o->build_err_cursor;
           if(ei < g_build.err_count) {
             BuildError *be = &g_build.errors[ei];
-            if(be->file[0] && be->line > 0) {
-              char        jump_cmd[512];
-              const char *editor = getenv("EDITOR");
-              if(!editor) editor = "vi";
-              snprintf(jump_cmd,
-                       sizeof(jump_cmd),
-                       "%s +%d '%s' &",
-                       editor,
-                       be->line,
-                       be->file);
-              system(jump_cmd);
-            }
+            if(be->file[0] && be->line > 0)
+              overlay_open_file(be->file, be->line, o->cfg ? &o->cfg->overlay : NULL);
           }
           pthread_mutex_unlock(&g_build.err_lock);
         } else {
@@ -2317,12 +2523,12 @@ bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
  * §13  Panel renderers
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define ROW_H    (g_ov_th + 6)
-#define PAD      12
-#define HEADER_H (ROW_H + 4)
+#define ROW_H    (g_ov_th * 2)
+#define PAD      16
+#define HEADER_H (ROW_H + 6)
 
 /* ── Shared cursor-line highlight ─────────────────────────────────────── */
-static void draw_cursor_line(uint32_t *px,
+void draw_cursor_line(uint32_t *px,
                              int       stride,
                              int       px0,
                              int       ry,
@@ -2347,106 +2553,155 @@ static void draw_panel_workspaces(uint32_t     *px,
                                   int           pw,
                                   int           ph,
                                   TwmState     *twm,
+                                  int           ws_cursor,
                                   const Config *cfg) {
-  int cols   = twm->ws_count > 4 ? 4 : twm->ws_count;
-  int rows   = (twm->ws_count + cols - 1) / cols;
-  int cell_w = (pw - PAD * 2 - (cols - 1) * 8) / cols;
-  int cell_h = (ph - HEADER_H - PAD * 2 - (rows - 1) * 8) / rows;
-  if(cell_h < 48) cell_h = 48;
-  if(cell_w < 80) cell_w = 80;
   Color ac = cfg->colors.active_border;
   Color im = cfg->colors.inactive_border;
 
+  int cols = twm->ws_count > 5 ? 5 : (twm->ws_count > 0 ? twm->ws_count : 1);
+  int rows = (twm->ws_count + cols - 1) / cols;
+
+  /* Clamp ws_cursor */
+  if(ws_cursor >= twm->ws_count) ws_cursor = twm->ws_count - 1;
+  if(ws_cursor < 0)              ws_cursor = 0;
+
+  int content_top = py0 + HEADER_H + PAD;
+  int content_bot = py0 + ph - ROW_H - PAD;
+  int avail_w     = pw - PAD * 2;
+  int avail_h     = content_bot - content_top;
+  if(avail_h < 1) return;
+
+  int gap    = 8;
+  int cell_w = (avail_w - gap * (cols - 1)) / cols;
+  int cell_h = (avail_h - gap * (rows - 1)) / rows;
+  if(cell_w < 4) cell_w = 4;
+  if(cell_h < 4) cell_h = 4;
+
+  /* Key hint above the grid */
+  ov_draw_text(px, stride, px0 + PAD, content_top - ROW_H / 2 + g_ov_asc,
+               stride, py0 + ph,
+               "j/k navigate  Enter switch workspace",
+               ac.r, ac.g, ac.b, 0x50);
+
   for(int i = 0; i < twm->ws_count; i++) {
-    int   col = i % cols, row = i / cols;
-    int   cx     = px0 + PAD + col * (cell_w + 8);
-    int   cy     = py0 + HEADER_H + PAD + row * (cell_h + 8);
-    bool  active = (i == twm->active_ws);
-    Color bc     = active ? ac : im;
+    int col = i % cols, row = i / cols;
+    int cx  = px0 + PAD + col * (cell_w + gap);
+    int cy  = content_top + row * (cell_h + gap);
 
-    ov_fill_rect(px,
-                 stride,
-                 cx,
-                 cy,
-                 cell_w,
-                 cell_h,
-                 0x18,
-                 0x18,
-                 0x25,
-                 0xff,
-                 stride,
-                 ph + py0);
-    ov_fill_border(px,
-                   stride,
-                   cx,
-                   cy,
-                   cell_w,
-                   cell_h,
-                   bc.r,
-                   bc.g,
-                   bc.b,
-                   0xff,
-                   stride,
-                   ph + py0);
+    if(cy + cell_h > content_bot) break;
 
-    /* WS number */
-    char wnum[8];
-    snprintf(wnum, sizeof(wnum), "%d", i + 1);
-    ov_draw_text(px,
-                 stride,
-                 cx + 4,
-                 cy + g_ov_asc + 2,
-                 stride,
-                 ph + py0,
-                 wnum,
-                 ac.r,
-                 ac.g,
-                 ac.b,
-                 active ? 0xff : 0x80);
+    bool  active   = (i == twm->active_ws);
+    bool  selected = (i == ws_cursor);   /* cursor highlight */
+    bool  urgent   = (twm->ws_urgent_mask >> i) & 1;
+    Color bc       = active ? ac : im;
+    int   bw       = cfg->border_width > 0 ? cfg->border_width : 1;
 
-    /* Layout + ratio on same line, right-aligned in cell */
+    /* Cell background */
+    ov_fill_rect(px, stride, cx, cy, cell_w, cell_h,
+                 0x18, 0x18, 0x25, 0xff, stride, py0 + ph);
+
+    /* Active workspace tint */
+    if(active)
+      ov_fill_rect(px, stride, cx, cy, cell_w, cell_h,
+                   ac.r, ac.g, ac.b, 0x12, stride, py0 + ph);
+
+    /* Cursor selection tint — distinct from active */
+    if(selected && !active)
+      ov_fill_rect(px, stride, cx, cy, cell_w, cell_h,
+                   0x89, 0xdc, 0xeb, 0x18, stride, py0 + ph);
+
+    if(urgent)
+      ov_fill_rect(px, stride, cx, cy, cell_w, cell_h,
+                   0xf3, 0x8b, 0xa8, 0x18, stride, py0 + ph);
+
+    /* Border — thickness respects cfg->border_width */
+    uint8_t br = urgent ? 0xf3 : (selected ? 0x89 : bc.r);
+    uint8_t bg = urgent ? 0x8b : (selected ? 0xdc : bc.g);
+    uint8_t bb = urgent ? 0xa8 : (selected ? 0xeb : bc.b);
+    for(int t = 0; t < bw; t++) {
+      ov_fill_rect(px, stride, cx+t, cy+t, cell_w-t*2, 1, br, bg, bb, 0xff, stride, py0+ph);
+      ov_fill_rect(px, stride, cx+t, cy+cell_h-1-t, cell_w-t*2, 1, br, bg, bb, 0xff, stride, py0+ph);
+      ov_fill_rect(px, stride, cx+t, cy+t, 1, cell_h-t*2, br, bg, bb, 0xff, stride, py0+ph);
+      ov_fill_rect(px, stride, cx+cell_w-1-t, cy+t, 1, cell_h-t*2, br, bg, bb, 0xff, stride, py0+ph);
+    }
+
+    /* WS number with  icon — top-left */
+    char wnum[16];
+    const char *ws_icon = active ? "󰮯 " : "󰖰 "; /* nf-md-monitor / nf-md-monitor_off */
+    snprintf(wnum, sizeof(wnum), "%s%d", ws_icon, i + 1);
+    ov_draw_text(px, stride, cx + 6, cy + g_ov_asc + 4,
+                 stride, py0 + ph, wnum,
+                 ac.r, ac.g, ac.b, active ? 0xff : 0x70);
+
+    /* Layout + ratio — top-right */
     Workspace *ws = &twm->workspaces[i];
     char       lay_buf[32];
-    snprintf(lay_buf,
-             sizeof(lay_buf),
-             "%s %.0f%%",
-             layout_label(ws->layout),
-             ws->main_ratio * 100.f);
+    snprintf(lay_buf, sizeof(lay_buf), "%s %.0f%%",
+             layout_label(ws->layout), ws->main_ratio * 100.f);
     int lw = ov_measure(lay_buf);
-    ov_draw_text(px,
-                 stride,
-                 cx + cell_w - lw - 4,
-                 cy + g_ov_asc + 2,
-                 stride,
-                 ph + py0,
-                 lay_buf,
-                 0x58,
-                 0x5b,
-                 0x70,
-                 0xff);
+    ov_draw_text(px, stride, cx + cell_w - lw - 6, cy + g_ov_asc + 4,
+                 stride, py0 + ph, lay_buf, 0x58, 0x5b, 0x70, 0xff);
 
-    /* Pane list */
-    int max_lines = (cell_h - ROW_H) / (g_ov_th + 2);
+    /* Pane count badge below header row */
+    if(ws->pane_count > 0) {
+      char cnt[8];
+      snprintf(cnt, sizeof(cnt), "%d", ws->pane_count);
+      ov_draw_text(px, stride, cx + 6,
+                   cy + g_ov_asc + 4 + ROW_H,
+                   stride, py0 + ph, cnt,
+                   0x58, 0x5b, 0x70, 0xff);
+    }
+
+    /* Separator line under ws header */
+    ov_fill_rect(px, stride, cx + 4, cy + ROW_H + 6, cell_w - 8, 1,
+                 bc.r, bc.g, bc.b, 0x30, stride, py0 + ph);
+
+    /* Pane list — uses remaining cell height below the separator */
+    int list_top  = cy + ROW_H + 10;
+    int list_bot  = cy + cell_h - 4;
+    int line_h    = g_ov_th + 3;
+    int max_lines = (list_bot - list_top) / line_h;
+
     for(int j = 0; j < ws->pane_count && j < max_lines; j++) {
       Pane *p = twm_pane_by_id(twm, ws->panes[j]);
       if(!p) continue;
       bool focused = ws->has_focused && ws->focused == p->id;
-      char title[32];
+
+      /* Left pip for focused pane */
+      if(focused)
+        ov_fill_rect(px, stride, cx + 4, list_top + j * line_h,
+                     2, line_h - 1, ac.r, ac.g, ac.b, 0xff, stride, py0 + ph);
+
+      /* Window icon: 󰖯 focused, 󰖰 unfocused */
+      const char *win_icon = focused ? "󰖯 " : "󰖰 ";
+      int         icon_w   = ov_measure(win_icon);
+
+      char title[64];
       strncpy(title, p->title[0] ? p->title : p->app_id, sizeof(title) - 1);
-      if(ov_measure(title) > cell_w - 8)
-        for(int k = (int)strlen(title); k > 0; k--) {
-          title[k] = '\0';
-          if(ov_measure(title) <= cell_w - 20) {
-            strncat(title, "…", sizeof(title) - strlen(title) - 1);
-            break;
-          }
-        }
-      int     pty = cy + g_ov_asc + 2 + (j + 1) * (g_ov_th + 2);
+      int max_w = cell_w - 16 - icon_w;
+      while(ov_measure(title) > max_w && strlen(title) > 3)
+        title[strlen(title) - 1] = '\0';
+
+      int     pty = list_top + j * line_h + g_ov_asc;
       uint8_t fr  = focused ? ac.r : 0xa6;
       uint8_t fg  = focused ? ac.g : 0xad;
       uint8_t fb  = focused ? ac.b : 0xc8;
-      ov_draw_text(
-          px, stride, cx + 4, pty, stride, ph + py0, title, fr, fg, fb, 0xff);
+      ov_draw_text(px, stride, cx + 10, pty,
+                   stride, py0 + ph, win_icon, fr, fg, fb,
+                   focused ? 0xff : 0x60);
+      ov_draw_text(px, stride, cx + 10 + icon_w, pty,
+                   stride, py0 + ph, title, fr, fg, fb,
+                   focused ? 0xff : 0xcc);
+    }
+
+    /* "+N more" if truncated */
+    int overflow = ws->pane_count - max_lines;
+    if(overflow > 0 && max_lines >= 0) {
+      char more[16];
+      snprintf(more, sizeof(more), "+%d more", overflow);
+      ov_draw_text(px, stride, cx + 10,
+                   list_top + max_lines * line_h + g_ov_asc,
+                   stride, py0 + ph, more, 0x45, 0x47, 0x5a, 0xff);
     }
   }
 }
@@ -2528,7 +2783,6 @@ static void draw_panel_commands(uint32_t      *px,
 }
 
 /* ── [3] Processes ────────────────────────────────────────────────────── */
-/* ── [3] Processes ────────────────────────────────────────────────────── */
 static void draw_panel_processes(uint32_t      *px,
                                  int            stride,
                                  int            px0,
@@ -2538,132 +2792,133 @@ static void draw_panel_processes(uint32_t      *px,
                                  TrixieOverlay *o,
                                  const Config  *cfg) {
   refresh_procs();
-  run_configs_poll(); /* reap finished run configs */
+  run_configs_poll();
   Color ac = cfg->colors.active_border;
   Color bg = cfg->colors.pane_bg;
   int   y  = py0 + HEADER_H + PAD;
 
-  /* Sort indicator */
+  /*
+   * Column layout — fixed pixel widths anchored from left, making them
+   * independent of panel width variations and always matching headers.
+   *
+   * We define each column's LEFT edge explicitly so headers and data rows
+   * both use the same X coordinates — no offset drift.
+   *
+   *  PID(6ch)  NAME(24ch)        CPU%(6ch)  RSS(6ch)  GRAPH(fill)
+   *  C0        C1                C2         C3        C4
+   */
+  int C0      = px0 + PAD;
+  int C1      = C0  + 64;                /* 6 chars of PID */
+  int C2      = C1  + (pw - PAD*2 - 64 - 200) * 55 / 100; /* after NAME col */
+  int C3      = C2  + 72;               /* CPU% col width */
+  int C4      = C3  + 72;               /* RSS  col width */
+  int spark_w = px0 + pw - PAD - C4;   /* graph fills remaining width */
+  if(spark_w < 40) spark_w = 40;
+
+  /* Unified vertical text offset — same for headers AND data rows */
+#define PROC_TY(row_y) ((row_y) + (ROW_H - g_ov_th) / 2 + g_ov_asc)
+
+  /* ── Column headers ── */
   static const char *sort_labels[] = { "CPU%", "RSS", "PID" };
-  char               hdr[64];
-  snprintf(hdr,
-           sizeof(hdr),
-           "PID      COMMAND              CPU%%   RSS     GRAPH  sort:%s",
-           sort_labels[g_proc_sort]);
-  ov_draw_text(px,
-               stride,
-               px0 + PAD,
-               y + g_ov_asc,
-               stride,
-               py0 + ph,
-               hdr,
-               ac.r,
-               ac.g,
-               ac.b,
-               0xff);
+  char sort_ind[32];
+  snprintf(sort_ind, sizeof(sort_ind), "sort:%s  s=cycle", sort_labels[g_proc_sort]);
+
+  ov_draw_text(px, stride, C0, PROC_TY(y), stride, py0 + ph,
+               "PID",     ac.r, ac.g, ac.b, 0x80);
+  ov_draw_text(px, stride, C1, PROC_TY(y), stride, py0 + ph,
+               "COMMAND", ac.r, ac.g, ac.b, 0x80);
+  ov_draw_text(px, stride, C2, PROC_TY(y), stride, py0 + ph,
+               "CPU%",    ac.r, ac.g, ac.b, 0x80);
+  ov_draw_text(px, stride, C3, PROC_TY(y), stride, py0 + ph,
+               "RSS",     ac.r, ac.g, ac.b, 0x80);
+  ov_draw_text(px, stride, C4, PROC_TY(y), stride, py0 + ph,
+               "GRAPH",   ac.r, ac.g, ac.b, 0x80);
+
+  /* Sort indicator right-aligned */
+  int si_w = ov_measure(sort_ind);
+  ov_draw_text(px, stride, px0 + pw - PAD - si_w, PROC_TY(y), stride, py0 + ph,
+               sort_ind, 0x58, 0x5b, 0x70, 0xff);
+
+  /* Header underline */
+  ov_fill_rect(px, stride, px0 + PAD, y + ROW_H - 2, pw - PAD * 2, 1,
+               ac.r, ac.g, ac.b, 0x30, stride, py0 + ph);
   y += ROW_H;
 
-  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
+  int visible_rows = (ph - (y - py0) - ROW_H - PAD) / ROW_H;
   if(o->cursor >= g_proc_count && g_proc_count > 0) o->cursor = g_proc_count - 1;
 
+  int scroll = o->cursor - visible_rows + 1;
+  if(scroll < 0) scroll = 0;
+
   for(int i = 0; i < g_proc_count && i < visible_rows; i++) {
-    ProcEntry *pe  = &g_procs[i];
-    bool       sel = (i == o->cursor);
+    ProcEntry *pe  = &g_procs[i + scroll];
+    bool       sel = (i + scroll == o->cursor);
     int        ry  = y + i * ROW_H;
     if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
 
-    char pid_s[16], cpu_s[16], rss_s[16];
+    char pid_s[16], cpu_s[12], rss_s[12];
     snprintf(pid_s, sizeof(pid_s), "%d", pe->pid);
-    snprintf(cpu_s, sizeof(cpu_s), "%5.1f", pe->cpu_pct);
+    snprintf(cpu_s, sizeof(cpu_s), "%.1f", pe->cpu_pct);
     if(pe->rss_kb >= 1024)
       snprintf(rss_s, sizeof(rss_s), "%ldM", pe->rss_kb / 1024);
     else
       snprintf(rss_s, sizeof(rss_s), "%ldK", pe->rss_kb);
 
-    uint8_t fr = sel ? ac.r : 0xa6;
-    uint8_t fg = sel ? ac.g : 0xad;
-    uint8_t fb = sel ? ac.b : 0xc8;
+    uint8_t nr = sel ? ac.r : 0xa6;
+    uint8_t ng = sel ? ac.g : 0xad;
+    uint8_t nb = sel ? ac.b : 0xc8;
 
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD,
-                 ry + g_ov_asc + 2,
-                 stride,
-                 py0 + ph,
-                 pid_s,
-                 0x58,
-                 0x5b,
-                 0x70,
-                 0xff);
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD + 64,
-                 ry + g_ov_asc + 2,
-                 stride,
-                 py0 + ph,
-                 pe->comm,
-                 fr,
-                 fg,
-                 fb,
-                 0xff);
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD + 220,
-                 ry + g_ov_asc + 2,
-                 stride,
-                 py0 + ph,
-                 cpu_s,
-                 0xf3,
-                 0x8b,
-                 0xa8,
-                 0xff);
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD + 282,
-                 ry + g_ov_asc + 2,
-                 stride,
-                 py0 + ph,
-                 rss_s,
-                 0xa6,
-                 0xe3,
-                 0xa1,
-                 0xff);
+    /* PID */
+    ov_draw_text(px, stride, C0, PROC_TY(ry), stride, py0 + ph,
+                 pid_s, 0x58, 0x5b, 0x70, 0xff);
 
-    /* Sparkline — 16 bars, each 4px wide, max height = ROW_H-2 */
-    int   spark_x    = px0 + PAD + 350;
-    int   bar_w      = 3;
-    int   bar_max    = ROW_H - 3;
-    int   hist_start = (pe->hist_head - pe->hist_count + PROC_HIST * 2) % PROC_HIST;
-    /* Find max for scaling */
-    float hmax       = 0.1f;
-    for(int hi = 0; hi < pe->hist_count; hi++) {
-      int idx = (hist_start + hi) % PROC_HIST;
-      if(pe->cpu_hist[idx] > hmax) hmax = pe->cpu_hist[idx];
+    /* Command — truncate to fit column */
+    {
+      char comm[64];
+      strncpy(comm, pe->comm, sizeof(comm) - 1);
+      int avail = C2 - C1 - COL_GAP;
+      while(ov_measure(comm) > avail && strlen(comm) > 3)
+        comm[strlen(comm) - 1] = '\0';
+      ov_draw_text(px, stride, C1, PROC_TY(ry), stride, py0 + ph,
+                   comm, nr, ng, nb, 0xff);
     }
-    for(int hi = 0; hi < pe->hist_count; hi++) {
-      int   idx = (hist_start + hi) % PROC_HIST;
-      float v   = pe->cpu_hist[idx] / hmax;
-      int   bh  = (int)(v * bar_max);
-      if(bh < 1) bh = 1;
-      int     bx  = spark_x + hi * (bar_w + 1);
-      int     by  = ry + ROW_H - 1 - bh;
-      /* colour: green → yellow → red by cpu% */
-      float   pct = pe->cpu_hist[idx];
-      uint8_t br  = pct > 50.f ? 0xf3 : (pct > 20.f ? 0xf9 : 0xa6);
-      uint8_t bg2 = pct > 50.f ? 0x8b : (pct > 20.f ? 0xe2 : 0xe3);
-      uint8_t bb  = pct > 50.f ? 0xa8 : (pct > 20.f ? 0xaf : 0xa1);
-      ov_fill_rect(px,
-                   stride,
-                   bx,
-                   by,
-                   bar_w,
-                   bh,
-                   br,
-                   bg2,
-                   bb,
-                   sel ? 0xff : 0xcc,
-                   stride,
-                   py0 + ph);
+
+    /* CPU% — colour by heat */
+    uint8_t cr = pe->cpu_pct > 50.f ? 0xf3 : (pe->cpu_pct > 20.f ? 0xf9 : 0xa6);
+    uint8_t cg = pe->cpu_pct > 50.f ? 0x8b : (pe->cpu_pct > 20.f ? 0xe2 : 0xe3);
+    uint8_t cb = pe->cpu_pct > 50.f ? 0xa8 : (pe->cpu_pct > 20.f ? 0xaf : 0xa1);
+    ov_draw_text(px, stride, C2, PROC_TY(ry), stride, py0 + ph,
+                 cpu_s, cr, cg, cb, 0xff);
+
+    /* RSS */
+    ov_draw_text(px, stride, C3, PROC_TY(ry), stride, py0 + ph,
+                 rss_s, 0xa6, 0xe3, 0xa1, 0xff);
+
+    /* Sparkline — fills the GRAPH column */
+    {
+      int   bar_count = pe->hist_count < PROC_HIST ? pe->hist_count : PROC_HIST;
+      int   bar_w     = spark_w / (PROC_HIST + 1);
+      if(bar_w < 2) bar_w = 2;
+      int   bar_max   = ROW_H - 4;
+      int   hist_start = (pe->hist_head - bar_count + PROC_HIST * 2) % PROC_HIST;
+      float hmax       = 0.1f;
+      for(int hi = 0; hi < bar_count; hi++) {
+        float v = pe->cpu_hist[(hist_start + hi) % PROC_HIST];
+        if(v > hmax) hmax = v;
+      }
+      for(int hi = 0; hi < bar_count; hi++) {
+        float   v    = pe->cpu_hist[(hist_start + hi) % PROC_HIST] / hmax;
+        int     bh   = (int)(v * bar_max);
+        if(bh < 1) bh = 1;
+        int     bx   = C4 + hi * (bar_w + 1);
+        int     by   = ry + ROW_H - 2 - bh;
+        float   pct  = pe->cpu_hist[(hist_start + hi) % PROC_HIST];
+        uint8_t br   = pct > 50.f ? 0xf3 : (pct > 20.f ? 0xf9 : 0xa6);
+        uint8_t bg2  = pct > 50.f ? 0x8b : (pct > 20.f ? 0xe2 : 0xe3);
+        uint8_t bb   = pct > 50.f ? 0xa8 : (pct > 20.f ? 0xaf : 0xa1);
+        ov_fill_rect(px, stride, bx, by, bar_w, bh,
+                     br, bg2, bb, sel ? 0xff : 0xcc, stride, py0 + ph);
+      }
     }
   }
 }
@@ -2769,7 +3024,7 @@ static void draw_panel_git(uint32_t      *px,
   char branch_label[GIT_LINE_MAX + 48];
   snprintf(branch_label,
            sizeof(branch_label),
-           "  %s  r=refresh  s=stage  u=unstage  d=diff",
+           "  %s  r=refresh  s=stage  u=unstage  d=diff",  /* nf-dev-git_branch */
            g_git.branch);
   ov_draw_text(px,
                stride,
@@ -2832,37 +3087,42 @@ static void draw_panel_git(uint32_t      *px,
         draw_cursor_line(px, stride, px0, ry, left_w, ac, bg, stride, py0 + ph);
 
       uint8_t xr, xg, xb;
-      if(gf->xy[0] == 'A') {
-        xr = 0xa6;
-        xg = 0xe3;
-        xb = 0xa1;
-      } else if(gf->xy[0] == 'M') {
-        xr = 0xf9;
-        xg = 0xe2;
-        xb = 0xaf;
-      } else if(gf->xy[0] == 'D') {
-        xr = 0xf3;
-        xg = 0x8b;
-        xb = 0xa8;
+      const char *git_icon;
+      char xy0 = gf->xy[0], xy1 = gf->xy[1];
+      if(xy0 == 'A') {
+        git_icon = " "; xr = 0xa6; xg = 0xe3; xb = 0xa1; /* nf-fa-plus_circle — added */
+      } else if(xy0 == 'M') {
+        git_icon = " "; xr = 0xf9; xg = 0xe2; xb = 0xaf; /* nf-fa-pencil — modified */
+      } else if(xy0 == 'D') {
+        git_icon = " "; xr = 0xf3; xg = 0x8b; xb = 0xa8; /* nf-fa-minus_circle — deleted */
+      } else if(xy0 == 'R') {
+        git_icon = " "; xr = 0x89; xg = 0xdc; xb = 0xeb; /* nf-fa-exchange — renamed */
+      } else if(xy0 == '?' && xy1 == '?') {
+        git_icon = " "; xr = 0x58; xg = 0x5b; xb = 0x70; /* nf-fa-question_circle — untracked */
+      } else if(xy0 == '!') {
+        git_icon = " "; xr = 0x45; xg = 0x47; xb = 0x5a; /* nf-fa-ban — ignored */
       } else {
-        xr = 0x58;
-        xg = 0x5b;
-        xb = 0x70;
+        git_icon = " "; xr = 0x58; xg = 0x5b; xb = 0x70; /* nf-fa-file_o — other */
       }
 
-      char label[GIT_LINE_MAX + 4];
-      snprintf(label, sizeof(label), "%s %s", gf->xy, gf->path);
-      ov_draw_text(px,
-                   stride,
-                   px0 + PAD + 4,
-                   ry + g_ov_asc + 2,
-                   stride,
-                   py0 + ph,
-                   label,
-                   sel ? ac.r : xr,
-                   sel ? ac.g : xg,
-                   sel ? ac.b : xb,
-                   0xff);
+      /* Stage indicator pip */
+      if(gf->staged)
+        ov_fill_rect(px, stride, px0 + PAD, ry + 2, 2, ROW_H - 4,
+                     ac.r, ac.g, ac.b, 0xff, stride, py0 + ph);
+
+      ov_draw_text(px, stride, px0 + PAD + 6, ry + g_ov_asc + 2, stride, py0 + ph,
+                   git_icon, sel ? ac.r : xr, sel ? ac.g : xg, sel ? ac.b : xb, 0xff);
+
+      int icon_w = ov_measure(git_icon);
+      /* Truncate path to fit pane */
+      char pathbuf[GIT_LINE_MAX];
+      strncpy(pathbuf, gf->path, sizeof(pathbuf) - 1);
+      int avail = left_w - PAD * 2 - icon_w - 10;
+      while(ov_measure(pathbuf) > avail && strlen(pathbuf) > 3)
+        pathbuf[strlen(pathbuf) - 1] = '\0';
+      ov_draw_text(px, stride, px0 + PAD + 6 + icon_w + 4, ry + g_ov_asc + 2,
+                   stride, py0 + ph,
+                   pathbuf, sel ? ac.r : 0xa6, sel ? ac.g : 0xad, sel ? ac.b : 0xc8, 0xff);
     }
 
     /* Right: diff content */
@@ -2921,38 +3181,39 @@ static void draw_panel_git(uint32_t      *px,
       if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
 
       uint8_t xr, xg, xb;
-      char    staged_mark = gf->staged ? '*' : ' ';
-      if(gf->xy[0] == 'A' || gf->xy[1] == 'A') {
-        xr = 0xa6;
-        xg = 0xe3;
-        xb = 0xa1;
-      } else if(gf->xy[0] == 'M' || gf->xy[1] == 'M') {
-        xr = 0xf9;
-        xg = 0xe2;
-        xb = 0xaf;
-      } else if(gf->xy[0] == 'D' || gf->xy[1] == 'D') {
-        xr = 0xf3;
-        xg = 0x8b;
-        xb = 0xa8;
+      const char *git_icon2;
+      char xy0 = gf->xy[0], xy1 = gf->xy[1];
+      if(xy0 == 'A' || xy1 == 'A') {
+        git_icon2 = " "; xr = 0xa6; xg = 0xe3; xb = 0xa1;
+      } else if(xy0 == 'M' || xy1 == 'M') {
+        git_icon2 = " "; xr = 0xf9; xg = 0xe2; xb = 0xaf;
+      } else if(xy0 == 'D' || xy1 == 'D') {
+        git_icon2 = " "; xr = 0xf3; xg = 0x8b; xb = 0xa8;
+      } else if(xy0 == 'R' || xy1 == 'R') {
+        git_icon2 = " "; xr = 0x89; xg = 0xdc; xb = 0xeb;
+      } else if(xy0 == '?' && xy1 == '?') {
+        git_icon2 = " "; xr = 0x58; xg = 0x5b; xb = 0x70;
       } else {
-        xr = 0x58;
-        xg = 0x5b;
-        xb = 0x70;
+        git_icon2 = " "; xr = 0x58; xg = 0x5b; xb = 0x70;
       }
 
-      char label[GIT_LINE_MAX + 8];
-      snprintf(label, sizeof(label), "%s%c %s", gf->xy, staged_mark, gf->path);
-      ov_draw_text(px,
-                   stride,
-                   px0 + PAD,
-                   ry + g_ov_asc + 2,
-                   stride,
-                   py0 + ph,
-                   label,
-                   sel ? ac.r : xr,
-                   sel ? ac.g : xg,
-                   sel ? ac.b : xb,
-                   0xff);
+      /* Staged indicator pip */
+      if(gf->staged)
+        ov_fill_rect(px, stride, px0 + PAD, ry + 2, 2, ROW_H - 4,
+                     ac.r, ac.g, ac.b, 0xff, stride, py0 + ph);
+
+      ov_draw_text(px, stride, px0 + PAD + 6, ry + g_ov_asc + 2, stride, py0 + ph,
+                   git_icon2, sel ? ac.r : xr, sel ? ac.g : xg, sel ? ac.b : xb, 0xff);
+
+      int iw2 = ov_measure(git_icon2);
+      char pathbuf2[GIT_LINE_MAX];
+      strncpy(pathbuf2, gf->path, sizeof(pathbuf2) - 1);
+      int avail2 = pw - PAD * 2 - iw2 - 10;
+      while(ov_measure(pathbuf2) > avail2 && strlen(pathbuf2) > 3)
+        pathbuf2[strlen(pathbuf2) - 1] = '\0';
+      ov_draw_text(px, stride, px0 + PAD + 6 + iw2 + 4, ry + g_ov_asc + 2,
+                   stride, py0 + ph, pathbuf2,
+                   sel ? ac.r : 0xa6, sel ? ac.g : 0xad, sel ? ac.b : 0xc8, 0xff);
     }
 
     /* Separator + log */
@@ -3032,8 +3293,8 @@ static void draw_panel_build(uint32_t      *px,
   /* ── Build status ── */
   bool running = atomic_load(&g_build.running);
   if(running) {
-    static const char *spin[] = { "|", "/", "-", "\\" };
-    int64_t            si     = (ov_now_ms() / 120) % 4;
+    static const char *spin[] = { "󰪞", "󰪟", "󰪠", "󰪡", "󰪢", "󰪣", "󰪤", "󰪥" };
+    int64_t            si     = (ov_now_ms() / 80) % 8;
     char               status[64];
     double             elapsed = (double)(ov_now_ms() - g_build.started_ms) / 1000.0;
     snprintf(status, sizeof(status), "%s  building...  %.1fs", spin[si], elapsed);
@@ -3631,229 +3892,6 @@ static void draw_panel_search(uint32_t      *px,
   }
 }
 
-/* ── [9] Run ──────────────────────────────────────────────────────────── */
-static void draw_panel_run(uint32_t      *px,
-                           int            stride,
-                           int            px0,
-                           int            py0,
-                           int            pw,
-                           int            ph,
-                           TrixieOverlay *o,
-                           const Config  *cfg) {
-  Color ac = cfg->colors.active_border;
-  Color bg = cfg->colors.pane_bg;
-  int   y  = py0 + HEADER_H + PAD;
-
-  ov_draw_text(px,
-               stride,
-               px0 + PAD,
-               y + g_ov_asc,
-               stride,
-               py0 + ph,
-               "Enter=start/stop  a=add  d=delete",
-               ac.r,
-               ac.g,
-               ac.b,
-               0xff);
-  y += ROW_H;
-  ov_fill_rect(px,
-               stride,
-               px0 + PAD,
-               y,
-               pw - PAD * 2,
-               1,
-               ac.r,
-               ac.g,
-               ac.b,
-               0x40,
-               stride,
-               py0 + ph);
-  y += 6;
-
-  /* Add config form */
-  if(g_run_editing) {
-    char namedisp[RUN_NAME_MAX + 16], cmddisp[RUN_CMD_MAX + 16];
-    snprintf(namedisp,
-             sizeof(namedisp),
-             "name: %s%s",
-             g_run_edit_name,
-             g_run_edit_field == 0 ? "_" : "");
-    snprintf(cmddisp,
-             sizeof(cmddisp),
-             " cmd: %s%s",
-             g_run_edit_cmd,
-             g_run_edit_field == 1 ? "_" : "");
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD,
-                 y + g_ov_asc,
-                 stride,
-                 py0 + ph,
-                 namedisp,
-                 g_run_edit_field == 0 ? 0xf9 : ac.r,
-                 g_run_edit_field == 0 ? 0xe2 : ac.g,
-                 g_run_edit_field == 0 ? 0xaf : ac.b,
-                 0xff);
-    y += ROW_H;
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD,
-                 y + g_ov_asc,
-                 stride,
-                 py0 + ph,
-                 cmddisp,
-                 g_run_edit_field == 1 ? 0xf9 : ac.r,
-                 g_run_edit_field == 1 ? 0xe2 : ac.g,
-                 g_run_edit_field == 1 ? 0xaf : ac.b,
-                 0xff);
-    y += ROW_H + 4;
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD,
-                 y + g_ov_asc,
-                 stride,
-                 py0 + ph,
-                 "Tab=next field  Enter=confirm  Esc=cancel",
-                 0x58,
-                 0x5b,
-                 0x70,
-                 0xff);
-    y += ROW_H + 4;
-    ov_fill_rect(px,
-                 stride,
-                 px0 + PAD,
-                 y,
-                 pw - PAD * 2,
-                 1,
-                 ac.r,
-                 ac.g,
-                 ac.b,
-                 0x30,
-                 stride,
-                 py0 + ph);
-    y += 6;
-  }
-
-  int visible_rows = (ph - (y - py0) - PAD) / ROW_H;
-  if(o->cursor >= g_run_count && g_run_count > 0) o->cursor = g_run_count - 1;
-
-  for(int i = 0; i < g_run_count && i < visible_rows; i++) {
-    RunConfig *rc  = &g_run_configs[i];
-    bool       sel = (i == o->cursor);
-    int        ry  = y + i * ROW_H;
-    if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, py0 + ph);
-
-    /* Status bullet */
-    uint8_t     sr, sg2, sb;
-    const char *status;
-    if(rc->running) {
-      sr     = 0xa6;
-      sg2    = 0xe3;
-      sb     = 0xa1; /* green */
-      status = "● ";
-    } else if(rc->exited && rc->exit_code != 0) {
-      sr     = 0xf3;
-      sg2    = 0x8b;
-      sb     = 0xa8; /* red */
-      status = "✗ ";
-    } else if(rc->exited) {
-      sr     = 0x58;
-      sg2    = 0x5b;
-      sb     = 0x70; /* dim */
-      status = "✓ ";
-    } else {
-      sr     = 0x58;
-      sg2    = 0x5b;
-      sb     = 0x70;
-      status = "○ ";
-    }
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD + 4,
-                 ry + g_ov_asc + 2,
-                 stride,
-                 py0 + ph,
-                 status,
-                 sr,
-                 sg2,
-                 sb,
-                 0xff);
-
-    /* Name */
-    ov_draw_text(px,
-                 stride,
-                 px0 + PAD + 24,
-                 ry + g_ov_asc + 2,
-                 stride,
-                 py0 + ph,
-                 rc->name,
-                 sel ? ac.r : 0xa6,
-                 sel ? ac.g : 0xad,
-                 sel ? ac.b : 0xc8,
-                 0xff);
-
-    /* Elapsed if running */
-    if(rc->running) {
-      char elapsed[32];
-      snprintf(elapsed,
-               sizeof(elapsed),
-               "%.1fs",
-               (double)(ov_now_ms() - rc->started_ms) / 1000.0);
-      int ew = ov_measure(elapsed);
-      ov_draw_text(px,
-                   stride,
-                   px0 + pw - PAD - ew,
-                   ry + g_ov_asc + 2,
-                   stride,
-                   py0 + ph,
-                   elapsed,
-                   0xa6,
-                   0xe3,
-                   0xa1,
-                   0xff);
-    } else if(rc->exited) {
-      char exit_s[24];
-      snprintf(exit_s, sizeof(exit_s), "exit %d", rc->exit_code);
-      int     ew = ov_measure(exit_s);
-      uint8_t er = rc->exit_code == 0 ? 0x58 : 0xf3;
-      uint8_t eg = rc->exit_code == 0 ? 0x5b : 0x8b;
-      uint8_t eb = rc->exit_code == 0 ? 0x70 : 0xa8;
-      ov_draw_text(px,
-                   stride,
-                   px0 + pw - PAD - ew,
-                   ry + g_ov_asc + 2,
-                   stride,
-                   py0 + ph,
-                   exit_s,
-                   er,
-                   eg,
-                   eb,
-                   0xff);
-    }
-
-    /* cmd preview */
-    int name_w    = ov_measure(rc->name) + 40;
-    int cmd_avail = pw - name_w - PAD * 2 - 80;
-    if(cmd_avail > 40) {
-      char cmd_trunc[RUN_CMD_MAX];
-      strncpy(cmd_trunc, rc->cmd, sizeof(cmd_trunc) - 1);
-      while(ov_measure(cmd_trunc) > cmd_avail && strlen(cmd_trunc) > 3)
-        cmd_trunc[strlen(cmd_trunc) - 1] = '\0';
-      ov_draw_text(px,
-                   stride,
-                   px0 + PAD + name_w,
-                   ry + g_ov_asc + 2,
-                   stride,
-                   py0 + ph,
-                   cmd_trunc,
-                   0x58,
-                   0x5b,
-                   0x70,
-                   0xff);
-    }
-  }
-}
-
 /* ── [0] Deps ─────────────────────────────────────────────────────────── */
 static void draw_panel_deps(uint32_t      *px,
                             int            stride,
@@ -4026,6 +4064,14 @@ void overlay_update(TrixieOverlay *o,
   int w = o->w, h = o->h;
   if(w <= 0 || h <= 0) return;
 
+  /* Process deferred workspace switch (queued by key handler, executed here
+   * where we have TwmState access).                                          */
+  if(o->pending_ws_switch >= 0 && twm) {
+    int ws = o->pending_ws_switch;
+    o->pending_ws_switch = -1;
+    if(ws < twm->ws_count) twm_switch_ws(twm, ws);
+  }
+
   float want_size = cfg->bar.font_size > 0.f ? cfg->bar.font_size : cfg->font_size;
   if(strcmp(o->last_font, cfg->font_path) != 0 ||
      fabsf(o->last_size - want_size) > 0.01f) {
@@ -4041,63 +4087,115 @@ void overlay_update(TrixieOverlay *o,
   Color bg  = cfg->colors.pane_bg;
   Color fg_ = cfg->colors.bar_fg;
 
-  /* Full-screen opaque backdrop */
+  /* ── Backdrop: solid fill + vignette edges ────────────────────────────── */
   ov_fill_rect(px, w, 0, 0, w, h, bg.r, bg.g, bg.b, 0xff, w, h);
+  /* Vignette: 32px dark bands on all four edges */
+  {
+    int v = 32;
+    ov_fill_rect(px, w, 0,     0,     w, v, 0, 0, 0, 0x60, w, h);
+    ov_fill_rect(px, w, 0,     h - v, w, v, 0, 0, 0, 0x60, w, h);
+    ov_fill_rect(px, w, 0,     0,     v, h, 0, 0, 0, 0x60, w, h);
+    ov_fill_rect(px, w, w - v, 0,     v, h, 0, 0, 0, 0x60, w, h);
+  }
 
-  /* Content panel — 88% wide, 88% tall */
-  int pw = w * 22 / 25, ph = h * 22 / 25;
-  if(pw < 560) pw = 560;
-  if(ph < 360) ph = 360;
-  int px0 = (w - pw) / 2, py0 = (h - ph) / 2;
+  /* ── Content panel: 96% of screen, snapped to pixel grid ─────────────── */
+  int pw  = w * 24 / 25;
+  int ph  = h * 24 / 25;
+  int px0 = (w - pw) / 2;
+  int py0 = (h - ph) / 2;
 
-  uint8_t sr = (uint8_t)((int)bg.r + 0x0a < 0xff ? bg.r + 0x0a : 0xff);
-  uint8_t sg = (uint8_t)((int)bg.g + 0x0a < 0xff ? bg.g + 0x0a : 0xff);
-  uint8_t sb = (uint8_t)((int)bg.b + 0x0a < 0xff ? bg.b + 0x0a : 0xff);
+  /* Panel background — slightly lighter than backdrop */
+  uint8_t sr = (uint8_t)((int)bg.r + 0x0c < 0xff ? bg.r + 0x0c : 0xff);
+  uint8_t sg = (uint8_t)((int)bg.g + 0x0c < 0xff ? bg.g + 0x0c : 0xff);
+  uint8_t sb = (uint8_t)((int)bg.b + 0x0c < 0xff ? bg.b + 0x0c : 0xff);
   ov_fill_rect(px, w, px0, py0, pw, ph, sr, sg, sb, 0xff, w, h);
-  ov_fill_border(px, w, px0, py0, pw, ph, ac.r, ac.g, ac.b, 0xff, w, h);
 
-  /* Tab bar */
-  int tab_y    = py0 + 1;
-  int tab_text = tab_y + g_ov_asc + 2;
+  /* Outer glow — always 2px feathered halo regardless of border_width */
+  ov_fill_border(px, w, px0 - 2, py0 - 2, pw + 4, ph + 4,
+                 ac.r, ac.g, ac.b, 0x28, w, h);
+  ov_fill_border(px, w, px0 - 1, py0 - 1, pw + 2, ph + 2,
+                 ac.r, ac.g, ac.b, 0x50, w, h);
+  /* Solid border — respects cfg->border_width */
+  {
+    int bw = cfg->border_width > 0 ? cfg->border_width : 1;
+    for(int t = 0; t < bw; t++) {
+      ov_fill_rect(px, w, px0+t,        py0+t,        pw-t*2, 1,      ac.r, ac.g, ac.b, 0xff, w, h);
+      ov_fill_rect(px, w, px0+t,        py0+ph-1-t,   pw-t*2, 1,      ac.r, ac.g, ac.b, 0xff, w, h);
+      ov_fill_rect(px, w, px0+t,        py0+t,        1,      ph-t*2, ac.r, ac.g, ac.b, 0xff, w, h);
+      ov_fill_rect(px, w, px0+pw-1-t,   py0+t,        1,      ph-t*2, ac.r, ac.g, ac.b, 0xff, w, h);
+    }
+  }
 
-  ov_draw_text(px, w, px0 + PAD, tab_text, w, h, "trixie", ac.r, ac.g, ac.b, 0xff);
-  int sep_x = px0 + PAD + ov_measure("trixie") + 4;
-  ov_fill_rect(
-      px, w, sep_x, tab_y + 1, 1, g_ov_th + 2, ac.r, ac.g, ac.b, 0x60, w, h);
-  sep_x += 6;
+  /* ── Tab bar ──────────────────────────────────────────────────────────── */
+  int tab_bar_h = HEADER_H - 2;
+  int tab_y     = py0 + 1;
+  int tab_text  = tab_y + g_ov_asc + ((tab_bar_h - g_ov_th) / 2);
+
+  /* "trixie" logo — dim, left of separator */
+  ov_draw_text(px, w, px0 + PAD, tab_text, w, h,
+               "trixie", ac.r, ac.g, ac.b, 0x70);
+  int sep_x = px0 + PAD + ov_measure("trixie") + 6;
+  ov_fill_rect(px, w, sep_x, tab_y + 3, 1, tab_bar_h - 6,
+               ac.r, ac.g, ac.b, 0x35, w, h);
+  sep_x += 8;
+
+  /* Tab pills */
+  static const char *panel_labels[PANEL_COUNT] = {
+    "Workspaces", "Commands", "Processes", "Log",   "Git",
+    "Build",      "Notes",    "Search",    "Run",   "Deps",  "Files",
+    "Nvim",       "LSP"
+  };
+  static const char *panel_keys[PANEL_COUNT] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "F", "N", "L"
+  };
 
   int tab_x = sep_x;
   for(int i = 0; i < PANEL_COUNT; i++) {
-    bool        sel = (i == (int)o->panel);
-    const char *nm  = panel_names[i];
-    int         tw  = ov_measure(nm) + 8;
-    if(sel) {
-      ov_fill_rect(px,
-                   w,
-                   tab_x - 2,
-                   tab_y,
-                   tw + 4,
-                   g_ov_th + 4,
-                   ac.r,
-                   ac.g,
-                   ac.b,
-                   0xff,
-                   w,
-                   h);
-      ov_draw_text(px, w, tab_x, tab_text, w, h, nm, bg.r, bg.g, bg.b, 0xff);
-    } else {
-      ov_draw_text(px, w, tab_x, tab_text, w, h, nm, 0x55, 0x55, 0x55, 0xff);
+    bool        sel   = (i == (int)o->panel);
+    const char *label = panel_labels[i];
+    const char *key   = panel_keys[i];
+    /* For the LSP tab, append live badge count */
+    char label_buf[48];
+    if(i == PANEL_LSP) {
+      snprintf(label_buf, sizeof(label_buf), "%s%s", label, lsp_tab_badge());
+      label = label_buf;
     }
-    tab_x += tw + 8;
+    int         kw    = ov_measure(key);
+    int         lw    = ov_measure(label);
+    int         pill  = kw + 6 + lw + PAD;
+
+    if(sel) {
+      /* Filled pill for selected tab */
+      ov_fill_rect(px, w, tab_x, tab_y, pill, tab_bar_h,
+                   ac.r, ac.g, ac.b, 0xff, w, h);
+      /* Key number — inverted, dimmed */
+      ov_draw_text(px, w, tab_x + 4, tab_text, w, h,
+                   key, bg.r, bg.g, bg.b, 0xa0);
+      /* Label — inverted, full alpha */
+      ov_draw_text(px, w, tab_x + 4 + kw + 6, tab_text, w, h,
+                   label, bg.r, bg.g, bg.b, 0xff);
+      /* 2px accent underline at bottom of pill */
+      ov_fill_rect(px, w, tab_x, tab_y + tab_bar_h - 2, pill, 2,
+                   bg.r, bg.g, bg.b, 0x40, w, h);
+    } else {
+      /* Key number — accent dim */
+      ov_draw_text(px, w, tab_x + 4, tab_text, w, h,
+                   key, ac.r, ac.g, ac.b, 0x55);
+      /* Label — text dim */
+      ov_draw_text(px, w, tab_x + 4 + kw + 6, tab_text, w, h,
+                   label, 0x6e, 0x73, 0x87, 0xff);
+    }
+    tab_x += pill + 4;
   }
 
   /* Rule under tab bar */
-  ov_fill_rect(px, w, px0, py0 + HEADER_H - 1, pw, 1, ac.r, ac.g, ac.b, 0xff, w, h);
+  ov_fill_rect(px, w, px0, py0 + HEADER_H - 1, pw, 1,
+               ac.r, ac.g, ac.b, 0xff, w, h);
 
   /* Active panel */
   switch(o->panel) {
     case PANEL_WORKSPACES:
-      draw_panel_workspaces(px, w, px0, py0, pw, ph, twm, cfg);
+      draw_panel_workspaces(px, w, px0, py0, pw, ph, twm, o->ws_cursor, cfg);
       break;
     case PANEL_COMMANDS: draw_panel_commands(px, w, px0, py0, pw, ph, o, cfg); break;
     case PANEL_PROCESSES:
@@ -4108,42 +4206,122 @@ void overlay_update(TrixieOverlay *o,
     case PANEL_BUILD: draw_panel_build(px, w, px0, py0, pw, ph, o, cfg); break;
     case PANEL_NOTES: draw_panel_notes(px, w, px0, py0, pw, ph, o, cfg); break;
     case PANEL_SEARCH: draw_panel_search(px, w, px0, py0, pw, ph, o, cfg); break;
-    case PANEL_RUN: draw_panel_run(px, w, px0, py0, pw, ph, o, cfg); break;
-    case PANEL_DEPS: draw_panel_deps(px, w, px0, py0, pw, ph, o, cfg); break;
+    case PANEL_RUN: draw_panel_run(px, w, px0, py0, pw, ph, &o->cursor, cfg); break;
+    case PANEL_DEPS:  draw_panel_deps(px, w, px0, py0, pw, ph, o, cfg); break;
+    case PANEL_FILES:
+      draw_panel_files(px, w, px0, py0, pw, ph,
+                       &o->cursor,
+                       o->fb_cwd, sizeof(o->fb_cwd),
+                       o->fb_filter, &o->fb_filter_len, &o->fb_filter_mode,
+                       cfg);
+      break;
+    case PANEL_NVIM:
+      nvim_panel_poll(&cfg->overlay);
+      draw_panel_nvim(px, w, px0, py0, pw, ph,
+                      &o->nvim_cursor, cfg, &cfg->overlay);
+      break;
+    case PANEL_LSP:
+      lsp_panel_tick(&cfg->overlay);
+      draw_panel_lsp(px, w, px0, py0, pw, ph,
+                     &o->lsp_cursor, cfg, &cfg->overlay);
+      break;
     default: break;
   }
 
-  /* Mode line */
+  /* ── Mode line — DE status + key hints ───────────────────────────────── */
   {
-    int ml_h = g_ov_th + 6;
+    int ml_h = ROW_H;
     int ml_y = py0 + ph - ml_h;
-    ov_fill_rect(px, w, px0, ml_y - 1, pw, 1, ac.r, ac.g, ac.b, 0xff, w, h);
-    ov_fill_rect(px, w, px0, ml_y, pw, ml_h, bg.r, bg.g, bg.b, 0xff, w, h);
+    ov_fill_rect(px, w, px0, ml_y - 1, pw, 1, ac.r, ac.g, ac.b, 0x60, w, h);
 
+    /* Slightly darker tint for mode line */
+    uint8_t ml_r = (uint8_t)(bg.r > 8 ? bg.r - 8 : 0);
+    uint8_t ml_g = (uint8_t)(bg.g > 8 ? bg.g - 8 : 0);
+    uint8_t ml_b = (uint8_t)(bg.b > 8 ? bg.b - 8 : 0);
+    ov_fill_rect(px, w, px0, ml_y, pw, ml_h, ml_r, ml_g, ml_b, 0xff, w, h);
+
+    int ml_text = ml_y + g_ov_asc + ((ml_h - g_ov_th) / 2);
+
+    /* ── Left: key hints for current panel ── */
     static const char *hints[PANEL_COUNT] = {
       "j/k scroll  Tab next panel",
       "/ filter  j/k navigate  Enter exec",
       "j/k select  Enter=SIGTERM  K=SIGKILL  s=sort",
       "/ filter  c clear  j/k scroll",
-      "r refresh  d diff  s stage  u unstage  j/k navigate",
+      "r refresh  d diff  s stage  u unstage",
       "b=cmd  Enter=run  e=errors  j/k errors",
-      "e=edit  n=rename  N=new  d=del  [/]=note  j/k scroll",
-      "/ search  f=files  j/k navigate  Enter=open",
-      "Enter=start/stop  a=add  d=delete  j/k navigate",
-      "u=outdated  r=refresh  j/k navigate",
+      "e=edit  n=rename  N=new  d=del  [/]=note",
+      "/ search  f=files/text  Enter=open  j/k navigate",
+      "Enter=start/stop  Tab=output  a=add  d=del  c=clear",
+      "u=check outdated  r=refresh  j/k navigate",
+      "j/k=navigate  Enter/l=open  h=up  /=filter  .=hidden  o=xdg-open  Tab=preview",
+      "j/k navigate  Enter=open  r=refresh",
+      "j/k navigate  Enter=jump  e/w/i=filter-sev  f=sort-file  g=group",
     };
     const char *hint = (o->panel < PANEL_COUNT) ? hints[o->panel] : "";
-    ov_draw_text(px,
-                 w,
-                 px0 + PAD,
-                 ml_y + g_ov_asc + 2,
-                 w,
-                 h,
-                 hint,
-                 fg_.r,
-                 fg_.g,
-                 fg_.b,
-                 0xa0);
+    ov_draw_text(px, w, px0 + PAD, ml_text, w, h,
+                 hint, fg_.r, fg_.g, fg_.b, 0x80);
+
+    /* ── Right: live DE status — ws | app | layout ── */
+    if(twm && twm->ws_count > 0) {
+      Workspace *ws   = &twm->workspaces[twm->active_ws];
+      Pane      *fp   = twm_focused(twm);
+
+      /* "󰮯 N" — monitor icon + workspace number */
+      char ws_buf[24];
+      snprintf(ws_buf, sizeof(ws_buf), "󰮯 %d", twm->active_ws + 1);
+
+      /* focused app name (title preferred, fall back to app_id) */
+      const char *app = "";
+      if(fp) app = fp->title[0] ? fp->title : fp->app_id;
+
+      /* layout + pane count with  grid icon */
+      char lay_buf[48];
+      snprintf(lay_buf, sizeof(lay_buf), "󰕰  %s  %d",  /* nf-md-view_grid */
+               layout_label(ws->layout),
+               ws->pane_count);
+
+      /* Measure right-to-left so we can right-align */
+      int lay_w = ov_measure(lay_buf);
+      int sep_w = ov_measure("  │  ");
+      int app_w = ov_measure(app);
+      int ws_w  = ov_measure(ws_buf);
+
+      int rx = px0 + pw - PAD;
+
+      /* Layout */
+      rx -= lay_w;
+      ov_draw_text(px, w, rx, ml_text, w, h,
+                   lay_buf, 0x89, 0xdc, 0xeb, 0xa0);
+      rx -= sep_w;
+      ov_draw_text(px, w, rx, ml_text, w, h,
+                   "  │  ", ac.r, ac.g, ac.b, 0x30);
+
+      /* App name — truncate if too long */
+      if(app_w > 0) {
+        char app_trunc[256];
+        strncpy(app_trunc, app, sizeof(app_trunc) - 1);
+        int avail = rx - (px0 + PAD + ov_measure(hint) + PAD * 2);
+        while(ov_measure(app_trunc) > avail && strlen(app_trunc) > 3)
+          app_trunc[strlen(app_trunc) - 1] = '\0';
+        rx -= ov_measure(app_trunc);
+        ov_draw_text(px, w, rx, ml_text, w, h,
+                     app_trunc, 0xcd, 0xd6, 0xf4, 0xd0);
+        rx -= sep_w;
+        ov_draw_text(px, w, rx, ml_text, w, h,
+                     "  │  ", ac.r, ac.g, ac.b, 0x30);
+      }
+
+      /* Workspace */
+      rx -= ws_w;
+      /* Urgency tint */
+      bool urgent = (twm->ws_urgent_mask >> twm->active_ws) & 1;
+      uint8_t wr = urgent ? 0xf3 : ac.r;
+      uint8_t wg = urgent ? 0x8b : ac.g;
+      uint8_t wb = urgent ? 0xa8 : ac.b;
+      ov_draw_text(px, w, rx, ml_text, w, h,
+                   ws_buf, wr, wg, wb, 0xff);
+    }
   }
 
   wlr_scene_buffer_set_buffer(o->scene_buf, &rb->base);

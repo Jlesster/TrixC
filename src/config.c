@@ -953,6 +953,27 @@ static void skip_block(Lexer *l) {
       skip_block(l);                                                      \
   } while(0)
 
+#define OPEN_DEV_LANG(lbl_)                              \
+  do {                                                   \
+    OverlayCfg *_ov = &c->overlay;                       \
+    DevLangCfg *_lc = NULL;                              \
+    for(int _i = 0; _i < _ov->lang_count; _i++) {        \
+      if(!strcasecmp(_ov->langs[_i].name, (lbl_))) {     \
+        _lc = &_ov->langs[_i];                           \
+        break;                                           \
+      }                                                  \
+    }                                                    \
+    if(!_lc && _ov->lang_count < MAX_DEV_LANGS) {        \
+      _lc = &_ov->langs[_ov->lang_count++];              \
+      memset(_lc, 0, sizeof(*_lc));                      \
+      strncpy(_lc->name, (lbl_), sizeof(_lc->name) - 1); \
+    }                                                    \
+    if(_lc)                                              \
+      parse_block(l, c, "dev_lang", (lbl_), file_dir);   \
+    else                                                 \
+      skip_block(l);                                     \
+  } while(0)
+
 static void parse_block(Lexer      *l,
                         Config     *c,
                         const char *block,
@@ -1006,6 +1027,8 @@ static void parse_block(Lexer      *l,
           OPEN_SCRATCHPAD(lbl);
         } else if(!strcmp(key, "bar_module")) {
           OPEN_BAR_MODULE(lbl);
+        } else if(!strcmp(key, "dev_lang")) {
+          OPEN_DEV_LANG(lbl);
           /* FEATURE 1: "workspace N { layout = ... ratio = ... }" */
         } else if(!strcmp(key, "workspace") && !block[0]) {
           int ws_idx = atoi(lbl) - 1;
@@ -1107,6 +1130,10 @@ static void parse_block(Lexer      *l,
         OPEN_SCRATCHPAD(val);
       } else if(!strcmp(key, "bar_module")) {
         OPEN_BAR_MODULE(val);
+      } else if(!strcmp(key, "dev_lang")) {
+        OPEN_DEV_LANG(val);
+      } else if(!strcmp(key, "overlay")) {
+        parse_block(l, c, "overlay", "", file_dir);
       } else {
         wlr_log(WLR_DEBUG, "config: unknown labeled block '%s = %s'", key, val);
         skip_block(l);
@@ -1437,6 +1464,72 @@ static void parse_block(Lexer      *l,
         wlr_log(WLR_DEBUG, "config: unknown key '%s' in bar_module", key);
     }
 
+    /* ── overlay block ── */
+    else if(!strcmp(block, "overlay")) {
+      OverlayCfg *ov = &c->overlay;
+      if(!strcmp(bk, "enabled"))
+        ov->enabled = str_to_bool(val);
+      else if(!strcmp(bk, "editor"))
+        strncpy(ov->editor, val, sizeof(ov->editor) - 1);
+      else if(!strcmp(bk, "terminal"))
+        strncpy(ov->terminal, val, sizeof(ov->terminal) - 1);
+      else if(!strcmp(bk, "nvim_socket") || !strcmp(bk, "nvim_sock"))
+        strncpy(ov->nvim_socket, val, sizeof(ov->nvim_socket) - 1);
+      else if(!strcmp(bk, "nvim_listen_addr") || !strcmp(bk, "nvim_listen"))
+        strncpy(ov->nvim_listen_addr, val, sizeof(ov->nvim_listen_addr) - 1);
+      else if(!strcmp(bk, "project_root") || !strcmp(bk, "root")) {
+        /* Expand ~/  */
+        if(!strncmp(val, "~/", 2)) {
+          const char *home = getenv("HOME");
+          if(!home) home = "/root";
+          snprintf(
+              ov->project_root, sizeof(ov->project_root), "%s/%s", home, val + 2);
+        } else
+          strncpy(ov->project_root, val, sizeof(ov->project_root) - 1);
+      } else if(!strcmp(bk, "default_panel") || !strcmp(bk, "panel"))
+        strncpy(ov->default_panel, val, sizeof(ov->default_panel) - 1);
+      else if(!strcmp(bk, "lsp_diagnostics") || !strcmp(bk, "lsp"))
+        ov->lsp_diagnostics = str_to_bool(val);
+      else if(!strcmp(bk, "lsp_poll_ms") || !strcmp(bk, "lsp_poll"))
+        ov->lsp_poll_ms = (int)str_to_num(val);
+      else
+        wlr_log(WLR_DEBUG, "config: unknown key '%s' in overlay", key);
+    }
+
+    /* ── dev_lang block ── */
+    else if(!strcmp(block, "dev_lang")) {
+      /* label holds the language name; find the matching DevLangCfg entry */
+      DevLangCfg *lc = NULL;
+      for(int _i = 0; _i < c->overlay.lang_count; _i++) {
+        if(!strcasecmp(c->overlay.langs[_i].name, label)) {
+          lc = &c->overlay.langs[_i];
+          break;
+        }
+      }
+      if(!lc) {
+        wlr_log(WLR_DEBUG,
+                "config: dev_lang '%s': entry not found for key '%s'",
+                label,
+                key);
+      } else {
+        if(!strcmp(bk, "build"))
+          strncpy(lc->build, val, sizeof(lc->build) - 1);
+        else if(!strcmp(bk, "run"))
+          strncpy(lc->run, val, sizeof(lc->run) - 1);
+        else if(!strcmp(bk, "test"))
+          strncpy(lc->test, val, sizeof(lc->test) - 1);
+        else if(!strcmp(bk, "fmt") || !strcmp(bk, "format"))
+          strncpy(lc->fmt, val, sizeof(lc->fmt) - 1);
+        else if(!strcmp(bk, "lint"))
+          strncpy(lc->lint, val, sizeof(lc->lint) - 1);
+        else if(!strcmp(bk, "lsp"))
+          strncpy(lc->lsp, val, sizeof(lc->lsp) - 1);
+        else
+          wlr_log(
+              WLR_DEBUG, "config: unknown key '%s' in dev_lang '%s'", key, label);
+      }
+    }
+
     else {
       wlr_log(
           WLR_DEBUG, "config: key '%s' in unknown block '%s', ignored", key, block);
@@ -1638,6 +1731,58 @@ static void apply_theme(Config *c, const char *name) {
  * §13  Defaults
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+static void overlay_cfg_defaults(OverlayCfg *ov) {
+  memset(ov, 0, sizeof(*ov));
+  ov->enabled = true;
+  strncpy(ov->editor, "nvim", sizeof(ov->editor) - 1);
+  strncpy(ov->terminal, "kitty", sizeof(ov->terminal) - 1);
+  strncpy(ov->default_panel, "run", sizeof(ov->default_panel) - 1);
+  ov->lsp_diagnostics = true;
+  ov->lsp_poll_ms     = 2000;
+
+  /* Built-in per-language presets — overridable via dev_lang blocks */
+  static const struct {
+    const char *name, *build, *run, *test, *fmt, *lint, *lsp;
+  } presets[] = {
+    { "c",
+     "meson compile -C builddir 2>&1", "./builddir/trixie",
+     "meson test -C builddir",                                    "clang-format -i",
+     "clang-tidy",                                                                               "clangd"        },
+    { "cpp",
+     "cmake --build build 2>&1",       "./build/app",
+     "ctest --test-dir build",                                    "clang-format -i",
+     "clang-tidy",                                                                               "clangd"        },
+    { "rust",
+     "cargo build 2>&1",               "cargo run",
+     "cargo test",                                                "cargo fmt",
+     "cargo clippy",                                                                             "rust-analyzer" },
+    { "go",
+     "go build ./... 2>&1",            "go run .",
+     "go test ./...",                                             "gofmt -w .",
+     "golangci-lint run",                                                                        "gopls"         },
+    { "java",
+     "mvn compile -q 2>&1",            "mvn exec:java -q",
+     "mvn test -q",                                               "google-java-format -i",
+     "checkstyle",                                                                               "jdtls"         },
+    { "python",
+     "python -m build 2>&1",           "python -m main",
+     "pytest -v",                                                 "black .",
+     "ruff check .",                                                                             "pyright"       },
+    { NULL,     NULL,                  NULL,                NULL, NULL,                    NULL, NULL            }
+  };
+
+  for(int i = 0; presets[i].name && ov->lang_count < MAX_DEV_LANGS; i++) {
+    DevLangCfg *lc = &ov->langs[ov->lang_count++];
+    strncpy(lc->name, presets[i].name, sizeof(lc->name) - 1);
+    strncpy(lc->build, presets[i].build, sizeof(lc->build) - 1);
+    strncpy(lc->run, presets[i].run, sizeof(lc->run) - 1);
+    strncpy(lc->test, presets[i].test, sizeof(lc->test) - 1);
+    strncpy(lc->fmt, presets[i].fmt, sizeof(lc->fmt) - 1);
+    strncpy(lc->lint, presets[i].lint, sizeof(lc->lint) - 1);
+    strncpy(lc->lsp, presets[i].lsp, sizeof(lc->lsp) - 1);
+  }
+}
+
 void config_defaults(Config *c) {
   memset(c, 0, sizeof(*c));
   strncpy(c->font_path,
@@ -1700,6 +1845,8 @@ void config_defaults(Config *c) {
   c->keyboard.repeat_rate  = 25;
   c->keyboard.repeat_delay = 600;
   c->keybind_count         = 0;
+
+  overlay_cfg_defaults(&c->overlay);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

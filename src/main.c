@@ -20,6 +20,7 @@
  * PROTO: content-type-v1
  */
 #include "build/wlr-layer-shell-unstable-v1-protocol.h"
+#include "nvim_panel.h"
 #include "trixie.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -31,6 +32,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <wlr/types/wlr_xdg_shell.h>
+
+#include <execinfo.h>
+#include <signal.h>
 
 #include <wlr/types/wlr_content_type_v1.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
@@ -215,6 +219,57 @@ static int pane_title_extra(TrixieServer *s, Pane *p) {
   return tbh - bw;
 }
 
+// near the other static callbacks at the top of main.c
+static int  s_nvim_retry_count         = 0;
+static bool s_nvim_socket_existed_last = false;
+
+void nvim_retry_reset(void) {
+  s_nvim_retry_count         = 0;
+  s_nvim_socket_existed_last = false;
+}
+
+static int nvim_connect_timer_cb(void *data) {
+  TrixieServer *s       = data;
+  int           next_ms = 2000;
+
+  if(!nvim_is_connected() && s->cfg.overlay.nvim_socket[0]) {
+    /* Check if socket file exists */
+    struct stat st;
+    bool        exists = (stat(s->cfg.overlay.nvim_socket, &st) == 0);
+
+    if(exists && !s_nvim_socket_existed_last) {
+      /* Socket just appeared — wait one full cycle before connecting
+       * so nvim has time to finish setting up its RPC listener */
+      s_nvim_socket_existed_last = true;
+      s_nvim_retry_count         = 0;
+      next_ms                    = 1000; /* one extra second grace period */
+      wl_event_source_timer_update(s->nvim_timer, next_ms);
+      return 0;
+    }
+    s_nvim_socket_existed_last = exists;
+
+    if(exists) {
+      bool ok = nvim_connect(s->cfg.overlay.nvim_socket);
+      if(ok) {
+        s_nvim_retry_count = 0;
+        next_ms            = 5000;
+      } else {
+        /* Exponential backoff: 2s, 4s, 8s, cap at 16s */
+        s_nvim_retry_count++;
+        next_ms = 2000 * (1 << (s_nvim_retry_count < 3 ? s_nvim_retry_count : 3));
+      }
+    } else {
+      s_nvim_socket_existed_last = false;
+      next_ms                    = 2000;
+    }
+  } else {
+    next_ms = 5000;
+  }
+
+  wl_event_source_timer_update(s->nvim_timer, next_ms);
+  return 0;
+}
+
 static void view_apply_geom(TrixieServer *s, TrixieView *v, Pane *p) {
   int bw = (p->floating || p->fullscreen) ? 0 : s->twm.border_w;
   int th = pane_title_extra(s, p);
@@ -260,7 +315,8 @@ void server_spawn(TrixieServer *s, const char *cmd) {
     if(pid2 < 0) _exit(1);
     if(pid2 == 0) {
       setsid();
-      for(int fd = 3; fd < 256; fd++)
+      int maxfd = (int)sysconf(_SC_OPEN_MAX);
+      for(int fd = 3; fd < maxfd; fd++)
         close(fd);
       if(!getenv("PATH")) setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
       execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
@@ -1109,7 +1165,10 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
   clock_gettime(CLOCK_MONOTONIC, &now);
   wlr_scene_output_send_frame_done(o->scene_output, &now);
 
-  if(still_animating && s->running) wlr_output_schedule_frame(o->wlr_output);
+  /* Always schedule the next frame so compositor-side surfaces (bar, deco,
+   * overlay) render at the display's native refresh rate, not just when a
+   * client animation is active. */
+  if(s->running) wlr_output_schedule_frame(o->wlr_output);
 }
 
 static void output_handle_request_state(struct wl_listener *listener, void *data) {
@@ -1208,7 +1267,7 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   }
 
   o->bar     = bar_create(s->layer_overlay, ow, oh, &s->cfg, &s->bar_workers);
-  o->deco    = deco_create(s->layer_overlay);
+  o->deco    = deco_create(s->layer_chrome);
   o->overlay = overlay_create(s->layer_overlay, o->logical_w, o->logical_h, &s->cfg);
 
   /* Resize the background rect to cover the full output. */
@@ -1856,9 +1915,20 @@ static int ipc_read_cb(int fd, uint32_t mask, void *data) {
   int           client = accept(fd, NULL, NULL);
   if(client < 0) return 0;
   fcntl(client, F_SETFL, O_NONBLOCK);
-  char    buf[1024] = { 0 };
-  ssize_t n         = read(client, buf, sizeof(buf) - 1);
-  if(n > 0) {
+  char    buf[65536] = { 0 };
+  size_t  total      = 0;
+  ssize_t n;
+  while(total < sizeof(buf) - 1) {
+    n = read(client, buf + total, sizeof(buf) - 1 - total);
+    if(n > 0) {
+      total += (size_t)n;
+      continue;
+    }
+    if(n < 0 && errno == EAGAIN) break;
+    break;
+  }
+  if(total > 0) {
+    n        = (ssize_t)total;
     char *nl = strchr(buf, '\n');
     if(nl) *nl = '\0';
     /* Special case: subscribe command keeps the fd open for event pushing. */
@@ -1952,11 +2022,24 @@ void server_init_config_watch(TrixieServer *s) {
 
 /* ── Main ─────────────────────────────────────────────────────────────────── */
 
+static void crash_handler(int sig) {
+  void *bt[64];
+  int   n = backtrace(bt, 64);
+  fprintf(stderr, "\n=== CRASH sig=%d ===\n", sig);
+  backtrace_symbols_fd(bt, n, STDERR_FILENO);
+  fprintf(stderr, "===================\n");
+  fflush(stderr);
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
 int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
   wlr_log_init(WLR_INFO, NULL);
-
+  signal(SIGSEGV, crash_handler);
+  signal(SIGABRT, crash_handler);
+  signal(SIGBUS, crash_handler);
   TrixieServer *s = calloc(1, sizeof(*s));
   wl_list_init(&s->views);
   wl_list_init(&s->outputs);
@@ -2059,6 +2142,7 @@ int main(int argc, char *argv[]) {
   s->layer_background = wlr_scene_tree_create(&s->scene->tree);
   s->layer_windows    = wlr_scene_tree_create(&s->scene->tree);
   s->layer_floating   = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_chrome     = wlr_scene_tree_create(&s->scene->tree);
   s->layer_overlay    = wlr_scene_tree_create(&s->scene->tree);
 
   /* Root background rect — sits at the bottom of layer_background.
@@ -2166,7 +2250,11 @@ int main(int argc, char *argv[]) {
     }
   }
 #endif
+  s->nvim_timer = wl_event_loop_add_timer(
+      wl_display_get_event_loop(s->display), nvim_connect_timer_cb, s);
+  if(s->nvim_timer) wl_event_source_timer_update(s->nvim_timer, 2000);
 
+  /* exec_once — unchanged */
   if(!s->exec_once_done) {
     s->exec_once_done = true;
     for(int i = 0; i < s->cfg.exec_once_count; i++)
@@ -2176,6 +2264,13 @@ int main(int argc, char *argv[]) {
     server_spawn(s, s->cfg.exec[i]);
 
   wl_display_run(s->display);
+
+  /* Cleanup — remove timer HERE, after the loop exits */
+  if(s->nvim_timer) {
+    wl_event_source_remove(s->nvim_timer);
+    s->nvim_timer = NULL;
+  }
+  nvim_disconnect();
 
   /* Cleanup */
   wlr_log(WLR_INFO, "trixie shutting down");

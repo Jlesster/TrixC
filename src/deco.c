@@ -204,11 +204,6 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg)
         continue;
       }
       if(p->floating) {
-        /* Floating windows get a thin accent border so they read as elevated
-         * above the tiled layer.  We use a fixed 2px frame (or border_width
-         * if configured larger) with the active/inactive border colour —
-         * no blend-to-bg dimming, since floats are already visually separated
-         * by the scale/fade open animation. */
         int  fbw     = bw < 2 ? 2 : bw;
         Rect r       = anim_get_rect(anim, pid, p->rect);
         Rect shifted = { r.x + ws_dx, r.y, r.w, r.h };
@@ -217,11 +212,17 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg)
         if(!e) continue;
         e->active = true;
         ensure_rects(d, e);
-        /* Use direct border colours for floats — no bg blend. */
+
         Color col =
             focused ? cfg->colors.active_border : cfg->colors.inactive_border;
         float fc[4];
         color_f(col, fc);
+
+        /* Scale border alpha by the float open/close animation opacity so
+         * the chrome fades in/out in sync with the window content. */
+        float opacity = anim_get_opacity(anim, pid, 1.0f);
+        fc[3] *= opacity;
+
         /* top */
         wlr_scene_rect_set_size(e->borders[0], shifted.w, fbw);
         wlr_scene_node_set_position(&e->borders[0]->node, shifted.x, shifted.y);

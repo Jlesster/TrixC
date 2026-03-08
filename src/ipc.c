@@ -1,9 +1,5 @@
 /* ipc.c — Unix socket IPC command dispatcher.
  *
- * Mirrors the Rust BindAction dispatch table in twm.rs and the ipc.c
- * command surface.  Every command is a plain text string (like the Rust
- * EmbedCommand enum) sent over a Unix socket by trixiectl.
- *
  * Commands
  * ────────
  *   workspace <n>              switch to workspace n
@@ -29,6 +25,19 @@
  *   idle_reset                 reset the idle timer and re-enable outputs
  *   status                     human-readable workspace / pane summary
  *   status_json                machine-readable JSON status (with pane detail)
+ *   set_layout <name>          set layout by name
+ *   query_pane [id]            JSON details for a pane (default: focused)
+ *   subscribe                  keep connection open; receive JSON events
+ *   overlay [...]              overlay control commands
+ *   build [run]                trigger async build
+ *
+ * Nvim bridge commands (pushed by the trixie.lua nvim plugin)
+ * ────────────────────────────────────────────────────────────
+ *   nvim_state <file>\t<line>\t<col>\t<ft>
+ *   nvim_diag  <json_array>
+ *   nvim_buffers <json_array>
+ *   quickfix_get               returns JSON quickfix array for nvim setqflist()
+ *   nvim_open <file> [<line>]  ask nvim to open a file
  */
 #define _POSIX_C_SOURCE 200809L
 #include "trixie.h"
@@ -40,9 +49,12 @@
 #include <strings.h>
 #include <unistd.h>
 
+/* forward declarations from nvim_panel.c */
+bool nvim_is_connected(void);
+void nvim_open_file(const char *path, int line);
+
 /* ── Event push helpers ─────────────────────────────────────────────────── */
 
-/* Write buf to every live subscriber fd.  Remove any fd that errors. */
 static void ipc_push_event(TrixieServer *s, const char *buf, size_t len) {
   int live = 0;
   for(int i = 0; i < s->subscriber_count; i++) {
@@ -100,6 +112,19 @@ void ipc_push_title_changed(TrixieServer *s, PaneId id) {
   ipc_push_event(s, buf, strlen(buf));
 }
 
+void ipc_push_build_done(TrixieServer *s, int exit_code, int err_count) {
+  if(!s || s->subscriber_count == 0) return;
+  char buf[128];
+  snprintf(buf,
+           sizeof(buf),
+           "{\"event\":\"build_done\",\"exit_code\":%d,\"diagnostics\":%d}\n",
+           exit_code,
+           err_count);
+  ipc_push_event(s, buf, strlen(buf));
+}
+
+/* ── Main dispatcher ────────────────────────────────────────────────────── */
+
 void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_sz) {
   char buf[1024];
   strncpy(buf, line, sizeof(buf) - 1);
@@ -117,7 +142,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
 
 #define REPLY(...) snprintf(reply, reply_sz, __VA_ARGS__)
 
-  /* ── Server lifecycle ─────────────────────────────────────────────────── */
+  /* ── Server lifecycle ───────────────────────────────────────────────── */
 
   if(!strcmp(cmd, "reload")) {
     server_apply_config_reload(s);
@@ -131,7 +156,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
   } else if(!strcmp(cmd, "switch_vt")) {
     REPLY("err: vt switching not supported in this build");
 
-    /* ── Workspace routing ─────────────────────────────────────────────── */
+    /* ── Workspace routing ──────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "workspace")) {
     int n = rest ? atoi(rest) : 0;
@@ -143,6 +168,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
             &s->anim, s->twm.active_ws > old ? WS_DIR_RIGHT : WS_DIR_LEFT);
       server_sync_focus(s);
       server_sync_windows(s);
+      ipc_push_workspace_changed(s);
       REPLY("ok: workspace %d", n);
     } else {
       REPLY("err: usage: workspace <n>");
@@ -154,6 +180,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     if(s->twm.active_ws != old) anim_workspace_transition(&s->anim, WS_DIR_RIGHT);
     server_sync_focus(s);
     server_sync_windows(s);
+    ipc_push_workspace_changed(s);
     REPLY("ok");
 
   } else if(!strcmp(cmd, "prev_workspace")) {
@@ -162,6 +189,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     if(s->twm.active_ws != old) anim_workspace_transition(&s->anim, WS_DIR_LEFT);
     server_sync_focus(s);
     server_sync_windows(s);
+    ipc_push_workspace_changed(s);
     REPLY("ok");
 
   } else if(!strcmp(cmd, "move_to_workspace")) {
@@ -174,7 +202,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       REPLY("err: usage: move_to_workspace <n>");
     }
 
-    /* ── Scratchpad ────────────────────────────────────────────────────── */
+    /* ── Scratchpad ─────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "scratchpad")) {
     if(!rest || !rest[0]) {
@@ -184,7 +212,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_scratch_toggle(s, rest);
     REPLY("ok: toggled '%s'", rest);
 
-    /* ── Float ─────────────────────────────────────────────────────────── */
+    /* ── Float ──────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "float")) {
     server_float_toggle(s);
@@ -216,7 +244,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       REPLY("err: no focused window");
     }
 
-    /* ── Pane actions ──────────────────────────────────────────────────── */
+    /* ── Pane actions ───────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "close")) {
     PaneId id = twm_focused_id(&s->twm);
@@ -231,7 +259,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_dispatch_action(s, &a);
     REPLY("ok: fullscreen toggled");
 
-    /* ── Directional focus ─────────────────────────────────────────────── */
+    /* ── Directional focus ──────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "focus")) {
     if(!rest) {
@@ -252,9 +280,10 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       return;
     }
     server_dispatch_action(s, &a);
+    ipc_push_focus_changed(s);
     REPLY("ok");
 
-    /* ── Swap / reorder ────────────────────────────────────────────────── */
+    /* ── Swap / reorder ─────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "swap")) {
     bool forward = true;
@@ -268,7 +297,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_sync_windows(s);
     REPLY("ok: swapped with main");
 
-    /* ── Layout cycling ────────────────────────────────────────────────── */
+    /* ── Layout cycling ─────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "layout")) {
     if(!rest || !strcmp(rest, "next") || !strcmp(rest, "")) {
@@ -309,7 +338,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_sync_windows(s);
     REPLY("ok: ratio %.2f", r);
 
-    /* ── Spawn ─────────────────────────────────────────────────────────── */
+    /* ── Spawn ──────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "spawn")) {
     if(!rest || !rest[0]) {
@@ -319,7 +348,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_spawn(s, rest);
     REPLY("ok: spawned");
 
-    /* ── DPMS ──────────────────────────────────────────────────────────── */
+    /* ── DPMS ───────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "dpms")) {
     bool          on = !rest || !strcmp(rest, "on");
@@ -333,13 +362,13 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     }
     REPLY("ok: dpms %s", on ? "on" : "off");
 
-    /* ── Idle reset ────────────────────────────────────────────────────── */
+    /* ── Idle reset ─────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "idle_reset")) {
     server_reset_idle(s);
     REPLY("ok: idle timer reset");
 
-    /* ── Introspection ─────────────────────────────────────────────────── */
+    /* ── Introspection ──────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "status")) {
     int len = 0;
@@ -386,19 +415,17 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
                     s->twm.screen_w,
                     s->twm.screen_h);
     for(int i = 0; i < s->twm.ws_count; i++) {
-      Workspace *ws        = &s->twm.workspaces[i];
-      bool       is_active = (i == s->twm.active_ws);
-
-      const char *focused_title  = "";
-      const char *focused_app_id = "";
+      Workspace  *ws        = &s->twm.workspaces[i];
+      bool        is_active = (i == s->twm.active_ws);
+      const char *ft        = "";
+      const char *fa        = "";
       if(ws->has_focused) {
         Pane *fp = twm_pane_by_id(&s->twm, ws->focused);
         if(fp) {
-          focused_title  = fp->title;
-          focused_app_id = fp->app_id;
+          ft = fp->title;
+          fa = fp->app_id;
         }
       }
-
       len += snprintf(reply + len,
                       reply_sz - len,
                       "%s{\"index\":%d,\"active\":%s,\"panes\":%d,"
@@ -410,9 +437,8 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
                       ws->pane_count,
                       layout_label(ws->layout),
                       ws->main_ratio,
-                      focused_title,
-                      focused_app_id);
-
+                      ft,
+                      fa);
       if(is_active && ws->pane_count > 0) {
         len += snprintf(reply + len, reply_sz - len, ",\"pane_list\":[");
         for(int j = 0; j < ws->pane_count; j++) {
@@ -434,13 +460,11 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         }
         len += snprintf(reply + len, reply_sz - len, "]");
       }
-
       len += snprintf(reply + len, reply_sz - len, "}");
     }
     len += snprintf(reply + len, reply_sz - len, "]}");
 
-
-    /* ── set_layout ────────────────────────────────────────────────────────── */
+    /* ── set_layout ─────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "set_layout")) {
     if(!rest || !rest[0]) {
@@ -461,9 +485,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     else if(!strcasecmp(rest, "monocle"))
       lay = LAYOUT_MONOCLE;
     if((int)lay < 0) {
-      REPLY(
-          "err: unknown layout '%s' — try bsp|spiral|columns|rows|threecol|monocle",
-          rest);
+      REPLY("err: unknown layout '%s'", rest);
     } else {
       s->twm.workspaces[s->twm.active_ws].layout = lay;
       twm_reflow(&s->twm);
@@ -471,18 +493,15 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       REPLY("ok: layout %s", layout_label(lay));
     }
 
-    /* ── query_pane ─────────────────────────────────────────────────────────── */
+    /* ── query_pane ─────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "query_pane")) {
     uint32_t qid = rest ? (uint32_t)atoi(rest) : 0;
-    if(!qid) {
-      qid = (uint32_t)twm_focused_id(&s->twm);
-    }
+    if(!qid) qid = (uint32_t)twm_focused_id(&s->twm);
     Pane *p = qid ? twm_pane_by_id(&s->twm, qid) : NULL;
     if(!p) {
       REPLY("err: pane %u not found", qid);
     } else {
-      /* Find which workspace this pane lives on */
       int ws_idx = -1;
       for(int i = 0; i < s->twm.ws_count; i++) {
         for(int j = 0; j < s->twm.workspaces[i].pane_count; j++) {
@@ -493,15 +512,12 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         }
         if(ws_idx >= 0) break;
       }
-      /* Find anim rect */
       Rect r = anim_get_rect(&s->anim, qid, p->rect);
-      REPLY("{"
-            "\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
+      REPLY("{\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
             "\"workspace\":%d,"
             "\"rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
             "\"anim_rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
-            "\"floating\":%s,\"fullscreen\":%s,\"focused\":%s"
-            "}",
+            "\"floating\":%s,\"fullscreen\":%s,\"focused\":%s}",
             p->id,
             p->title,
             p->app_id,
@@ -519,58 +535,225 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
             (twm_focused_id(&s->twm) == qid) ? "true" : "false");
     }
 
-    /* ── subscribe ──────────────────────────────────────────────────────────── */
+    /* ── subscribe ──────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "subscribe")) {
-    /* The caller's fd is held open by the ipc_read_cb; we need access to it.
-     * subscribe stores the fd in server->subscriber_fds so future event-push
-     * calls can write JSON events to it.  The reply fd is passed through the
-     * special ipc_dispatch_with_fd() variant.  When called via the normal
-     * ipc_dispatch() (no fd), we reply with an informational error. */
     REPLY("err: use ipc_subscribe() directly (internal call path required)");
 
-    /* ── Overlay ───────────────────────────────────────────────────────── */
+    /* ── Overlay ────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "overlay")) {
-    /* overlay [toggle|show|hide|panel <1-0>] */
     TrixieOutput *o;
     if(!rest || !strcmp(rest, "toggle")) {
       wl_list_for_each(o, &s->outputs, link) if(o->overlay)
           overlay_toggle(o->overlay);
       server_request_redraw(s);
       REPLY("ok: overlay toggled");
+
     } else if(!strcmp(rest, "show")) {
       wl_list_for_each(
           o, &s->outputs, link) if(o->overlay && !overlay_visible(o->overlay))
           overlay_toggle(o->overlay);
       server_request_redraw(s);
       REPLY("ok: overlay shown");
+
     } else if(!strcmp(rest, "hide")) {
       wl_list_for_each(
           o, &s->outputs, link) if(o->overlay && overlay_visible(o->overlay))
           overlay_toggle(o->overlay);
       server_request_redraw(s);
       REPLY("ok: overlay hidden");
+
+    } else if(!strncmp(rest, "cd ", 3)) {
+      const char *path = rest + 3;
+      while(*path == ' ' || *path == '\t')
+        path++;
+      if(!path[0]) {
+        REPLY("err: usage: overlay cd <path>");
+        return;
+      }
+      wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+          overlay_set_cwd(o->overlay, path);
+      server_request_redraw(s);
+      REPLY("ok: cwd → %s", path);
+
+    } else if(!strncmp(rest, "notify ", 7)) {
+      char nbuf[512];
+      strncpy(nbuf, rest + 7, sizeof(nbuf) - 1);
+      char       *sp    = strchr(nbuf, ' ');
+      const char *title = nbuf, *msg = "";
+      if(sp) {
+        *sp = '\0';
+        msg = sp + 1;
+      }
+      wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+          overlay_notify(o->overlay, title, msg);
+      server_request_redraw(s);
+      REPLY("ok: notified");
+
+    } else if(!strncmp(rest, "run ", 4)) {
+      const char *runcmd = rest + 4;
+      while(*runcmd == ' ' || *runcmd == '\t')
+        runcmd++;
+      if(!runcmd[0]) {
+        REPLY("err: usage: overlay run <cmd>");
+        return;
+      }
+      wl_list_for_each(o, &s->outputs, link) {
+        if(o->overlay) {
+          if(!overlay_visible(o->overlay)) overlay_toggle(o->overlay);
+          overlay_show_panel(o->overlay, "log");
+        }
+      }
+      server_spawn(s, runcmd);
+      server_request_redraw(s);
+      REPLY("ok: running %s", runcmd);
+
+    } else if(!strncmp(rest, "panel ", 6)) {
+      const char *pname = rest + 6;
+      while(*pname == ' ' || *pname == '\t')
+        pname++;
+      wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+          overlay_show_panel(o->overlay, pname);
+      server_request_redraw(s);
+      REPLY("ok: panel %s", pname);
+
+    } else if(!strcmp(rest, "git-refresh")) {
+      wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+          overlay_git_invalidate(o->overlay);
+      server_request_redraw(s);
+      REPLY("ok: git refreshed");
+
     } else {
-      REPLY("err: usage: overlay [toggle|show|hide]");
+      REPLY("err: usage: overlay [toggle|show|hide|cd <path>|notify <title> "
+            "<msg>|run <cmd>|panel <name>|git-refresh]");
     }
 
-    /* ── Build ─────────────────────────────────────────────────────────── */
+    /* ── Build ──────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "build")) {
-    /* build [run]  — trigger async build; open overlay on build panel */
     TrixieOutput *o;
     wl_list_for_each(o, &s->outputs, link) {
       if(o->overlay) {
         if(!overlay_visible(o->overlay)) overlay_toggle(o->overlay);
-        /* Feed a synthetic 'Enter' keypress to trigger the build — the
-         * overlay's build panel starts a build on Enter when not editing. */
-        overlay_key(o->overlay, XKB_KEY_6, 0); /* switch to panel 6 (build) */
+        overlay_key(o->overlay, XKB_KEY_6, 0);
         overlay_key(o->overlay, XKB_KEY_Return, 0);
       }
     }
     server_request_redraw(s);
     REPLY("ok: build triggered");
+
+    /* ── Nvim bridge: nvim_state ────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "nvim_state")) {
+    if(!rest || !rest[0]) {
+      REPLY("err: usage: nvim_state <file>\\t<line>\\t<col>\\t<ft>");
+      return;
+    }
+    char tmp[1024];
+    strncpy(tmp, rest, sizeof(tmp) - 1);
+
+    char *file = tmp;
+    char *ln_s = strchr(file, '\t');
+    if(ln_s)
+      *ln_s++ = '\0';
+    else
+      ln_s = (char *)"0";
+    char *col_s = strchr(ln_s, '\t');
+    if(col_s)
+      *col_s++ = '\0';
+    else
+      col_s = (char *)"0";
+    char *ft = strchr(col_s, '\t');
+    if(ft)
+      *ft++ = '\0';
+    else
+      ft = (char *)"";
+
+    strncpy(s->nvim.file, file, sizeof(s->nvim.file) - 1);
+    strncpy(s->nvim.filetype, ft, sizeof(s->nvim.filetype) - 1);
+    s->nvim.line      = atoi(ln_s);
+    s->nvim.col       = atoi(col_s);
+    s->nvim.connected = file[0] != '\0';
+
+    /* Forward to overlay nvim panel */
+    TrixieOutput *o;
+    wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+        overlay_nvim_state(o->overlay, file, s->nvim.line, s->nvim.col, ft);
+
+    /* Broadcast to other subscribers */
+    char ev[1280];
+    snprintf(ev,
+             sizeof(ev),
+             "{\"event\":\"nvim_state\",\"file\":\"%s\","
+             "\"line\":%d,\"col\":%d,\"filetype\":\"%s\"}\n",
+             file,
+             s->nvim.line,
+             s->nvim.col,
+             ft);
+    ipc_push_event(s, ev, strlen(ev));
+
+    /* Auto-update overlay cwd to the file's directory */
+    if(file[0]) {
+      char dir[1024];
+      strncpy(dir, file, sizeof(dir) - 1);
+      char *slash = strrchr(dir, '/');
+      if(slash && slash != dir) {
+        *slash = '\0';
+        wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+            overlay_set_cwd(o->overlay, dir);
+      }
+    }
+    REPLY("ok");
+
+    /* ── Nvim bridge: nvim_diag ─────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "nvim_diag")) {
+    if(!rest) rest = (char *)"[]";
+    strncpy(s->nvim.diag_json, rest, sizeof(s->nvim.diag_json) - 1);
+    TrixieOutput *o;
+    wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+        overlay_nvim_diag(o->overlay, rest);
+    server_request_redraw(s);
+    REPLY("ok");
+
+    /* ── Nvim bridge: nvim_buffers ──────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "nvim_buffers")) {
+    if(!rest) rest = (char *)"[]";
+    strncpy(s->nvim.buffers_json, rest, sizeof(s->nvim.buffers_json) - 1);
+    TrixieOutput *o;
+    wl_list_for_each(o, &s->outputs, link) if(o->overlay)
+        overlay_nvim_buffers(o->overlay, rest);
+    REPLY("ok");
+
+    /* ── Nvim bridge: quickfix_get ──────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "quickfix_get")) {
+    /* overlay_quickfix_json writes into reply directly */
+    overlay_quickfix_json(reply, reply_sz);
+
+    /* ── Nvim bridge: nvim_open ─────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "nvim_open")) {
+    if(!rest || !rest[0]) {
+      REPLY("err: usage: nvim_open <file> [<line>]");
+      return;
+    }
+    char tmp2[1024];
+    strncpy(tmp2, rest, sizeof(tmp2) - 1);
+    char *sp2 = strchr(tmp2, ' ');
+    int   ln2 = 0;
+    if(sp2) {
+      *sp2++ = '\0';
+      ln2    = atoi(sp2);
+    }
+    if(nvim_is_connected()) {
+      nvim_open_file(tmp2, ln2);
+      REPLY("ok: opening %s:%d in nvim", tmp2, ln2);
+    } else {
+      REPLY("err: nvim not connected");
+    }
 
   } else {
     REPLY("err: unknown command '%s'", cmd);
@@ -579,17 +762,13 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
 #undef REPLY
 }
 
-/* ── subscribe variant: called from ipc_read_cb with the raw client fd ──── */
+/* ── subscribe variant ──────────────────────────────────────────────────── */
 
-/* Register `client_fd` as a subscriber and keep it open.
- * Returns false if the subscriber table is full. */
 bool ipc_subscribe(TrixieServer *s, int client_fd) {
   if(s->subscriber_count >= MAX_IPC_SUBSCRIBERS) return false;
-  /* Put the fd in non-blocking mode so slow readers don't stall the compositor */
   int flags = fcntl(client_fd, F_GETFL, 0);
   if(flags >= 0) fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
   s->subscriber_fds[s->subscriber_count++] = client_fd;
-  /* Send initial state as a "hello" event */
   char buf[256];
   snprintf(buf,
            sizeof(buf),

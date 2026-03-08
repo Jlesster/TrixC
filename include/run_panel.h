@@ -11,7 +11,7 @@
 /* ── Lifecycle ─────────────────────────────────────────────────────────── */
 
 /* Auto-populate presets from project files; idempotent. */
-void run_configs_init(void);
+void run_configs_init(const OverlayCfg);
 
 /* Non-blocking reap of finished child processes.  Call each render frame. */
 void run_configs_poll(void);

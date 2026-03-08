@@ -9,13 +9,15 @@
  *        log filter; git split-diff+stage/unstage; async ripgrep search;
  *        named run configs (Cargo/Go/Maven/Gradle); dep inspector with
  *        outdated checks; IPC overlay/build commands; full key routing.
+ * 0.3.1  Nvim/IPC bridge: nvim_state, nvim_diag, nvim_buffers, quickfix_get,
+ *        nvim_open commands; NvimState in TrixieServer; overlay receivers.
  */
 #pragma once
 
 #define TRIXIE_VERSION_MAJOR 0
 #define TRIXIE_VERSION_MINOR 3
-#define TRIXIE_VERSION_PATCH 0
-#define TRIXIE_VERSION_STR   "0.3.0"
+#define TRIXIE_VERSION_PATCH 1
+#define TRIXIE_VERSION_STR   "0.3.1"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -240,8 +242,8 @@ typedef enum {
   ACTION_SWITCH_VT,
   ACTION_EMERGENCY_QUIT,
   ACTION_TOGGLE_OVERLAY,
-  ACTION_RESIZE_RATIO, /* keyboard-driven main ratio nudge  (Feature 3) */
-  ACTION_FOCUS_URGENT, /* jump to most-recently-urgent pane (Feature 4) */
+  ACTION_RESIZE_RATIO,
+  ACTION_FOCUS_URGENT,
 } ActionKind;
 
 typedef struct {
@@ -249,7 +251,7 @@ typedef struct {
   char       exec_cmd[256];
   char       name[64];
   int        n;
-  float      ratio_delta; /* used by ACTION_RESIZE_RATIO */
+  float      ratio_delta;
 } Action;
 
 typedef struct {
@@ -351,6 +353,32 @@ typedef enum {
   THEME_TOKYO_NIGHT,
 } ThemeId;
 
+#define MAX_DEV_LANGS 8
+
+typedef struct {
+  char name[32];
+  char build[256];
+  char run[256];
+  char test[256];
+  char fmt[256];
+  char lint[256];
+  char lsp[128];
+} DevLangCfg;
+
+typedef struct {
+  bool       enabled;
+  char       editor[128];
+  char       terminal[128];
+  char       nvim_socket[256];
+  char       nvim_listen_addr[256];
+  char       project_root[512];
+  char       default_panel[32];
+  bool       lsp_diagnostics;
+  int        lsp_poll_ms;
+  DevLangCfg langs[MAX_DEV_LANGS];
+  int        lang_count;
+} OverlayCfg;
+
 typedef struct {
   /* Fonts */
   char          font_path[256];
@@ -390,7 +418,7 @@ typedef struct {
   /* Scratchpads */
   ScratchpadCfg scratchpads[MAX_SCRATCHPADS];
   int           scratchpad_count;
-  /* Per-workspace layout overrides — set by "workspace N { }" blocks (Feature 1) */
+  /* Per-workspace layout overrides */
   Layout        ws_layout[MAX_WORKSPACES];
   bool          ws_layout_set[MAX_WORKSPACES];
   float         ws_ratio[MAX_WORKSPACES];
@@ -400,6 +428,7 @@ typedef struct {
   int           exec_once_count;
   char          exec[16][256];
   int           exec_count;
+  OverlayCfg    overlay;
 } Config;
 
 void config_defaults(Config *c);
@@ -409,17 +438,9 @@ void config_apply_fallback_keybinds(Config *c);
 void config_set_theme(Config *c, const char *name);
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §5a  Window rule matching helper  (Fix 2)
- *
- * Centralises all matching logic so every caller (deco.c, main.c, bar.c)
- * uses identical semantics:
- *   • "title:foo"   — substring match against p->title
- *   • "*foo*"       — substring glob against p->app_id
- *   • "foo"         — exact match against p->app_id
+ * §5a  Window rule matching helper
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* Forward-declare Pane here so rule_matches can reference it.
- * Full definition is in §6 below. */
 typedef struct Pane_s Pane;
 
 #include <string.h>
@@ -441,7 +462,6 @@ struct Pane_s {
   char     title[256];
   char     app_id[128];
 };
-/* Keep the plain 'Pane' name available (typedef above covers it). */
 
 typedef struct {
   int    index;
@@ -479,19 +499,13 @@ typedef struct {
   int        pane_count;
   Scratchpad scratchpads[MAX_SCRATCHPADS];
   int        scratch_count;
-  /* Bitmask: bit i set → workspace i has at least one urgent pane.
-   * Set in view_handle_set_urgent; cleared in twm_set_focused / twm_switch_ws.
-   * (Feature 4 / Feature 5) */
   uint32_t   ws_urgent_mask;
 } TwmState;
 
-/* ── rule_matches inline body (needs Pane to be complete) ── */
 static inline bool rule_matches(const WinRule *wr, const Pane *p) {
   const char *pat = wr->app_id;
   if(!pat[0]) return false;
-
   if(!strncmp(pat, "title:", 6)) return strstr(p->title, pat + 6) != NULL;
-
   if(strchr(pat, '*')) {
     size_t pl        = strlen(pat);
     bool   ls        = pat[0] == '*';
@@ -502,7 +516,6 @@ static inline bool rule_matches(const WinRule *wr, const Pane *p) {
       core[cl++] = pat[i];
     return strstr(p->app_id, core) != NULL;
   }
-
   return strcmp(p->app_id, pat) == 0;
 }
 
@@ -630,6 +643,20 @@ void overlay_update(TrixieOverlay *o,
                     const Config  *cfg,
                     BarWorkerPool *pool);
 void overlay_resize(TrixieOverlay *o, int w, int h);
+void overlay_set_cwd(TrixieOverlay *o, const char *path);
+void overlay_notify(TrixieOverlay *o, const char *title, const char *msg);
+void overlay_show_panel(TrixieOverlay *o, const char *name);
+void overlay_git_invalidate(TrixieOverlay *o);
+
+/* nvim bridge receivers — called from ipc_dispatch when nvim pushes state */
+void overlay_nvim_state(
+    TrixieOverlay *o, const char *file, int line, int col, const char *filetype);
+void overlay_nvim_diag(TrixieOverlay *o, const char *json);
+void overlay_nvim_buffers(TrixieOverlay *o, const char *json);
+
+/* Serialise the current build error list as a JSON quickfix array.
+ * Used by the IPC quickfix_get command so nvim can load errors natively. */
+void overlay_quickfix_json(char *out, size_t sz);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §11  Compositor structs
@@ -682,7 +709,7 @@ struct TrixieView {
   struct wlr_scene_tree *scene_tree;
   PaneId                 pane_id;
   bool                   mapped;
-  bool                   urgent; /* set when app signals urgency (Feature 4) */
+  bool                   urgent;
 
   struct wl_listener map;
   struct wl_listener unmap;
@@ -691,8 +718,7 @@ struct TrixieView {
   struct wl_listener request_fullscreen;
   struct wl_listener set_title;
   struct wl_listener set_app_id;
-  struct wl_listener
-      urgent_listener; /* repurposed xdg request_minimize (Feature 4) */
+  struct wl_listener urgent_listener;
 
   struct wlr_foreign_toplevel_handle_v1 *foreign_handle;
   struct wl_listener                     foreign_request_activate;
@@ -709,6 +735,17 @@ typedef struct {
   struct wl_listener                 destroy;
 } TrixieLayerSurface;
 
+/* Live state pushed by the nvim bridge plugin */
+typedef struct {
+  char file[1024];
+  char filetype[64];
+  char diag_json[65536];    /* raw JSON array from nvim_diag */
+  char buffers_json[65536]; /* raw JSON array from nvim_buffers */
+  int  line;
+  int  col;
+  bool connected;
+} NvimState;
+
 struct TrixieServer {
   struct wl_display     *display;
   struct wlr_backend    *backend;
@@ -724,6 +761,7 @@ struct TrixieServer {
 
   struct wlr_scene_tree *layer_background;
   struct wlr_scene_tree *layer_windows;
+  struct wlr_scene_tree *layer_chrome;
   struct wlr_scene_tree *layer_floating;
   struct wlr_scene_tree *layer_overlay;
   struct wlr_scene_rect *bg_rect;
@@ -779,6 +817,7 @@ struct TrixieServer {
   AnimSet       anim;
   Config        cfg;
   BarWorkerPool bar_workers;
+  NvimState     nvim; /* live state from the nvim bridge */
 
   bool running;
   bool exec_once_done;
@@ -794,6 +833,7 @@ struct TrixieServer {
   struct wl_event_source *inotify_src;
 
   struct wl_event_source *idle_timer;
+  struct wl_event_source *nvim_timer;
   int                     idle_timeout_ms;
 };
 
@@ -827,6 +867,7 @@ bool ipc_subscribe(TrixieServer *s, int client_fd);
 void ipc_push_focus_changed(TrixieServer *s);
 void ipc_push_workspace_changed(TrixieServer *s);
 void ipc_push_title_changed(TrixieServer *s, PaneId id);
+void ipc_push_build_done(TrixieServer *s, int exit_code, int err_count);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §13  Lua scripting layer

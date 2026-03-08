@@ -112,3 +112,5 @@ void draw_cursor_line(uint32_t *px,
                       Color     bg,
                       int       cw,
                       int       ch);
+
+void overlay_open_file(const char *path, int line, const OverlayCfg *ov_cfg);

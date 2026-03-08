@@ -16,11 +16,15 @@ src = files(
   'src/bar_worker.c',
   'src/config.c',
   'src/deco.c',
+  'src/files_panel.c',
   'src/ipc.c',
   'src/layout.c',
+  'src/lsp_panel.c',
   'src/lua.c',
   'src/main.c',
+  'src/nvim_panel.c',
   'src/overlay.c',
+  'src/run_panel.c',
   'src/twm.c',
 )
 
