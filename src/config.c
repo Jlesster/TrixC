@@ -1238,6 +1238,18 @@ static void parse_block(Lexer      *l,
         c->colors.active_border = color_from_str(val);
       else if(!strcmp(bk, "inactive_border") || !strcmp(bk, "inactive_border_color"))
         c->colors.inactive_border = color_from_str(val);
+      else if(!strcmp(bk, "gesture")) {
+        CVals cv        = collect_vals(l, val);
+        char  full[512] = { 0 };
+        for(int i = 0; i < cv.n; i++) {
+          if(i) strncat(full, i == 1 ? ", " : " ", sizeof(full) - strlen(full) - 1);
+          strncat(full, cv.s[i], sizeof(full) - strlen(full) - 1);
+        }
+        gesture_parse_bind(&c->gestures, full);
+      } else if(!strcmp(bk, "gesture_swipe_threshold"))
+        c->gestures.swipe_threshold = (float)atof(val);
+      else if(!strcmp(bk, "gesture_pinch_threshold"))
+        c->gestures.pinch_threshold = (float)atof(val);
       else if(block[0])
         wlr_log(WLR_DEBUG, "config: unknown key '%s' in '%s'", key, block);
     }

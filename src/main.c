@@ -24,6 +24,7 @@
 #include "trixie.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <libinput.h>
 #include <linux/input-event-codes.h>
 #include <signal.h>
 #include <stdio.h>
@@ -31,6 +32,8 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <wlr/backend/libinput.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 
 #include <execinfo.h>
@@ -92,6 +95,70 @@ static void keyboard_handle_destroy(struct wl_listener *l, void *data);
   ((type *)((char *)(ptr) - offsetof(type, member)))
 
 /* ── xdg-activation ───────────────────────────────────────────────────────── */
+
+static void handle_swipe_begin(struct wl_listener *l, void *data) {
+  TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_begin);
+  struct wlr_pointer_swipe_begin_event *ev = data;
+  gesture_swipe_begin(&s->gesture, &s->cfg.gestures, s, (int)ev->fingers);
+  if(s->pointer_gestures)
+    wlr_pointer_gestures_v1_send_swipe_begin(
+        s->pointer_gestures, s->seat, ev->time_msec, ev->fingers);
+}
+
+static void handle_swipe_update(struct wl_listener *l, void *data) {
+  TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_update);
+  struct wlr_pointer_swipe_update_event *ev = data;
+  gesture_swipe_update(&s->gesture, &s->cfg.gestures, s, ev->dx, ev->dy);
+  if(s->pointer_gestures)
+    wlr_pointer_gestures_v1_send_swipe_update(/* 5 args — no fingers */
+                                              s->pointer_gestures,
+                                              s->seat,
+                                              ev->time_msec,
+                                              ev->dx,
+                                              ev->dy);
+}
+
+static void handle_swipe_end(struct wl_listener *l, void *data) {
+  TrixieServer                       *s  = CONTAINER_OF(l, TrixieServer, swipe_end);
+  struct wlr_pointer_swipe_end_event *ev = data;
+  gesture_swipe_end(&s->gesture, &s->cfg.gestures, s, ev->cancelled);
+  if(s->pointer_gestures)
+    wlr_pointer_gestures_v1_send_swipe_end(
+        s->pointer_gestures, s->seat, ev->time_msec, ev->cancelled);
+}
+
+static void handle_pinch_begin(struct wl_listener *l, void *data) {
+  TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_begin);
+  struct wlr_pointer_pinch_begin_event *ev = data;
+  gesture_pinch_begin(&s->gesture, &s->cfg.gestures, s, (int)ev->fingers);
+  if(s->pointer_gestures)
+    wlr_pointer_gestures_v1_send_pinch_begin(
+        s->pointer_gestures, s->seat, ev->time_msec, ev->fingers);
+}
+
+static void handle_pinch_update(struct wl_listener *l, void *data) {
+  TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_update);
+  struct wlr_pointer_pinch_update_event *ev = data;
+  gesture_pinch_update(&s->gesture, &s->cfg.gestures, s, ev->scale);
+  if(s->pointer_gestures)
+    wlr_pointer_gestures_v1_send_pinch_update(/* 7 args — no fingers */
+                                              s->pointer_gestures,
+                                              s->seat,
+                                              ev->time_msec,
+                                              ev->dx,
+                                              ev->dy,
+                                              ev->scale,
+                                              ev->rotation);
+}
+
+static void handle_pinch_end(struct wl_listener *l, void *data) {
+  TrixieServer                       *s  = CONTAINER_OF(l, TrixieServer, pinch_end);
+  struct wlr_pointer_pinch_end_event *ev = data;
+  gesture_pinch_end(&s->gesture, &s->cfg.gestures, s, ev->cancelled);
+  if(s->pointer_gestures)
+    wlr_pointer_gestures_v1_send_pinch_end(
+        s->pointer_gestures, s->seat, ev->time_msec, ev->cancelled);
+}
 
 static void handle_xdg_activation(struct wl_listener *listener, void *data) {
   TrixieServer *s = wl_container_of(listener, s, xdg_activation_request);
@@ -502,6 +569,13 @@ void server_request_redraw(TrixieServer *s) {
 
 void server_dispatch_action(TrixieServer *s, Action *a) {
   switch(a->kind) {
+    case ACTION_SCREENSHOT_FULL: screenshot_full(s); break;
+    case ACTION_SCREENSHOT_WINDOW: screenshot_window(s); break;
+    case ACTION_SCREENSHOT_REGION: {
+      ScreenshotRegion r = { 0 };
+      screenshot_region(s, r); /* r.w==0 → slurp interactive picker */
+      break;
+    }
     case ACTION_QUIT:
       s->running = false;
       wl_display_terminate(s->display);
@@ -950,6 +1024,32 @@ static void server_new_keyboard(TrixieServer *s, struct wlr_input_device *dev) {
 
 static void server_new_pointer(TrixieServer *s, struct wlr_input_device *dev) {
   wlr_cursor_attach_input_device(s->cursor, dev);
+
+  if(wlr_input_device_is_libinput(dev)) {
+    struct libinput_device *li = wlr_libinput_get_device_handle(dev);
+    libinput_device_config_tap_set_enabled(li, LIBINPUT_CONFIG_TAP_ENABLED);
+    libinput_device_config_scroll_set_natural_scroll_enabled(li, 1);
+    libinput_device_config_tap_set_drag_enabled(li, LIBINPUT_CONFIG_DRAG_ENABLED);
+    libinput_device_config_tap_set_button_map(
+        li, LIBINPUT_CONFIG_TAP_MAP_LMR); /* 1-tap=left, 2-tap=right, 3-tap=middle */
+  }
+
+  /* Attach gesture signal listeners directly to this pointer device. */
+  struct wlr_pointer *ptr = wlr_pointer_from_input_device(dev);
+
+  s->swipe_begin.notify  = handle_swipe_begin;
+  s->swipe_update.notify = handle_swipe_update;
+  s->swipe_end.notify    = handle_swipe_end;
+  s->pinch_begin.notify  = handle_pinch_begin;
+  s->pinch_update.notify = handle_pinch_update;
+  s->pinch_end.notify    = handle_pinch_end;
+
+  wl_signal_add(&ptr->events.swipe_begin, &s->swipe_begin);
+  wl_signal_add(&ptr->events.swipe_update, &s->swipe_update);
+  wl_signal_add(&ptr->events.swipe_end, &s->swipe_end);
+  wl_signal_add(&ptr->events.pinch_begin, &s->pinch_begin);
+  wl_signal_add(&ptr->events.pinch_update, &s->pinch_update);
+  wl_signal_add(&ptr->events.pinch_end, &s->pinch_end);
 }
 
 static void handle_new_input(struct wl_listener *listener, void *data) {
@@ -2136,7 +2236,7 @@ int main(int argc, char *argv[]) {
 
   s->relative_pointer_mgr = wlr_relative_pointer_manager_v1_create(s->display);
   s->foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(s->display);
-  wlr_screencopy_manager_v1_create(s->display);
+  s->screencopy_mgr       = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
   wlr_gamma_control_manager_v1_create(s->display);
   wlr_content_type_manager_v1_create(s->display, 1);
@@ -2196,6 +2296,16 @@ int main(int argc, char *argv[]) {
   wl_signal_add(&s->cursor->events.button, &s->cursor_button);
   wl_signal_add(&s->cursor->events.axis, &s->cursor_axis);
   wl_signal_add(&s->cursor->events.frame, &s->cursor_frame);
+
+  s->pointer_gestures = wlr_pointer_gestures_v1_create(s->display);
+  gesture_tracker_init(&s->gesture);
+
+  s->swipe_begin.notify  = handle_swipe_begin;
+  s->swipe_update.notify = handle_swipe_update;
+  s->swipe_end.notify    = handle_swipe_end;
+  s->pinch_begin.notify  = handle_pinch_begin;
+  s->pinch_update.notify = handle_pinch_update;
+  s->pinch_end.notify    = handle_pinch_end;
 
   s->seat                       = wlr_seat_create(s->display, s->cfg.seat_name);
   s->seat_request_cursor.notify = handle_request_cursor;

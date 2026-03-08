@@ -19,6 +19,9 @@
 #define TRIXIE_VERSION_PATCH 1
 #define TRIXIE_VERSION_STR   "0.3.1"
 
+#include "gesture.h"
+#include "screenshot.h"
+
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -214,6 +217,9 @@ typedef enum {
 } ModKey;
 
 typedef enum {
+  ACTION_SCREENSHOT_FULL,
+  ACTION_SCREENSHOT_WINDOW,
+  ACTION_SCREENSHOT_REGION,
   ACTION_QUIT,
   ACTION_RELOAD,
   ACTION_EXEC,
@@ -429,6 +435,7 @@ typedef struct {
   char          exec[16][256];
   int           exec_count;
   OverlayCfg    overlay;
+  GestureConfig gestures;
 } Config;
 
 void config_defaults(Config *c);
@@ -755,6 +762,17 @@ struct TrixieServer {
   struct wlr_renderer   *renderer;
   struct wlr_allocator  *allocator;
   struct wlr_compositor *compositor;
+
+  struct wlr_screencopy_manager_v1 *screencopy_mgr;
+
+  struct wlr_pointer_gestures_v1 *pointer_gestures;
+  struct wl_listener              swipe_begin;
+  struct wl_listener              swipe_update;
+  struct wl_listener              swipe_end;
+  struct wl_listener              pinch_begin;
+  struct wl_listener              pinch_update;
+  struct wl_listener              pinch_end;
+  GestureTracker                  gesture;
 
   struct wlr_scene                 *scene;
   struct wlr_scene_output_layout   *scene_layout;

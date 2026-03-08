@@ -613,6 +613,7 @@
           "/home/jless/Code/c-cpp/c/Trixie/src/config.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/deco.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/files_panel.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/gesture.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/ipc.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/layout.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/lsp_panel.c",
@@ -621,6 +622,7 @@
           "/home/jless/Code/c-cpp/c/Trixie/src/nvim_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/overlay.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/run_panel.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/screenshot.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/twm.c"
         ],
         "generated_sources": [
@@ -665,6 +667,7 @@
           "/usr/lib/libxkbcommon.so",
           "/usr/lib/libfreetype.so",
           "/usr/lib/libluajit-5.1.so",
+          "/usr/lib/libinput.so",
           "-Wl,--end-group",
           "-Wl,--end-group"
         ]
@@ -687,7 +690,8 @@
       "xkbcommon",
       "freetype2",
       "luajit",
-      "harfbuzz"
+      "harfbuzz",
+      "libinput"
     ],
     "depends": [],
     "win_subsystem": "console",

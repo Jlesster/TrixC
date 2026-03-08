@@ -17,6 +17,7 @@ src = files(
   'src/config.c',
   'src/deco.c',
   'src/files_panel.c',
+  'src/gesture.c',
   'src/ipc.c',
   'src/layout.c',
   'src/lsp_panel.c',
@@ -25,6 +26,7 @@ src = files(
   'src/nvim_panel.c',
   'src/overlay.c',
   'src/run_panel.c',
+  'src/screenshot.c',
   'src/twm.c',
 )
 
@@ -34,6 +36,7 @@ inc = include_directories('include', 'include/protocols')
 # ── Dependencies ─────────────────────────────────────────────────────────────
 wayland_protocols_dep = dependency('wayland-protocols', required: true)
 wp_dir = wayland_protocols_dep.get_variable('pkgdatadir')
+libinput_dep = dependency('libinput', required: true)
 history_dep = dependency('history', required: true)
 lua_dep = dependency('luajit', required: true)
 libdrm_dep = dependency('libdrm', required: true)
@@ -203,6 +206,7 @@ exe = executable(
     freetype_dep,
     lua_dep,
     harfbuzz_dep,
+    libinput_dep,
   ],
   c_args: ['-DWLR_USE_UNSTABLE', '-D_POSIX_C_SOURCE=200809L'],
   link_args: ['-Wl,--as-needed'],

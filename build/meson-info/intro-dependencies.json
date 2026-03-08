@@ -348,5 +348,22 @@
     "meson_variables": [
       "lua_dep"
     ]
+  },
+  {
+    "name": "libinput",
+    "type": "pkgconfig",
+    "version": "1.30.1",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libinput.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "libinput_dep"
+    ]
   }
 ]

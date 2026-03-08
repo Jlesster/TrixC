@@ -1,4 +1,4 @@
-Build started at 2026-03-08T20:26:21.403368
+Build started at 2026-03-08T21:25:34.354401
 Main binary: /usr/bin/python
 Build Options: 
 Python system: Linux
@@ -46,6 +46,73 @@ stdout:
 //usr/share/wayland-protocols
 -----------
 Got pkg-config variable pkgdatadir : //usr/share/wayland-protocols
+Pkg-config binary missing from cross or native file, or env var undefined.
+Trying a default Pkg-config fallback at pkg-config
+Found pkg-config: YES (/usr/sbin/pkg-config) 2.5.1
+Determining dependency 'libinput' with pkg-config executable '/usr/sbin/pkg-config'
+env[PKG_CONFIG_PATH]: 
+env[PKG_CONFIG]: /usr/sbin/pkg-config
+-----------
+Called: `/usr/sbin/pkg-config --modversion libinput` -> 0
+stdout:
+1.30.1
+-----------
+env[PKG_CONFIG_PATH]: 
+env[PKG_CONFIG]: /usr/sbin/pkg-config
+-----------
+Called: `/usr/sbin/pkg-config --cflags libinput` -> 0
+env[PKG_CONFIG_ALLOW_SYSTEM_LIBS]: 1
+env[PKG_CONFIG_PATH]: 
+env[PKG_CONFIG]: /usr/sbin/pkg-config
+-----------
+Called: `/usr/sbin/pkg-config --libs libinput` -> 0
+stdout:
+-L/usr/lib -linput
+-----------
+env[PKG_CONFIG_PATH]: 
+env[PKG_CONFIG]: /usr/sbin/pkg-config
+-----------
+Called: `/usr/sbin/pkg-config --libs libinput` -> 0
+stdout:
+-linput
+-----------
+Using cached run result:
+Code:
+ 
+        #include<stddef.h>
+        #include<stdio.h>
+        int main(void) {
+            printf("%ld\n", (long)(sizeof(void *)));
+            return 0;
+        }
+Args:
+ []
+Cached run returncode:
+ 0
+Cached run stdout:
+ 8
+
+Cached run stderr:
+ 
+Running compile:
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpa2qum31d
+Code:
+
+-----------
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpa2qum31d/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpa2qum31d/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
+stdout:
+install: /usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/
+programs: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/
+libraries: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../lib/:/lib/x86_64-pc-linux-gnu/15.2.1/:/lib/../lib/:/usr/lib/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../:/lib/:/usr/lib/
+-----------
+Running compile:
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7z077aj1
+Code:
+int main(void) { return 0; }
+
+-----------
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7z077aj1/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7z077aj1/output.exe -D_FILE_OFFSET_BITS=64 -O0 /usr/lib/libinput.so -Wl,--allow-shlib-undefined` -> 0
+Run-time dependency libinput found: YES 1.30.1
 Dependency history found: YES 8.3 (cached)
 Dependency luajit found: YES 2.1.1767980792 (cached)
 Dependency libdrm found: YES 2.4.131 (cached)
@@ -65,14 +132,3 @@ Program wayland-scanner found: YES (/usr/sbin/wayland-scanner)
 Build targets in project: 20
 
 Found ninja-1.13.2 at /usr/sbin/ninja
-Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpf7oz4pkv
-Code:
-
------------
-Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpf7oz4pkv/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpf7oz4pkv/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
-stdout:
-install: /usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/
-programs: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/
-libraries: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../lib/:/lib/x86_64-pc-linux-gnu/15.2.1/:/lib/../lib/:/usr/lib/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../:/lib/:/usr/lib/
------------
