@@ -1,0 +1,211 @@
+.TH TRIXIE 5 "2025" "Trixie 0.2.0" "Trixie Compositor"
+.SH NAME
+trixie.conf \- configuration file for the trixie Wayland compositor
+.SH SYNOPSIS
+.I ~/.config/trixie/trixie.conf
+.SH DESCRIPTION
+The trixie configuration file uses a simple key = value syntax with
+optional block scoping.  Lines beginning with
+.B #
+are comments.  Shell-style variable expansion is supported:
+.B $VAR
+is replaced with the value of the environment variable
+.I VAR
+at load time.
+.PP
+The file is watched via inotify; changing it while trixie is running will
+trigger an automatic reload.
+.SH GENERAL KEYS
+These keys appear at the top level or inside a
+.B general { }
+block.
+.TP
+.BI theme " = name"
+Apply a built-in colour preset.  Valid names:
+.BR catppuccin-mocha ,
+.BR catppuccin-latte ,
+.BR gruvbox ,
+.BR nord ,
+.BR tokyo-night .
+Individual colour keys set after this line override the preset.
+.TP
+.BI font " = /path/to/font.ttf"
+Path to a TrueType or OpenType font file used for the bar and TUI overlay.
+Default: \fI/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf\fR.
+.TP
+.BI font_size " = 14"
+Font size in points.
+.TP
+.BI gap " = 4"
+Gap in pixels between tiled panes.
+.TP
+.BI border_width " = 1"
+Width of the window border in pixels.  Set to 0 to disable borders.
+.TP
+.BI smart_gaps " = false"
+When true, gaps and borders are hidden when only one pane is visible.
+.TP
+.BI corner_radius " = 0"
+Corner rounding radius in pixels (requires compositor blend support).
+.TP
+.BI workspaces " = 9"
+Number of workspaces to create at startup.
+.TP
+.BI idle_timeout " = 0"
+Seconds of inactivity before outputs are blanked.  0 disables idle blanking.
+.TP
+.BI xwayland " = false"
+Enable XWayland support for X11 applications.
+.TP
+.BI cursor_theme " = default"
+Name of the Xcursor theme to load.
+.TP
+.BI cursor_size " = 24"
+Cursor size in pixels.
+.TP
+.BI seat_name " = seat0"
+Name of the wlroots seat to create.
+.SH COLOUR KEYS
+Colours are 8-digit hex
+.RI ( 0xRRGGBB
+or
+.IR 0xAARRGGBB )
+or CSS-style
+.RI ( #RRGGBB ).
+.TP
+.BI active_border " = 0xb4befe"
+Border colour of the focused pane.
+.TP
+.BI inactive_border " = 0x45475a"
+Border colour of unfocused panes.
+.SH EXEC DIRECTIVES
+.TP
+.BI exec " = cmd"
+Run
+.I cmd
+every time the config is loaded (including on reload).
+.TP
+.BI exec_once " = cmd"
+Run
+.I cmd
+once at compositor startup only.
+.SH KEYBIND BLOCK
+.nf
+.B bind {
+.BI "    " mods+key " = " action " [args]"
+.B }
+.fi
+.PP
+Modifiers: \fBsuper\fR (Logo), \fBctrl\fR, \fBalt\fR, \fBshift\fR.
+Key names follow XKB keysym names (e.g. \fIReturn\fR, \fIspace\fR, \fIh\fR).
+.PP
+Actions match the
+.BR trixiectl (1)
+command names, plus:
+.TP
+.B quit
+Terminate the compositor.
+.TP
+.B reload
+Hot-reload config.
+.TP
+.BI exec " cmd"
+Run a shell command.
+.TP
+.BI workspace " n"
+Switch to workspace n.
+.TP
+.BI move_to_workspace " n"
+Move focused window to workspace n.
+.TP
+.B toggle_overlay
+Show / hide the TUI overlay.
+.SH BAR BLOCK
+.nf
+.B bar {
+.BI "    position         = " "top|bottom"
+.BI "    height           = " 28
+.BI "    font_size        = " 13
+.BI "    padding          = " 10
+.BI "    powerline        = " "true|false"
+.BI "    modules_left     = " "workspaces layout"
+.BI "    modules_center   = " "clock"
+.BI "    modules_right    = " "battery network volume cpu memory"
+.B }
+.fi
+.PP
+Available built-in modules:
+.BR workspaces ,
+.BR layout ,
+.BR clock ,
+.BR battery ,
+.BR network ,
+.BR volume ,
+.BR cpu ,
+.BR memory .
+.PP
+Custom exec modules are defined with a
+.B module
+block inside
+.BR bar :
+.nf
+.B "    module mystat {"
+.BI "        exec     = " "~/.local/bin/mystat.sh"
+.BI "        interval = " 5
+.BI "        icon     = " "[*]"
+.B "    }"
+.fi
+.SH WINDOW RULES BLOCK
+.nf
+.B windowrule {
+.BI "    float   = " "app_id"
+.BI "    noborder = " "app_id"
+.BI "    opacity = " "0.9 app_id"
+.BI "    workspace = " "n app_id"
+.BI "    size    = " "w h app_id"
+.BI "    pos     = " "x y app_id"
+.B }
+.fi
+.PP
+Rules are matched by
+.I app_id
+substring.  Prefix the pattern with
+.B title:
+to match against the window title instead.
+.SH SCRATCHPAD BLOCK
+.nf
+.B scratchpad myterm {
+.BI "    app_id     = " "alacritty"
+.BI "    width_pct  = " 60
+.BI "    height_pct = " 40
+.B }
+.fi
+.PP
+Toggle with:
+.B trixiectl scratchpad myterm
+or via a keybind with action
+.BR "scratchpad myterm" .
+.SH MONITOR BLOCK
+.nf
+.B monitor eDP-1 {
+.BI "    width   = " 1920
+.BI "    height  = " 1080
+.BI "    refresh = " 60
+.BI "    scale   = " 1.0
+.B }
+.fi
+.SH ANIMATION BLOCK
+.nf
+.B animations {
+.BI "    workspace = " "slide"
+.B }
+.fi
+.PP
+Currently accepted but reserved for future per-workspace animation overrides.
+.SH EXAMPLE
+See
+.I /usr/share/doc/trixie/examples/trixie.conf
+for a fully annotated example.
+.SH SEE ALSO
+.BR trixie (1),
+.BR trixiectl (1)

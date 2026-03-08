@@ -259,5 +259,94 @@
     "meson_variables": [
       "xkbcommon_dep"
     ]
+  },
+  {
+    "name": "wayland-protocols",
+    "type": "pkgconfig",
+    "version": "1.47",
+    "compile_args": [],
+    "link_args": [],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "wayland_protocols_dep"
+    ]
+  },
+  {
+    "name": "harfbuzz",
+    "type": "pkgconfig",
+    "version": "12.3.2",
+    "compile_args": [
+      "-I/usr/include/harfbuzz",
+      "-I/usr/include/freetype2",
+      "-I/usr/include/libpng16",
+      "-I/usr/include/glib-2.0",
+      "-I/usr/lib/glib-2.0/include",
+      "-I/usr/include/sysprof-6",
+      "-pthread"
+    ],
+    "link_args": [
+      "/usr/lib/libharfbuzz.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "harfbuzz_dep"
+    ]
+  },
+  {
+    "name": "threads",
+    "type": "system",
+    "version": "unknown",
+    "compile_args": [
+      "-pthread"
+    ],
+    "link_args": [
+      "-pthread"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": []
+  },
+  {
+    "name": "xwayland",
+    "type": "pkgconfig",
+    "version": "24.1.9",
+    "compile_args": [],
+    "link_args": [],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": []
+  },
+  {
+    "name": "luajit",
+    "type": "pkgconfig",
+    "version": "2.1.1767980792",
+    "compile_args": [
+      "-I/usr/include/luajit-2.1"
+    ],
+    "link_args": [
+      "/usr/lib/libluajit-5.1.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "lua_dep"
+    ]
   }
 ]

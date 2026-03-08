@@ -1,12 +1,110 @@
-/* ipc.c — Unix socket IPC command dispatcher */
+/* ipc.c — Unix socket IPC command dispatcher.
+ *
+ * Mirrors the Rust BindAction dispatch table in twm.rs and the ipc.c
+ * command surface.  Every command is a plain text string (like the Rust
+ * EmbedCommand enum) sent over a Unix socket by trixiectl.
+ *
+ * Commands
+ * ────────
+ *   workspace <n>              switch to workspace n
+ *   next_workspace             switch to next workspace
+ *   prev_workspace             switch to previous workspace
+ *   move_to_workspace <n>      move focused pane to workspace n
+ *   focus <left|right|up|down> directional focus
+ *   layout [next|prev]         cycle tiling layout
+ *   grow_main / shrink_main    adjust main_ratio ±5 %
+ *   ratio <0.1..0.9>           set main_ratio to exact value
+ *   swap [forward|back]        cycle pane order in workspace
+ *   swap_main                  swap focused pane with master slot
+ *   float                      toggle float on focused pane
+ *   float_move <dx> <dy>       move floating pane
+ *   float_resize <dw> <dh>     resize floating pane
+ *   scratchpad <name>          toggle named scratchpad
+ *   close                      close focused window
+ *   fullscreen                 toggle fullscreen
+ *   spawn <cmd>                exec a command through the compositor
+ *   reload                     hot-reload config
+ *   quit                       terminate compositor
+ *   dpms <on|off>              enable or disable outputs (DPMS)
+ *   idle_reset                 reset the idle timer and re-enable outputs
+ *   status                     human-readable workspace / pane summary
+ *   status_json                machine-readable JSON status (with pane detail)
+ */
+#define _POSIX_C_SOURCE 200809L
 #include "trixie.h"
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <unistd.h>
+
+/* ── Event push helpers ─────────────────────────────────────────────────── */
+
+/* Write buf to every live subscriber fd.  Remove any fd that errors. */
+static void ipc_push_event(TrixieServer *s, const char *buf, size_t len) {
+  int live = 0;
+  for(int i = 0; i < s->subscriber_count; i++) {
+    int     fd = s->subscriber_fds[i];
+    ssize_t n  = write(fd, buf, len);
+    if(n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+      close(fd);
+    } else {
+      s->subscriber_fds[live++] = fd;
+    }
+  }
+  s->subscriber_count = live;
+}
+
+void ipc_push_focus_changed(TrixieServer *s) {
+  if(!s || s->subscriber_count == 0) return;
+  char   buf[512];
+  PaneId id = twm_focused_id(&s->twm);
+  Pane  *p  = id ? twm_pane_by_id(&s->twm, id) : NULL;
+  snprintf(buf,
+           sizeof(buf),
+           "{\"event\":\"focus_changed\",\"pane_id\":%u,"
+           "\"title\":\"%s\",\"app_id\":\"%s\","
+           "\"workspace\":%d}\n",
+           id,
+           p ? p->title : "",
+           p ? p->app_id : "",
+           s->twm.active_ws + 1);
+  ipc_push_event(s, buf, strlen(buf));
+}
+
+void ipc_push_workspace_changed(TrixieServer *s) {
+  if(!s || s->subscriber_count == 0) return;
+  char buf[128];
+  snprintf(buf,
+           sizeof(buf),
+           "{\"event\":\"workspace_changed\",\"workspace\":%d,\"pane_count\":%d}\n",
+           s->twm.active_ws + 1,
+           s->twm.workspaces[s->twm.active_ws].pane_count);
+  ipc_push_event(s, buf, strlen(buf));
+}
+
+void ipc_push_title_changed(TrixieServer *s, PaneId id) {
+  if(!s || s->subscriber_count == 0) return;
+  Pane *p = twm_pane_by_id(&s->twm, id);
+  if(!p) return;
+  char buf[512];
+  snprintf(buf,
+           sizeof(buf),
+           "{\"event\":\"title_changed\",\"pane_id\":%u,"
+           "\"title\":\"%s\",\"app_id\":\"%s\"}\n",
+           id,
+           p->title,
+           p->app_id);
+  ipc_push_event(s, buf, strlen(buf));
+}
 
 void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_sz) {
   char buf[1024];
   strncpy(buf, line, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+
   char *cmd  = strtok(buf, " \t");
   char *rest = strtok(NULL, "");
   if(rest)
@@ -19,6 +117,8 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
 
 #define REPLY(...) snprintf(reply, reply_sz, __VA_ARGS__)
 
+  /* ── Server lifecycle ─────────────────────────────────────────────────── */
+
   if(!strcmp(cmd, "reload")) {
     server_apply_config_reload(s);
     REPLY("ok: config reloaded");
@@ -29,17 +129,18 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     REPLY("ok: shutting down");
 
   } else if(!strcmp(cmd, "switch_vt")) {
-    /* wlr_backend_is_session/get_session not available in wlroots 0.18 */
     REPLY("err: vt switching not supported in this build");
+
+    /* ── Workspace routing ─────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "workspace")) {
     int n = rest ? atoi(rest) : 0;
     if(n >= 1) {
       int old = s->twm.active_ws;
       twm_switch_ws(&s->twm, n - 1);
-      int nw = s->twm.active_ws;
-      if(nw != old)
-        anim_workspace_transition(&s->anim, nw > old ? WS_DIR_RIGHT : WS_DIR_LEFT);
+      if(s->twm.active_ws != old)
+        anim_workspace_transition(
+            &s->anim, s->twm.active_ws > old ? WS_DIR_RIGHT : WS_DIR_LEFT);
       server_sync_focus(s);
       server_sync_windows(s);
       REPLY("ok: workspace %d", n);
@@ -63,6 +164,18 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_sync_windows(s);
     REPLY("ok");
 
+  } else if(!strcmp(cmd, "move_to_workspace")) {
+    int n = rest ? atoi(rest) : 0;
+    if(n >= 1) {
+      twm_move_to_ws(&s->twm, n - 1);
+      server_sync_windows(s);
+      REPLY("ok: moved to workspace %d", n);
+    } else {
+      REPLY("err: usage: move_to_workspace <n>");
+    }
+
+    /* ── Scratchpad ────────────────────────────────────────────────────── */
+
   } else if(!strcmp(cmd, "scratchpad")) {
     if(!rest || !rest[0]) {
       REPLY("err: usage: scratchpad <name>");
@@ -70,6 +183,8 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     }
     server_scratch_toggle(s, rest);
     REPLY("ok: toggled '%s'", rest);
+
+    /* ── Float ─────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "float")) {
     server_float_toggle(s);
@@ -101,6 +216,8 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       REPLY("err: no focused window");
     }
 
+    /* ── Pane actions ──────────────────────────────────────────────────── */
+
   } else if(!strcmp(cmd, "close")) {
     PaneId id = twm_focused_id(&s->twm);
     if(id) {
@@ -114,7 +231,13 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_dispatch_action(s, &a);
     REPLY("ok: fullscreen toggled");
 
+    /* ── Directional focus ─────────────────────────────────────────────── */
+
   } else if(!strcmp(cmd, "focus")) {
+    if(!rest) {
+      REPLY("err: usage: focus <left|right|up|down>");
+      return;
+    }
     Action a = { 0 };
     if(!strcmp(rest, "left"))
       a.kind = ACTION_FOCUS_LEFT;
@@ -131,25 +254,33 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_dispatch_action(s, &a);
     REPLY("ok");
 
-  } else if(!strcmp(cmd, "move_to_workspace")) {
-    int n = rest ? atoi(rest) : 0;
-    if(n >= 1) {
-      twm_move_to_ws(&s->twm, n - 1);
-      server_sync_windows(s);
-      REPLY("ok: moved to workspace %d", n);
-    } else {
-      REPLY("err: usage: move_to_workspace <n>");
-    }
+    /* ── Swap / reorder ────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "swap")) {
+    bool forward = true;
+    if(rest && !strcmp(rest, "back")) forward = false;
+    twm_swap(&s->twm, forward);
+    server_sync_windows(s);
+    REPLY("ok: swapped %s", forward ? "forward" : "back");
+
+  } else if(!strcmp(cmd, "swap_main")) {
+    twm_swap_main(&s->twm);
+    server_sync_windows(s);
+    REPLY("ok: swapped with main");
+
+    /* ── Layout cycling ────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "layout")) {
     if(!rest || !strcmp(rest, "next") || !strcmp(rest, "")) {
       Action a = { .kind = ACTION_NEXT_LAYOUT };
       server_dispatch_action(s, &a);
-      REPLY("ok: next layout");
+      REPLY("ok: layout %s",
+            layout_label(s->twm.workspaces[s->twm.active_ws].layout));
     } else if(!strcmp(rest, "prev")) {
       Action a = { .kind = ACTION_PREV_LAYOUT };
       server_dispatch_action(s, &a);
-      REPLY("ok: prev layout");
+      REPLY("ok: layout %s",
+            layout_label(s->twm.workspaces[s->twm.active_ws].layout));
     } else {
       REPLY("err: usage: layout <next|prev>");
     }
@@ -157,12 +288,28 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
   } else if(!strcmp(cmd, "grow_main")) {
     Action a = { .kind = ACTION_GROW_MAIN };
     server_dispatch_action(s, &a);
-    REPLY("ok");
+    REPLY("ok: ratio %.2f", s->twm.workspaces[s->twm.active_ws].main_ratio);
 
   } else if(!strcmp(cmd, "shrink_main")) {
     Action a = { .kind = ACTION_SHRINK_MAIN };
     server_dispatch_action(s, &a);
-    REPLY("ok");
+    REPLY("ok: ratio %.2f", s->twm.workspaces[s->twm.active_ws].main_ratio);
+
+  } else if(!strcmp(cmd, "ratio")) {
+    if(!rest) {
+      REPLY("err: usage: ratio <0.1..0.9>");
+      return;
+    }
+    float r = (float)atof(rest);
+    if(r < 0.1f) r = 0.1f;
+    if(r > 0.9f) r = 0.9f;
+    Workspace *ws  = &s->twm.workspaces[s->twm.active_ws];
+    ws->main_ratio = r;
+    twm_reflow(&s->twm);
+    server_sync_windows(s);
+    REPLY("ok: ratio %.2f", r);
+
+    /* ── Spawn ─────────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "spawn")) {
     if(!rest || !rest[0]) {
@@ -172,8 +319,29 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     server_spawn(s, rest);
     REPLY("ok: spawned");
 
+    /* ── DPMS ──────────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "dpms")) {
+    bool          on = !rest || !strcmp(rest, "on");
+    TrixieOutput *o;
+    wl_list_for_each(o, &s->outputs, link) {
+      struct wlr_output_state st;
+      wlr_output_state_init(&st);
+      wlr_output_state_set_enabled(&st, on);
+      wlr_output_commit_state(o->wlr_output, &st);
+      wlr_output_state_finish(&st);
+    }
+    REPLY("ok: dpms %s", on ? "on" : "off");
+
+    /* ── Idle reset ────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "idle_reset")) {
+    server_reset_idle(s);
+    REPLY("ok: idle timer reset");
+
+    /* ── Introspection ─────────────────────────────────────────────────── */
+
   } else if(!strcmp(cmd, "status")) {
-    /* brief status */
     int len = 0;
     len += snprintf(reply + len,
                     reply_sz - len,
@@ -185,38 +353,207 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       Workspace *ws = &s->twm.workspaces[i];
       len += snprintf(reply + len,
                       reply_sz - len,
-                      "workspace %d: panes=%d layout=%s\n",
+                      "workspace %d: panes=%d layout=%s ratio=%.2f\n",
                       i + 1,
                       ws->pane_count,
-                      layout_label(ws->layout));
+                      layout_label(ws->layout),
+                      ws->main_ratio);
+      if(i == s->twm.active_ws) {
+        for(int j = 0; j < ws->pane_count && len < (int)reply_sz - 80; j++) {
+          Pane *p = twm_pane_by_id(&s->twm, ws->panes[j]);
+          if(!p) continue;
+          len +=
+              snprintf(reply + len,
+                       reply_sz - len,
+                       "  pane %u: %s%s [%s]\n",
+                       p->id,
+                       p->title,
+                       ws->has_focused && ws->focused == p->id ? " (focused)" : "",
+                       p->floating     ? "float"
+                       : p->fullscreen ? "fullscreen"
+                                       : "tiled");
+        }
+      }
     }
 
   } else if(!strcmp(cmd, "status_json")) {
-    /* minimal JSON */
     int len = 0;
-    len += snprintf(
-        reply + len,
-        reply_sz - len,
-        "{\"active_workspace\":%d,\"screen\":{\"w\":%d,\"h\":%d},\"workspaces\":[",
-        s->twm.active_ws + 1,
-        s->twm.screen_w,
-        s->twm.screen_h);
+    len += snprintf(reply + len,
+                    reply_sz - len,
+                    "{\"active_workspace\":%d,\"screen\":{\"w\":%d,\"h\":%d},"
+                    "\"workspaces\":[",
+                    s->twm.active_ws + 1,
+                    s->twm.screen_w,
+                    s->twm.screen_h);
     for(int i = 0; i < s->twm.ws_count; i++) {
-      Workspace *ws = &s->twm.workspaces[i];
-      len +=
-          snprintf(reply + len,
-                   reply_sz - len,
-                   "%s{\"index\":%d,\"active\":%s,\"panes\":%d,\"layout\":\"%s\"}",
-                   i > 0 ? "," : "",
-                   i + 1,
-                   i == s->twm.active_ws ? "true" : "false",
-                   ws->pane_count,
-                   layout_label(ws->layout));
+      Workspace *ws        = &s->twm.workspaces[i];
+      bool       is_active = (i == s->twm.active_ws);
+
+      const char *focused_title  = "";
+      const char *focused_app_id = "";
+      if(ws->has_focused) {
+        Pane *fp = twm_pane_by_id(&s->twm, ws->focused);
+        if(fp) {
+          focused_title  = fp->title;
+          focused_app_id = fp->app_id;
+        }
+      }
+
+      len += snprintf(reply + len,
+                      reply_sz - len,
+                      "%s{\"index\":%d,\"active\":%s,\"panes\":%d,"
+                      "\"layout\":\"%s\",\"ratio\":%.2f,"
+                      "\"focused_title\":\"%s\",\"focused_app_id\":\"%s\"",
+                      i > 0 ? "," : "",
+                      i + 1,
+                      is_active ? "true" : "false",
+                      ws->pane_count,
+                      layout_label(ws->layout),
+                      ws->main_ratio,
+                      focused_title,
+                      focused_app_id);
+
+      if(is_active && ws->pane_count > 0) {
+        len += snprintf(reply + len, reply_sz - len, ",\"pane_list\":[");
+        for(int j = 0; j < ws->pane_count; j++) {
+          Pane *p = twm_pane_by_id(&s->twm, ws->panes[j]);
+          if(!p) continue;
+          bool is_focused = ws->has_focused && ws->focused == p->id;
+          len += snprintf(reply + len,
+                          reply_sz - len,
+                          "%s{\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
+                          "\"focused\":%s,\"floating\":%s,\"fullscreen\":%s}",
+                          j > 0 ? "," : "",
+                          p->id,
+                          p->title,
+                          p->app_id,
+                          is_focused ? "true" : "false",
+                          p->floating ? "true" : "false",
+                          p->fullscreen ? "true" : "false");
+          if(len >= (int)reply_sz - 128) break;
+        }
+        len += snprintf(reply + len, reply_sz - len, "]");
+      }
+
+      len += snprintf(reply + len, reply_sz - len, "}");
     }
     len += snprintf(reply + len, reply_sz - len, "]}");
+
+
+    /* ── set_layout ────────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "set_layout")) {
+    if(!rest || !rest[0]) {
+      REPLY("err: usage: set_layout <bsp|spiral|columns|rows|threecol|monocle>");
+      return;
+    }
+    Layout lay = -1;
+    if(!strcasecmp(rest, "bsp"))
+      lay = LAYOUT_BSP;
+    else if(!strcasecmp(rest, "spiral"))
+      lay = LAYOUT_SPIRAL;
+    else if(!strcasecmp(rest, "columns"))
+      lay = LAYOUT_COLUMNS;
+    else if(!strcasecmp(rest, "rows"))
+      lay = LAYOUT_ROWS;
+    else if(!strcasecmp(rest, "threecol"))
+      lay = LAYOUT_THREECOL;
+    else if(!strcasecmp(rest, "monocle"))
+      lay = LAYOUT_MONOCLE;
+    if((int)lay < 0) {
+      REPLY(
+          "err: unknown layout '%s' — try bsp|spiral|columns|rows|threecol|monocle",
+          rest);
+    } else {
+      s->twm.workspaces[s->twm.active_ws].layout = lay;
+      twm_reflow(&s->twm);
+      server_sync_windows(s);
+      REPLY("ok: layout %s", layout_label(lay));
+    }
+
+    /* ── query_pane ─────────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "query_pane")) {
+    uint32_t qid = rest ? (uint32_t)atoi(rest) : 0;
+    if(!qid) {
+      qid = (uint32_t)twm_focused_id(&s->twm);
+    }
+    Pane *p = qid ? twm_pane_by_id(&s->twm, qid) : NULL;
+    if(!p) {
+      REPLY("err: pane %u not found", qid);
+    } else {
+      /* Find which workspace this pane lives on */
+      int ws_idx = -1;
+      for(int i = 0; i < s->twm.ws_count; i++) {
+        for(int j = 0; j < s->twm.workspaces[i].pane_count; j++) {
+          if(s->twm.workspaces[i].panes[j] == qid) {
+            ws_idx = i;
+            break;
+          }
+        }
+        if(ws_idx >= 0) break;
+      }
+      /* Find anim rect */
+      Rect r = anim_get_rect(&s->anim, qid, p->rect);
+      REPLY("{"
+            "\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
+            "\"workspace\":%d,"
+            "\"rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
+            "\"anim_rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
+            "\"floating\":%s,\"fullscreen\":%s,\"focused\":%s"
+            "}",
+            p->id,
+            p->title,
+            p->app_id,
+            ws_idx + 1,
+            p->rect.x,
+            p->rect.y,
+            p->rect.w,
+            p->rect.h,
+            r.x,
+            r.y,
+            r.w,
+            r.h,
+            p->floating ? "true" : "false",
+            p->fullscreen ? "true" : "false",
+            (twm_focused_id(&s->twm) == qid) ? "true" : "false");
+    }
+
+    /* ── subscribe ──────────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "subscribe")) {
+    /* The caller's fd is held open by the ipc_read_cb; we need access to it.
+     * subscribe stores the fd in server->subscriber_fds so future event-push
+     * calls can write JSON events to it.  The reply fd is passed through the
+     * special ipc_dispatch_with_fd() variant.  When called via the normal
+     * ipc_dispatch() (no fd), we reply with an informational error. */
+    REPLY("err: use ipc_subscribe() directly (internal call path required)");
 
   } else {
     REPLY("err: unknown command '%s'", cmd);
   }
+
 #undef REPLY
+}
+
+/* ── subscribe variant: called from ipc_read_cb with the raw client fd ──── */
+
+/* Register `client_fd` as a subscriber and keep it open.
+ * Returns false if the subscriber table is full. */
+bool ipc_subscribe(TrixieServer *s, int client_fd) {
+  if(s->subscriber_count >= MAX_IPC_SUBSCRIBERS) return false;
+  /* Put the fd in non-blocking mode so slow readers don't stall the compositor */
+  int flags = fcntl(client_fd, F_GETFL, 0);
+  if(flags >= 0) fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+  s->subscriber_fds[s->subscriber_count++] = client_fd;
+  /* Send initial state as a "hello" event */
+  char buf[256];
+  snprintf(buf,
+           sizeof(buf),
+           "{\"event\":\"subscribed\",\"version\":\"%s\","
+           "\"workspace\":%d}\n",
+           TRIXIE_VERSION_STR,
+           s->twm.active_ws + 1);
+  write(client_fd, buf, strlen(buf));
+  return true;
 }

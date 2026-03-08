@@ -601,6 +601,45 @@
     "description": "Sysconf data directory"
   },
   {
+    "name": "xwayland",
+    "value": "auto",
+    "section": "user",
+    "machine": "any",
+    "choices": [
+      "enabled",
+      "disabled",
+      "auto"
+    ],
+    "type": "combo",
+    "description": "Enable XWayland support for X11 applications"
+  },
+  {
+    "name": "tui_overlay",
+    "value": "enabled",
+    "section": "user",
+    "machine": "any",
+    "choices": [
+      "enabled",
+      "disabled",
+      "auto"
+    ],
+    "type": "combo",
+    "description": "Build the ratatui-styled TUI overlay (workspace map, command palette, process list, log viewer)"
+  },
+  {
+    "name": "async_bar",
+    "value": "enabled",
+    "section": "user",
+    "machine": "any",
+    "choices": [
+      "enabled",
+      "disabled",
+      "auto"
+    ],
+    "type": "combo",
+    "description": "Build the async bar worker thread pool (moves all popen() off the render thread)"
+  },
+  {
     "name": "errorlogs",
     "value": true,
     "section": "test",

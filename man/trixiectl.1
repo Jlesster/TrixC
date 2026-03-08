@@ -1,0 +1,148 @@
+.TH TRIXIECTL 1 "2025" "Trixie 0.2.0" "Trixie Compositor"
+.SH NAME
+trixiectl \- IPC client for the trixie compositor
+.SH SYNOPSIS
+.B trixiectl
+.I command
+.RI [ args... ]
+.SH DESCRIPTION
+.B trixiectl
+connects to the running
+.BR trixie (1)
+compositor via its Unix socket, sends a command, prints the reply, and exits
+with status 0 on success or 1 on error.
+.PP
+The socket path is
+.I $XDG_RUNTIME_DIR/trixie.sock
+(or \fI/tmp/trixie-<uid>.sock\fR if
+.B XDG_RUNTIME_DIR
+is unset).
+.SH COMMANDS
+.SS Window management
+.TP
+.B close
+Close the focused window.
+.TP
+.B fullscreen
+Toggle fullscreen on the focused window.
+.TP
+.B float
+Toggle floating mode on the focused window.
+.TP
+.BI float_move " dx dy"
+Move the focused floating window by \fIdx\fR, \fIdy\fR pixels.
+.TP
+.BI float_resize " dw dh"
+Resize the focused floating window by \fIdw\fR × \fIdh\fR pixels.
+.SS Focus and layout
+.TP
+.BI focus " left|right|up|down"
+Move keyboard focus in the given direction.
+.TP
+.BI swap " [forward|back]"
+Cycle the focused pane forward or backward in the workspace order.
+.TP
+.B swap_main
+Swap the focused pane with the master (first) slot.
+.TP
+.BI layout " [next|prev]"
+Cycle the current workspace's tiling layout forward or backward.
+.TP
+.BI set_layout " name"
+Set the layout by name.  Valid names: \fBbsp\fR, \fBspiral\fR,
+\fBcolumns\fR, \fBrows\fR, \fBthreecol\fR, \fBmonocle\fR.
+.TP
+.B grow_main
+Increase the main pane ratio by 5%.
+.TP
+.B shrink_main
+Decrease the main pane ratio by 5%.
+.TP
+.BI ratio " 0.1..0.9"
+Set the main pane ratio to an exact value.
+.SS Workspaces
+.TP
+.BI workspace " n"
+Switch to workspace \fIn\fR (1-based).
+.TP
+.B next_workspace
+Switch to the next workspace.
+.TP
+.B prev_workspace
+Switch to the previous workspace.
+.TP
+.BI move_to_workspace " n"
+Move the focused window to workspace \fIn\fR.
+.SS Scratchpads
+.TP
+.BI scratchpad " name"
+Toggle the named scratchpad.  The scratchpad must be defined in
+\fItrixie.conf\fR.
+.SS Compositor
+.TP
+.BI spawn " cmd"
+Run a shell command through the compositor.
+.TP
+.B reload
+Hot-reload \fItrixie.conf\fR without restarting.
+.TP
+.B quit
+Terminate the compositor.
+.TP
+.BI dpms " on|off"
+Enable or disable all outputs (screen blank / wake).
+.TP
+.B idle_reset
+Reset the idle timer and re-enable outputs.
+.SS Introspection
+.TP
+.B status
+Print a human-readable summary of workspaces and panes.
+.TP
+.B status_json
+Print a machine-readable JSON status object.
+.TP
+.BI query_pane " [id]"
+Print full JSON detail for the pane with the given ID, or the focused pane
+if no ID is given.  Includes rect, anim_rect, workspace, floating, fullscreen,
+and focused state.
+.TP
+.B subscribe
+Keep the socket connection open and receive newline-delimited JSON events as
+they occur.  Event types: \fBfocus_changed\fR, \fBworkspace_changed\fR,
+\fBtitle_changed\fR.  This command does not return until the connection is
+closed.
+.SH EXIT STATUS
+.TP
+0
+The compositor replied with an \fBok\fR response.
+.TP
+1
+The compositor replied with an \fBerr\fR response, or the connection failed.
+.SH EXAMPLES
+Switch to workspace 3:
+.PP
+.RS
+.EX
+trixiectl workspace 3
+.EE
+.RE
+.PP
+Set layout to spiral:
+.PP
+.RS
+.EX
+trixiectl set_layout spiral
+.EE
+.RE
+.PP
+Watch for events:
+.PP
+.RS
+.EX
+trixiectl subscribe
+.EE
+.RE
+.SH SEE ALSO
+.BR trixie (1),
+.BR trixie (5)

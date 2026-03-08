@@ -1,16 +1,36 @@
-/* twm.c — tiling window manager state: panes, workspaces, scratchpads */
+/* twm.c — Tiling window manager state: panes, workspaces, scratchpads.
+ *
+ * Mirrors the Rust Twm struct (twm.rs) and its methods.  The public surface
+ * intentionally matches the Rust API shape:
+ *
+ *   twm_init / twm_resize / twm_reflow     — lifecycle
+ *   twm_open / twm_close                   — pane management
+ *   twm_focused_id / twm_focused           — focus queries
+ *   twm_set_focused / twm_focus_dir        — focus mutation
+ *   twm_toggle_float / twm_float_move / … — float helpers
+ *   twm_switch_ws / twm_move_to_ws        — workspace routing
+ *   twm_swap / twm_swap_main               — pane reordering
+ *   twm_register_scratch / twm_try_assign_scratch / twm_toggle_scratch
+ *
+ * 0.2.1 changes
+ * ─────────────
+ * • twm_set_focused: clears ws_urgent_mask bit for the focused workspace
+ *   so the bar urgency dot disappears when the user visits the workspace.
+ * • twm_switch_ws: also clears the bit for the destination workspace.
+ */
 #include "trixie.h"
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ── ID generator ─────────────────────────────────────────────────────────── */
+/* ── ID generator ───────────────────────────────────────────────────────────── */
 
 static uint32_t g_next_id = 1;
 PaneId          new_pane_id(void) {
   return g_next_id++;
 }
 
-/* ── Helpers ──────────────────────────────────────────────────────────────── */
+/* ── Helpers ────────────────────────────────────────────────────────────────── */
 
 Pane *twm_pane_by_id(TwmState *t, PaneId id) {
   for(int i = 0; i < t->pane_count; i++)
@@ -28,8 +48,9 @@ Pane *twm_focused(TwmState *t) {
   return id ? twm_pane_by_id(t, id) : NULL;
 }
 
-static Rect
-compute_rects(int sw, int sh, int bar_h, bool bar_bottom, int pad, Rect *bar_out) {
+/* Compute content and bar rects from screen dimensions + bar config. */
+static Rect compute_content_rect(
+    int sw, int sh, int bar_h, bool bar_bottom, int pad, Rect *bar_out) {
   Rect content, bar;
   if(bar_h <= 0) {
     content = (Rect){ 0, 0, sw, sh };
@@ -50,7 +71,7 @@ compute_rects(int sw, int sh, int bar_h, bool bar_bottom, int pad, Rect *bar_out
   return content;
 }
 
-/* ── Init ─────────────────────────────────────────────────────────────────── */
+/* ── Init ───────────────────────────────────────────────────────────────────── */
 
 void twm_init(TwmState *t,
               int       w,
@@ -81,7 +102,7 @@ void twm_init(TwmState *t,
     t->workspaces[i].gap        = gap;
   }
 
-  t->content_rect = compute_rects(w, h, bar_h, bar_bottom, pad, &t->bar_rect);
+  t->content_rect = compute_content_rect(w, h, bar_h, bar_bottom, pad, &t->bar_rect);
   t->bar_visible  = true;
 }
 
@@ -90,23 +111,23 @@ void twm_resize(TwmState *t, int w, int h) {
   t->screen_h     = h;
   int  bar_h      = t->bar_rect.h;
   bool bar_bottom = t->bar_rect.y > 0;
-  t->content_rect = compute_rects(w, h, bar_h, bar_bottom, t->padding, &t->bar_rect);
+  t->content_rect =
+      compute_content_rect(w, h, bar_h, bar_bottom, t->padding, &t->bar_rect);
   twm_reflow(t);
 }
 
 void twm_set_bar_height(TwmState *t, int h, bool at_bottom) {
-  t->content_rect = compute_rects(
+  t->content_rect = compute_content_rect(
       t->screen_w, t->screen_h, h, at_bottom, t->padding, &t->bar_rect);
   twm_reflow(t);
 }
 
-/* ── Reflow ───────────────────────────────────────────────────────────────── */
+/* ── Reflow ─────────────────────────────────────────────────────────────────── */
 
-void twm_reflow(TwmState *t) {
-  Workspace *ws = &t->workspaces[t->active_ws];
+static void reflow_workspace(TwmState *t, int ws_idx) {
+  Workspace *ws = &t->workspaces[ws_idx];
   if(ws->pane_count == 0) return;
 
-  /* collect tiled panes */
   PaneId tiled[MAX_PANES];
   int    tiled_n = 0;
   for(int i = 0; i < ws->pane_count; i++) {
@@ -127,25 +148,39 @@ void twm_reflow(TwmState *t) {
     if(p) p->rect = rects[i];
   }
 
-  /* fullscreen / floating overrides */
   for(int i = 0; i < ws->pane_count; i++) {
     Pane *p = twm_pane_by_id(t, ws->panes[i]);
     if(!p) continue;
     if(p->fullscreen)
       p->rect = (Rect){ 0, 0, t->screen_w, t->screen_h };
-    else if(p->floating && !p->fullscreen)
+    else if(p->floating)
       p->rect = p->float_rect;
   }
 }
 
-/* ── Pane management ──────────────────────────────────────────────────────── */
+void twm_reflow(TwmState *t) {
+  reflow_workspace(t, t->active_ws);
+}
+
+static void twm_reflow_all(TwmState *t) {
+  for(int i = 0; i < t->ws_count; i++)
+    reflow_workspace(t, i);
+}
+
+/* ── Pane management ────────────────────────────────────────────────────────── */
 
 PaneId twm_open(TwmState *t, const char *app_id) {
+  return twm_open_ex(t, app_id, false, false);
+}
+
+PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating, bool fullscreen) {
   if(t->pane_count >= MAX_PANES) return 0;
   Pane *p = &t->panes[t->pane_count++];
   memset(p, 0, sizeof(*p));
-  p->id   = new_pane_id();
-  p->kind = PANE_SHELL;
+  p->id         = new_pane_id();
+  p->kind       = PANE_SHELL;
+  p->floating   = floating;
+  p->fullscreen = fullscreen;
   strncpy(p->app_id, app_id, sizeof(p->app_id) - 1);
   strncpy(p->title, app_id, sizeof(p->title) - 1);
 
@@ -159,14 +194,12 @@ PaneId twm_open(TwmState *t, const char *app_id) {
 }
 
 void twm_close(TwmState *t, PaneId id) {
-  /* Remove from pane pool */
   for(int i = 0; i < t->pane_count; i++) {
     if(t->panes[i].id == id) {
       t->panes[i] = t->panes[--t->pane_count];
       break;
     }
   }
-  /* Remove from all workspaces */
   for(int wi = 0; wi < t->ws_count; wi++) {
     Workspace *ws = &t->workspaces[wi];
     for(int i = 0; i < ws->pane_count; i++) {
@@ -176,21 +209,19 @@ void twm_close(TwmState *t, PaneId id) {
       }
     }
     if(ws->has_focused && ws->focused == id) {
-      if(ws->pane_count > 0) {
+      if(ws->pane_count > 0)
         ws->focused = ws->panes[ws->pane_count - 1];
-      } else {
+      else
         ws->has_focused = false;
-      }
     }
   }
-  /* Clear scratchpad refs */
   for(int i = 0; i < t->scratch_count; i++) {
     if(t->scratchpads[i].has_pane && t->scratchpads[i].pane_id == id) {
       t->scratchpads[i].has_pane = false;
       t->scratchpads[i].visible  = false;
     }
   }
-  twm_reflow(t);
+  twm_reflow_all(t);
 }
 
 void twm_set_title(TwmState *t, PaneId id, const char *title) {
@@ -198,18 +229,23 @@ void twm_set_title(TwmState *t, PaneId id, const char *title) {
   if(p) strncpy(p->title, title, sizeof(p->title) - 1);
 }
 
+/* FEATURE 4: clear the urgent bit for the active workspace when focus changes
+ * into it.  This makes the bar dot disappear as soon as the user focuses the
+ * workspace, which is the expected UX. */
 void twm_set_focused(TwmState *t, PaneId id) {
   Workspace *ws = &t->workspaces[t->active_ws];
   for(int i = 0; i < ws->pane_count; i++) {
     if(ws->panes[i] == id) {
       ws->focused     = id;
       ws->has_focused = true;
+      /* Clear urgency for this workspace now that the user has focused it. */
+      t->ws_urgent_mask &= ~(1u << t->active_ws);
       return;
     }
   }
 }
 
-/* ── Float ────────────────────────────────────────────────────────────────── */
+/* ── Float ──────────────────────────────────────────────────────────────────── */
 
 void twm_toggle_float(TwmState *t) {
   PaneId id = twm_focused_id(t);
@@ -218,7 +254,12 @@ void twm_toggle_float(TwmState *t) {
   if(!p) return;
   p->floating = !p->floating;
   if(p->floating) {
-    if(rect_empty(p->float_rect)) p->float_rect = p->rect;
+    if(rect_empty(p->float_rect)) {
+      int fw = t->screen_w / 2;
+      int fh = t->screen_h / 2;
+      p->float_rect =
+          (Rect){ (t->screen_w - fw) / 2, (t->screen_h - fh) / 2, fw, fh };
+    }
     p->rect = p->float_rect;
   }
   twm_reflow(t);
@@ -227,24 +268,28 @@ void twm_toggle_float(TwmState *t) {
 void twm_float_move(TwmState *t, PaneId id, int dx, int dy) {
   Pane *p = twm_pane_by_id(t, id);
   if(!p || !p->floating) return;
-  p->rect.x = (p->rect.x + dx < 0) ? 0 : p->rect.x + dx;
-  p->rect.y = (p->rect.y + dy < 0) ? 0 : p->rect.y + dy;
-  if(p->rect.x + p->rect.w > t->screen_w) p->rect.x = t->screen_w - p->rect.w;
-  if(p->rect.y + p->rect.h > t->screen_h) p->rect.y = t->screen_h - p->rect.h;
-  p->float_rect = p->rect;
+  p->float_rect.x += dx;
+  p->float_rect.y += dy;
+  int margin = 32;
+  if(p->float_rect.x + p->float_rect.w < margin)
+    p->float_rect.x = margin - p->float_rect.w;
+  if(p->float_rect.x > t->screen_w - margin) p->float_rect.x = t->screen_w - margin;
+  if(p->float_rect.y < 0) p->float_rect.y = 0;
+  if(p->float_rect.y > t->screen_h - margin) p->float_rect.y = t->screen_h - margin;
+  p->rect = p->float_rect;
 }
 
 void twm_float_resize(TwmState *t, PaneId id, int dw, int dh) {
   Pane *p = twm_pane_by_id(t, id);
   if(!p || !p->floating) return;
-  p->rect.w = p->rect.w + dw < 80 ? 80 : p->rect.w + dw;
-  p->rect.h = p->rect.h + dh < 60 ? 60 : p->rect.h + dh;
-  if(p->rect.w > t->screen_w) p->rect.w = t->screen_w;
-  if(p->rect.h > t->screen_h) p->rect.h = t->screen_h;
-  p->float_rect = p->rect;
+  p->float_rect.w += dw;
+  p->float_rect.h += dh;
+  if(p->float_rect.w < 80) p->float_rect.w = 80;
+  if(p->float_rect.h < 60) p->float_rect.h = 60;
+  p->rect = p->float_rect;
 }
 
-/* ── Focus direction ──────────────────────────────────────────────────────── */
+/* ── Focus direction — cosine-similarity scoring ────────────────────────────── */
 
 void twm_focus_dir(TwmState *t, int dx, int dy) {
   Workspace *ws = &t->workspaces[t->active_ws];
@@ -255,22 +300,27 @@ void twm_focus_dir(TwmState *t, int dx, int dy) {
   int cx = cur->rect.x + cur->rect.w / 2;
   int cy = cur->rect.y + cur->rect.h / 2;
 
-  PaneId best    = 0;
-  int    best_d2 = INT32_MAX;
+  PaneId best       = 0;
+  float  best_score = -1.0f;
 
   for(int i = 0; i < ws->pane_count; i++) {
     PaneId pid = ws->panes[i];
     if(pid == ws->focused) continue;
     Pane *p = twm_pane_by_id(t, pid);
-    if(!p) continue;
+    if(!p || p->floating) continue;
+
     int nx  = p->rect.x + p->rect.w / 2;
     int ny  = p->rect.y + p->rect.h / 2;
-    int dot = (nx - cx) * dx + (ny - cy) * dy;
+    int vx  = nx - cx;
+    int vy  = ny - cy;
+    int dot = vx * dx + vy * dy;
     if(dot <= 0) continue;
-    int d2 = (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy);
-    if(d2 < best_d2) {
-      best_d2 = d2;
-      best    = pid;
+
+    float dist_sq = (float)(vx * vx + vy * vy);
+    float score   = (float)dot / sqrtf(dist_sq + 1.0f);
+    if(score > best_score) {
+      best_score = score;
+      best       = pid;
     }
   }
   if(best) {
@@ -278,6 +328,8 @@ void twm_focus_dir(TwmState *t, int dx, int dy) {
     ws->has_focused = true;
   }
 }
+
+/* ── Swap ───────────────────────────────────────────────────────────────────── */
 
 void twm_swap(TwmState *t, bool forward) {
   Workspace *ws = &t->workspaces[t->active_ws];
@@ -296,12 +348,33 @@ void twm_swap(TwmState *t, bool forward) {
   PaneId tmp     = ws->panes[cur];
   ws->panes[cur] = ws->panes[tgt];
   ws->panes[tgt] = tmp;
+  twm_reflow(t);
 }
 
-/* ── Workspace switching ──────────────────────────────────────────────────── */
+void twm_swap_main(TwmState *t) {
+  Workspace *ws = &t->workspaces[t->active_ws];
+  if(ws->pane_count < 2 || !ws->has_focused) return;
 
+  int cur = -1;
+  for(int i = 0; i < ws->pane_count; i++)
+    if(ws->panes[i] == ws->focused) {
+      cur = i;
+      break;
+    }
+  if(cur <= 0) return;
+
+  PaneId tmp     = ws->panes[0];
+  ws->panes[0]   = ws->panes[cur];
+  ws->panes[cur] = tmp;
+  twm_reflow(t);
+}
+
+/* ── Workspace switching ────────────────────────────────────────────────────── */
+
+/* FEATURE 4: clear ws_urgent_mask bit when switching to a workspace so the
+ * dot disappears as soon as the user arrives there, even without an explicit
+ * focus event. */
 void twm_switch_ws(TwmState *t, int n) {
-  /* hide all visible scratchpads on departure */
   for(int i = 0; i < t->scratch_count; i++) {
     Scratchpad *sp = &t->scratchpads[i];
     if(!sp->visible || !sp->has_pane) continue;
@@ -316,6 +389,8 @@ void twm_switch_ws(TwmState *t, int n) {
   }
   n            = n < 0 ? 0 : (n >= t->ws_count ? t->ws_count - 1 : n);
   t->active_ws = n;
+  /* Clear urgency for the workspace we just switched to. */
+  t->ws_urgent_mask &= ~(1u << n);
   twm_reflow(t);
 }
 
@@ -333,20 +408,18 @@ void twm_move_to_ws(TwmState *t, int n) {
     }
   }
   if(src->has_focused && src->focused == id) {
-    if(src->pane_count > 0)
-      src->focused = src->panes[src->pane_count - 1];
-    else
-      src->has_focused = false;
+    src->has_focused = src->pane_count > 0;
+    if(src->has_focused) src->focused = src->panes[src->pane_count - 1];
   }
 
   Workspace *dst                = &t->workspaces[target];
   dst->panes[dst->pane_count++] = id;
   dst->focused                  = id;
   dst->has_focused              = true;
-  twm_reflow(t);
+  twm_reflow_all(t);
 }
 
-/* ── Scratchpads ──────────────────────────────────────────────────────────── */
+/* ── Scratchpads ────────────────────────────────────────────────────────────── */
 
 void twm_register_scratch(
     TwmState *t, const char *name, const char *app_id, float wpct, float hpct) {
@@ -370,7 +443,6 @@ static Rect scratch_rect(TwmState *t, Scratchpad *sp) {
 }
 
 bool twm_try_assign_scratch(TwmState *t, PaneId id, const char *app_id) {
-  /* never match on empty/null app_id — client hasn't sent it yet */
   if(!app_id || !app_id[0]) return false;
 
   for(int i = 0; i < t->scratch_count; i++) {
@@ -387,7 +459,7 @@ bool twm_try_assign_scratch(TwmState *t, PaneId id, const char *app_id) {
       p->rect       = r;
       p->float_rect = r;
     }
-    /* remove from any workspace — scratchpads live off-screen until shown */
+
     for(int wi = 0; wi < t->ws_count; wi++) {
       Workspace *ws = &t->workspaces[wi];
       for(int j = 0; j < ws->pane_count; j++) {
@@ -418,7 +490,6 @@ void twm_toggle_scratch(TwmState *t, const char *name) {
 
   Workspace *ws = &t->workspaces[t->active_ws];
   if(sp->visible) {
-    /* hide: remove from active workspace */
     for(int i = 0; i < ws->pane_count; i++) {
       if(ws->panes[i] == sp->pane_id) {
         ws->panes[i] = ws->panes[--ws->pane_count];
@@ -431,7 +502,6 @@ void twm_toggle_scratch(TwmState *t, const char *name) {
     }
     sp->visible = false;
   } else {
-    /* show: update position, add to active workspace */
     Rect  r = scratch_rect(t, sp);
     Pane *p = twm_pane_by_id(t, sp->pane_id);
     if(p) {

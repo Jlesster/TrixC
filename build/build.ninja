@@ -28,7 +28,7 @@ rule CUSTOM_COMMAND
  restat = 1
 
 rule REGENERATE_BUILD
- command = /usr/bin/meson --internal regenerate /home/jless/Code/c-cpp/c/Trixie .
+ command = /usr/sbin/meson --internal regenerate /home/jless/Code/c-cpp/c/Trixie .
  description = Regenerating build files
  generator = 1
 
@@ -38,179 +38,202 @@ build PHONY: phony
 
 # Build rules for targets
 
-build tearing-control-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/tearing-control-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/tearing-control-v1.xml tearing-control-v1-protocol.h
- description = Generating$ tearing-control-v1-client-header$ with$ a$ custom$ command
-
-build tearing-control-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/tearing-control-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/tearing-control-v1.xml tearing-control-v1-protocol.c
- description = Generating$ tearing-control-v1-private-code$ with$ a$ custom$ command
-
-build fullscreen-shell-unstable-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/fullscreen-shell-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/fullscreen-shell-unstable-v1.xml fullscreen-shell-unstable-v1-protocol.h
- description = Generating$ fullscreen-shell-unstable-v1-client-header$ with$ a$ custom$ command
-
-build fullscreen-shell-unstable-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/fullscreen-shell-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/fullscreen-shell-unstable-v1.xml fullscreen-shell-unstable-v1-protocol.c
- description = Generating$ fullscreen-shell-unstable-v1-private-code$ with$ a$ custom$ command
-
-build pointer-constraints-unstable-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/pointer-constraints-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/pointer-constraints-unstable-v1.xml pointer-constraints-unstable-v1-protocol.h
- description = Generating$ pointer-constraints-unstable-v1-client-header$ with$ a$ custom$ command
-
-build pointer-constraints-unstable-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/pointer-constraints-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/pointer-constraints-unstable-v1.xml pointer-constraints-unstable-v1-protocol.c
- description = Generating$ pointer-constraints-unstable-v1-private-code$ with$ a$ custom$ command
-
-build xdg-shell-protocol.h: CUSTOM_COMMAND ../include/protocols/xdg-shell.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/xdg-shell.xml xdg-shell-protocol.h
+build xdg-shell-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml xdg-shell-protocol.h
  description = Generating$ xdg-shell-client-header$ with$ a$ custom$ command
 
-build xdg-shell-protocol.c: CUSTOM_COMMAND ../include/protocols/xdg-shell.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/xdg-shell.xml xdg-shell-protocol.c
+build xdg-shell-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml xdg-shell-protocol.c
  description = Generating$ xdg-shell-private-code$ with$ a$ custom$ command
 
-build wlr-layer-shell-unstable-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/wlr-layer-shell-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/wlr-layer-shell-unstable-v1.xml wlr-layer-shell-unstable-v1-protocol.h
+build wlr-layer-shell-unstable-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/wlr-layer-shell-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header ../include/protocols/wlr-layer-shell-unstable-v1.xml wlr-layer-shell-unstable-v1-protocol.h
  description = Generating$ wlr-layer-shell-unstable-v1-client-header$ with$ a$ custom$ command
 
-build wlr-layer-shell-unstable-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/wlr-layer-shell-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/wlr-layer-shell-unstable-v1.xml wlr-layer-shell-unstable-v1-protocol.c
+build wlr-layer-shell-unstable-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/wlr-layer-shell-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code ../include/protocols/wlr-layer-shell-unstable-v1.xml wlr-layer-shell-unstable-v1-protocol.c
  description = Generating$ wlr-layer-shell-unstable-v1-private-code$ with$ a$ custom$ command
 
-build wlr-output-power-management-unstable-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/wlr-output-power-management-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/wlr-output-power-management-unstable-v1.xml wlr-output-power-management-unstable-v1-protocol.h
+build wlr-output-power-management-unstable-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/wlr-output-power-management-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header ../include/protocols/wlr-output-power-management-unstable-v1.xml wlr-output-power-management-unstable-v1-protocol.h
  description = Generating$ wlr-output-power-management-unstable-v1-client-header$ with$ a$ custom$ command
 
-build wlr-output-power-management-unstable-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/wlr-output-power-management-unstable-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/wlr-output-power-management-unstable-v1.xml wlr-output-power-management-unstable-v1-protocol.c
+build wlr-output-power-management-unstable-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/wlr-output-power-management-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code ../include/protocols/wlr-output-power-management-unstable-v1.xml wlr-output-power-management-unstable-v1-protocol.c
  description = Generating$ wlr-output-power-management-unstable-v1-private-code$ with$ a$ custom$ command
 
-build tablet-v2-protocol.h: CUSTOM_COMMAND ../include/protocols/tablet-v2.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/tablet-v2.xml tablet-v2-protocol.h
+build tablet-v2-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/stable/tablet/tablet-v2.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/stable/tablet/tablet-v2.xml tablet-v2-protocol.h
  description = Generating$ tablet-v2-client-header$ with$ a$ custom$ command
 
-build tablet-v2-protocol.c: CUSTOM_COMMAND ../include/protocols/tablet-v2.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/tablet-v2.xml tablet-v2-protocol.c
+build tablet-v2-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/stable/tablet/tablet-v2.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/stable/tablet/tablet-v2.xml tablet-v2-protocol.c
  description = Generating$ tablet-v2-private-code$ with$ a$ custom$ command
 
-build content-type-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/content-type-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/content-type-v1.xml content-type-v1-protocol.h
+build content-type-v1-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/staging/content-type/content-type-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/staging/content-type/content-type-v1.xml content-type-v1-protocol.h
  description = Generating$ content-type-v1-client-header$ with$ a$ custom$ command
 
-build content-type-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/content-type-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/content-type-v1.xml content-type-v1-protocol.c
+build content-type-v1-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/staging/content-type/content-type-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/staging/content-type/content-type-v1.xml content-type-v1-protocol.c
  description = Generating$ content-type-v1-private-code$ with$ a$ custom$ command
 
-build cursor-shape-v1-protocol.h: CUSTOM_COMMAND ../include/protocols/cursor-shape-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner client-header ../include/protocols/cursor-shape-v1.xml cursor-shape-v1-protocol.h
+build cursor-shape-v1-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml cursor-shape-v1-protocol.h
  description = Generating$ cursor-shape-v1-client-header$ with$ a$ custom$ command
 
-build cursor-shape-v1-protocol.c: CUSTOM_COMMAND ../include/protocols/cursor-shape-v1.xml | /usr/bin/wayland-scanner
- COMMAND = /usr/bin/wayland-scanner private-code ../include/protocols/cursor-shape-v1.xml cursor-shape-v1-protocol.c
+build cursor-shape-v1-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml cursor-shape-v1-protocol.c
  description = Generating$ cursor-shape-v1-private-code$ with$ a$ custom$ command
 
-build Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o: c_COMPILER tearing-control-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
- DEPFILE = Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o.d
- DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+build tearing-control-v1-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml tearing-control-v1-protocol.h
+ description = Generating$ tearing-control-v1-client-header$ with$ a$ custom$ command
 
-build Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o: c_COMPILER fullscreen-shell-unstable-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
- DEPFILE = Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o.d
- DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+build tearing-control-v1-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml tearing-control-v1-protocol.c
+ description = Generating$ tearing-control-v1-private-code$ with$ a$ custom$ command
 
-build Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o: c_COMPILER pointer-constraints-unstable-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
- DEPFILE = Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o.d
- DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+build fullscreen-shell-unstable-v1-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml fullscreen-shell-unstable-v1-protocol.h
+ description = Generating$ fullscreen-shell-unstable-v1-client-header$ with$ a$ custom$ command
+
+build fullscreen-shell-unstable-v1-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml fullscreen-shell-unstable-v1-protocol.c
+ description = Generating$ fullscreen-shell-unstable-v1-private-code$ with$ a$ custom$ command
+
+build pointer-constraints-unstable-v1-protocol.h: CUSTOM_COMMAND //usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner client-header //usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml pointer-constraints-unstable-v1-protocol.h
+ description = Generating$ pointer-constraints-unstable-v1-client-header$ with$ a$ custom$ command
+
+build pointer-constraints-unstable-v1-protocol.c: CUSTOM_COMMAND //usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml | /usr/sbin/wayland-scanner
+ COMMAND = /usr/sbin/wayland-scanner private-code //usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml pointer-constraints-unstable-v1-protocol.c
+ description = Generating$ pointer-constraints-unstable-v1-private-code$ with$ a$ custom$ command
 
 build Trixie.p/meson-generated_.._xdg-shell-protocol.c.o: c_COMPILER xdg-shell-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/meson-generated_.._xdg-shell-protocol.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._xdg-shell-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o: c_COMPILER wlr-layer-shell-unstable-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o: c_COMPILER wlr-output-power-management-unstable-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/meson-generated_.._tablet-v2-protocol.c.o: c_COMPILER tablet-v2-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/meson-generated_.._tablet-v2-protocol.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._tablet-v2-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/meson-generated_.._content-type-v1-protocol.c.o: c_COMPILER content-type-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/meson-generated_.._content-type-v1-protocol.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._content-type-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o: c_COMPILER cursor-shape-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+
+build Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o: c_COMPILER tearing-control-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+ DEPFILE = Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o.d
+ DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o.d
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+
+build Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o: c_COMPILER fullscreen-shell-unstable-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+ DEPFILE = Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o.d
+ DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o.d
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+
+build Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o: c_COMPILER pointer-constraints-unstable-v1-protocol.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+ DEPFILE = Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o.d
+ DEPFILE_UNQUOTED = Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o.d
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_anim.c.o: c_COMPILER ../src/anim.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_anim.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_anim.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_bar.c.o: c_COMPILER ../src/bar.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_bar.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_bar.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+
+build Trixie.p/src_bar_worker.c.o: c_COMPILER ../src/bar_worker.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+ DEPFILE = Trixie.p/src_bar_worker.c.o.d
+ DEPFILE_UNQUOTED = Trixie.p/src_bar_worker.c.o.d
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_config.c.o: c_COMPILER ../src/config.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_config.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_config.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_deco.c.o: c_COMPILER ../src/deco.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_deco.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_deco.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_ipc.c.o: c_COMPILER ../src/ipc.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_ipc.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_ipc.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_layout.c.o: c_COMPILER ../src/layout.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_layout.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_layout.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+
+build Trixie.p/src_lua.c.o: c_COMPILER ../src/lua.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+ DEPFILE = Trixie.p/src_lua.c.o.d
+ DEPFILE_UNQUOTED = Trixie.p/src_lua.c.o.d
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_main.c.o: c_COMPILER ../src/main.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_main.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_main.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+
+build Trixie.p/src_overlay.c.o: c_COMPILER ../src/overlay.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+ DEPFILE = Trixie.p/src_overlay.c.o.d
+ DEPFILE_UNQUOTED = Trixie.p/src_overlay.c.o.d
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
 build Trixie.p/src_twm.c.o: c_COMPILER ../src/twm.c || content-type-v1-protocol.h cursor-shape-v1-protocol.h fullscreen-shell-unstable-v1-protocol.h pointer-constraints-unstable-v1-protocol.h tablet-v2-protocol.h tearing-control-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
  DEPFILE = Trixie.p/src_twm.c.o.d
  DEPFILE_UNQUOTED = Trixie.p/src_twm.c.o.d
- ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
+ ARGS = -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L
 
-build Trixie: c_LINKER Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._xdg-shell-protocol.c.o Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._tablet-v2-protocol.c.o Trixie.p/meson-generated_.._content-type-v1-protocol.c.o Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o Trixie.p/src_anim.c.o Trixie.p/src_bar.c.o Trixie.p/src_config.c.o Trixie.p/src_deco.c.o Trixie.p/src_ipc.c.o Trixie.p/src_layout.c.o Trixie.p/src_main.c.o Trixie.p/src_twm.c.o | /usr/lib/libdrm.so /usr/lib/libfontconfig.so /usr/lib/libfreetype.so /usr/lib/libgio-2.0.so /usr/lib/libgirara.so /usr/lib/libglib-2.0.so /usr/lib/libgobject-2.0.so /usr/lib/libharfbuzz-gobject.so /usr/lib/libharfbuzz.so /usr/lib/libhistory.so /usr/lib/libjack.so /usr/lib/libjson-c.so /usr/lib/libm.a /usr/lib/libm.so /usr/lib/libpixman-1.so /usr/lib/libspandsp.so /usr/lib/libwayland-server.so /usr/lib/libwlroots-0.18.so /usr/lib/libxkbcommon.so
- LINK_ARGS = -Wl,--as-needed -Wl,--no-undefined -Wl,--as-needed -Wl,--start-group -lm /usr/lib/libhistory.so /usr/lib/libdrm.so /usr/lib/libpixman-1.so /usr/lib/libfontconfig.so /usr/lib/libharfbuzz-gobject.so /usr/lib/libharfbuzz.so /usr/lib/libgobject-2.0.so /usr/lib/libglib-2.0.so /usr/lib/libspandsp.so /usr/lib/libwlroots-0.18.so /usr/lib/libwayland-server.so /usr/lib/libxkbcommon.so /usr/lib/libjack.so /usr/lib/libjson-c.so /usr/lib/libgirara.so /usr/lib/libgio-2.0.so /usr/lib/libfreetype.so -Wl,--end-group
+build Trixie: c_LINKER Trixie.p/meson-generated_.._xdg-shell-protocol.c.o Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._tablet-v2-protocol.c.o Trixie.p/meson-generated_.._content-type-v1-protocol.c.o Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o Trixie.p/src_anim.c.o Trixie.p/src_bar.c.o Trixie.p/src_bar_worker.c.o Trixie.p/src_config.c.o Trixie.p/src_deco.c.o Trixie.p/src_ipc.c.o Trixie.p/src_layout.c.o Trixie.p/src_lua.c.o Trixie.p/src_main.c.o Trixie.p/src_overlay.c.o Trixie.p/src_twm.c.o | /usr/lib/libdrm.so /usr/lib/libfontconfig.so /usr/lib/libfreetype.so /usr/lib/libgio-2.0.so /usr/lib/libgirara.so /usr/lib/libglib-2.0.so /usr/lib/libgobject-2.0.so /usr/lib/libharfbuzz-gobject.so /usr/lib/libharfbuzz.so /usr/lib/libhistory.so /usr/lib/libjack.so /usr/lib/libjson-c.so /usr/lib/libluajit-5.1.so /usr/lib/libm.a /usr/lib/libm.so /usr/lib/libpixman-1.so /usr/lib/libspandsp.so /usr/lib/libwayland-server.so /usr/lib/libwlroots-0.18.so /usr/lib/libxkbcommon.so
+ LINK_ARGS = -Wl,--as-needed -Wl,--no-undefined -Wl,--as-needed -Wl,--start-group /usr/lib/libhistory.so /usr/lib/libdrm.so /usr/lib/libpixman-1.so /usr/lib/libfontconfig.so /usr/lib/libharfbuzz-gobject.so /usr/lib/libharfbuzz.so /usr/lib/libgobject-2.0.so /usr/lib/libglib-2.0.so /usr/lib/libspandsp.so /usr/lib/libwlroots-0.18.so /usr/lib/libjack.so /usr/lib/libjson-c.so /usr/lib/libgirara.so /usr/lib/libgio-2.0.so /usr/lib/libwayland-server.so -lm /usr/lib/libxkbcommon.so /usr/lib/libfreetype.so /usr/lib/libluajit-5.1.so -Wl,--end-group
+
+build trixiectl.p/src_trixiectl.c.o: c_COMPILER ../src/trixiectl.c
+ DEPFILE = trixiectl.p/src_trixiectl.c.o.d
+ DEPFILE_UNQUOTED = trixiectl.p/src_trixiectl.c.o.d
+ ARGS = -Itrixiectl.p -I. -I.. -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g
+
+build trixiectl: c_LINKER trixiectl.p/src_trixiectl.c.o
+ LINK_ARGS = -Wl,--as-needed -Wl,--no-undefined
 
 # Test rules
 
 build test: phony meson-internal__test
 
 build meson-internal__test: CUSTOM_COMMAND all meson-test-prereq PHONY
- COMMAND = /usr/bin/meson test --no-rebuild --print-errorlogs
+ COMMAND = /usr/sbin/meson test --no-rebuild --print-errorlogs
  DESC = Running$ all$ tests
  pool = console
 
 build benchmark: phony meson-internal__benchmark
 
 build meson-internal__benchmark: CUSTOM_COMMAND all meson-benchmark-prereq PHONY
- COMMAND = /usr/bin/meson test --benchmark --logbase benchmarklog --num-processes=1 --no-rebuild
+ COMMAND = /usr/sbin/meson test --benchmark --logbase benchmarklog --num-processes=1 --no-rebuild
  DESC = Running$ benchmark$ suite
  pool = console
 
@@ -220,14 +243,14 @@ build install: phony meson-internal__install
 
 build meson-internal__install: CUSTOM_COMMAND PHONY | all
  DESC = Installing$ files
- COMMAND = /usr/bin/meson install --no-rebuild
+ COMMAND = /usr/sbin/meson install --no-rebuild
  pool = console
 
 build dist: phony meson-internal__dist
 
 build meson-internal__dist: CUSTOM_COMMAND PHONY
  DESC = Creating$ source$ packages
- COMMAND = /usr/bin/meson dist
+ COMMAND = /usr/sbin/meson dist
  pool = console
 
 # Suffix
@@ -235,16 +258,16 @@ build meson-internal__dist: CUSTOM_COMMAND PHONY
 build scan-build: phony meson-internal__scan-build
 
 build meson-internal__scan-build: CUSTOM_COMMAND PHONY
- COMMAND = /usr/bin/meson --internal scanbuild /home/jless/Code/c-cpp/c/Trixie /home/jless/Code/c-cpp/c/Trixie/build subprojects /usr/bin/meson setup
+ COMMAND = /usr/sbin/meson --internal scanbuild /home/jless/Code/c-cpp/c/Trixie /home/jless/Code/c-cpp/c/Trixie/build subprojects /usr/sbin/meson setup -D:async_bar=enabled -D:tui_overlay=enabled -D:xwayland=auto
  pool = console
 
 build uninstall: phony meson-internal__uninstall
 
 build meson-internal__uninstall: CUSTOM_COMMAND PHONY
- COMMAND = /usr/bin/meson --internal uninstall
+ COMMAND = /usr/sbin/meson --internal uninstall
  pool = console
 
-build all: phony Trixie
+build all: phony Trixie trixiectl
 
 build meson-test-prereq: phony 
 
@@ -255,11 +278,11 @@ build clean: phony meson-internal__clean
 build clean-ctlist: phony meson-internal__clean-ctlist
 
 build meson-internal__clean-ctlist: CUSTOM_COMMAND PHONY
- COMMAND = /usr/bin/meson --internal cleantrees /home/jless/Code/c-cpp/c/Trixie/build/meson-private/cleantrees.dat
+ COMMAND = /usr/sbin/meson --internal cleantrees /home/jless/Code/c-cpp/c/Trixie/build/meson-private/cleantrees.dat
  description = Cleaning$ custom$ target$ directories
 
 build meson-internal__clean: CUSTOM_COMMAND PHONY | clean-ctlist
- COMMAND = /usr/bin/ninja -t clean
+ COMMAND = /usr/sbin/ninja -t clean
  description = Cleaning
 
 build build.ninja: REGENERATE_BUILD ../meson.build meson-private/coredata.dat

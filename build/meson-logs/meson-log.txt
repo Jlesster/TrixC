@@ -1,4 +1,4 @@
-Build started at 2026-03-07T17:15:20.281295
+Build started at 2026-03-08T05:38:43.324018
 Main binary: /usr/bin/python
 Build Options: 
 Python system: Linux
@@ -37,37 +37,40 @@ Host machine cpu family: x86_64
 Host machine cpu: x86_64
 Target machine cpu family: x86_64
 Target machine cpu: x86_64
-Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp5apqn0z1
-Code:
-int main(void) { return 0; }
-
+Dependency wayland-protocols found: YES 1.47 (cached)
+env[PKG_CONFIG_PATH]: 
+env[PKG_CONFIG]: /usr/bin/pkg-config
 -----------
-Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp5apqn0z1/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp5apqn0z1/output.exe -D_FILE_OFFSET_BITS=64 -O0 -lm -Wl,--allow-shlib-undefined` -> 0
-Library m found: YES
+Called: `/usr/bin/pkg-config --variable=pkgdatadir wayland-protocols` -> 0
+stdout:
+//usr/share/wayland-protocols
+-----------
+Got pkg-config variable pkgdatadir : //usr/share/wayland-protocols
 Dependency history found: YES 8.3 (cached)
-Dependency freetype2 found: YES 26.4.20 (cached)
+Dependency luajit found: YES 2.1.1767980792 (cached)
 Dependency libdrm found: YES 2.4.131 (cached)
 Dependency pixman-1 found: YES 0.46.4 (cached)
 Dependency fontconfig found: YES 2.17.1 (cached)
 Dependency harfbuzz-gobject found: YES 12.3.2 (cached)
 Dependency spandsp found: YES 0.0.6 (cached)
 Dependency wlroots-0.18 found: YES 0.18.3 (cached)
-Dependency wayland-server found: YES 1.24.0 (cached)
-Dependency xkbcommon found: YES 1.13.1 (cached)
 Dependency jack found: YES 3.1410.0 (cached)
 Dependency json-c found: YES 0.18 (cached)
 Dependency girara found: YES 2026.02.04 (cached)
-Program wayland-scanner found: YES (/usr/bin/wayland-scanner)
-Build targets in project: 19
+Dependency wayland-server found: YES 1.24.0 (cached)
+Dependency xkbcommon found: YES 1.13.1 (cached)
+Dependency freetype2 found: YES 26.4.20 (cached)
+Dependency harfbuzz found: YES 12.3.2 (cached)
+Program wayland-scanner found: YES (/usr/sbin/wayland-scanner)
+Build targets in project: 20
 
-Found ninja-1.13.2 at /usr/bin/ninja
+Found ninja-1.13.2 at /usr/sbin/ninja
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7mh2fhoj
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpyiu3iqnt
 Code:
 
 -----------
-Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7mh2fhoj/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7mh2fhoj/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpyiu3iqnt/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpyiu3iqnt/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
 stdout:
 install: /usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/
 programs: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/

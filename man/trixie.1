@@ -1,0 +1,107 @@
+.TH TRIXIE 1 "2025" "Trixie 0.2.0" "Trixie Compositor"
+.SH NAME
+trixie \- a ratatui-styled tiling Wayland compositor
+.SH SYNOPSIS
+.B trixie
+.SH DESCRIPTION
+.B trixie
+is a wlroots-based Wayland compositor designed as a TUI development suite.
+It provides tiling window management, an animated status bar, a fullscreen
+TUI overlay (workspace map, command palette, process list, log viewer), and
+a Unix socket IPC interface controllable via
+.BR trixiectl (1).
+.PP
+trixie reads its configuration from
+.I ~/.config/trixie/trixie.conf
+on startup and hot-reloads it whenever the file changes (via inotify) or when
+the
+.B reload
+IPC command is sent.
+.SH ENVIRONMENT
+.TP
+.B WAYLAND_DISPLAY
+Set automatically to the Wayland socket name (e.g.\& \fIwayland-1\fR).
+Clients connect to this socket.
+.TP
+.B XDG_SESSION_TYPE
+Set to \fIwayland\fR.
+.TP
+.B XDG_CURRENT_DESKTOP
+Set to \fItrixie\fR.
+.TP
+.B DISPLAY
+Set when XWayland is enabled, to the X display name (e.g.\& \fI:1\fR).
+.TP
+.B XDG_RUNTIME_DIR
+Used to locate the IPC socket at \fI$XDG_RUNTIME_DIR/trixie.sock\fR.
+If unset, falls back to \fI/tmp/trixie-<uid>.sock\fR.
+.TP
+.B XDG_CONFIG_HOME
+Used to locate the config directory.
+Defaults to \fI~/.config\fR if unset.
+.SH FILES
+.TP
+.I ~/.config/trixie/trixie.conf
+Main configuration file.  See
+.BR trixie (5)
+for the full format.
+.TP
+.I $XDG_RUNTIME_DIR/trixie.sock
+Unix domain socket for IPC.  Commands are sent as newline-terminated plain
+text strings.  See
+.BR trixiectl (1).
+.SH SIGNALS
+.TP
+.B SIGTERM, SIGINT
+Graceful shutdown: drains the event loop, joins worker threads, and removes
+the IPC socket.
+.SH KEYBINDS
+Default keybinds (all configurable in \fItrixie.conf\fR):
+.TP
+\fBSuper+Return\fR
+Launch terminal (\fIalacritty\fR by default — set via \fIexec\fR in config).
+.TP
+\fBSuper+Q\fR
+Close focused window.
+.TP
+\fBSuper+F\fR
+Toggle fullscreen.
+.TP
+\fBSuper+Space\fR
+Toggle float on focused window.
+.TP
+\fBSuper+H/L\fR
+Focus left / right.
+.TP
+\fBSuper+J/K\fR
+Focus down / up.
+.TP
+\fBSuper+Shift+H/L\fR
+Grow / shrink main pane ratio.
+.TP
+\fBSuper+Tab\fR
+Cycle to next layout.
+.TP
+\fBSuper+1\-9\fR
+Switch to workspace 1–9.
+.TP
+\fBSuper+Shift+1\-9\fR
+Move focused window to workspace 1–9.
+.TP
+\fBSuper+Grave\fR
+Toggle TUI overlay.
+.TP
+\fBSuper+Shift+Print\fR
+Emergency quit (bypasses config keybinds).
+.SH EXIT STATUS
+.TP
+0
+Clean exit.
+.TP
+1
+Fatal initialisation error (backend, socket, renderer).
+.SH SEE ALSO
+.BR trixiectl (1),
+.BR trixie (5)
+.SH AUTHORS
+Trixie contributors.

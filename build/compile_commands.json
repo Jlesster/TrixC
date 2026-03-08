@@ -1,104 +1,128 @@
 [
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o -MF Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o -c tearing-control-v1-protocol.c",
-    "file": "tearing-control-v1-protocol.c",
-    "output": "Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o"
-  },
-  {
-    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o -c fullscreen-shell-unstable-v1-protocol.c",
-    "file": "fullscreen-shell-unstable-v1-protocol.c",
-    "output": "Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o"
-  },
-  {
-    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o -c pointer-constraints-unstable-v1-protocol.c",
-    "file": "pointer-constraints-unstable-v1-protocol.c",
-    "output": "Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o"
-  },
-  {
-    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._xdg-shell-protocol.c.o -MF Trixie.p/meson-generated_.._xdg-shell-protocol.c.o.d -o Trixie.p/meson-generated_.._xdg-shell-protocol.c.o -c xdg-shell-protocol.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._xdg-shell-protocol.c.o -MF Trixie.p/meson-generated_.._xdg-shell-protocol.c.o.d -o Trixie.p/meson-generated_.._xdg-shell-protocol.c.o -c xdg-shell-protocol.c",
     "file": "xdg-shell-protocol.c",
     "output": "Trixie.p/meson-generated_.._xdg-shell-protocol.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o -c wlr-layer-shell-unstable-v1-protocol.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o -c wlr-layer-shell-unstable-v1-protocol.c",
     "file": "wlr-layer-shell-unstable-v1-protocol.c",
     "output": "Trixie.p/meson-generated_.._wlr-layer-shell-unstable-v1-protocol.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o -c wlr-output-power-management-unstable-v1-protocol.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o -c wlr-output-power-management-unstable-v1-protocol.c",
     "file": "wlr-output-power-management-unstable-v1-protocol.c",
     "output": "Trixie.p/meson-generated_.._wlr-output-power-management-unstable-v1-protocol.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._tablet-v2-protocol.c.o -MF Trixie.p/meson-generated_.._tablet-v2-protocol.c.o.d -o Trixie.p/meson-generated_.._tablet-v2-protocol.c.o -c tablet-v2-protocol.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._tablet-v2-protocol.c.o -MF Trixie.p/meson-generated_.._tablet-v2-protocol.c.o.d -o Trixie.p/meson-generated_.._tablet-v2-protocol.c.o -c tablet-v2-protocol.c",
     "file": "tablet-v2-protocol.c",
     "output": "Trixie.p/meson-generated_.._tablet-v2-protocol.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._content-type-v1-protocol.c.o -MF Trixie.p/meson-generated_.._content-type-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._content-type-v1-protocol.c.o -c content-type-v1-protocol.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._content-type-v1-protocol.c.o -MF Trixie.p/meson-generated_.._content-type-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._content-type-v1-protocol.c.o -c content-type-v1-protocol.c",
     "file": "content-type-v1-protocol.c",
     "output": "Trixie.p/meson-generated_.._content-type-v1-protocol.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o -MF Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o -c cursor-shape-v1-protocol.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o -MF Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o -c cursor-shape-v1-protocol.c",
     "file": "cursor-shape-v1-protocol.c",
     "output": "Trixie.p/meson-generated_.._cursor-shape-v1-protocol.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_anim.c.o -MF Trixie.p/src_anim.c.o.d -o Trixie.p/src_anim.c.o -c ../src/anim.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o -MF Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o -c tearing-control-v1-protocol.c",
+    "file": "tearing-control-v1-protocol.c",
+    "output": "Trixie.p/meson-generated_.._tearing-control-v1-protocol.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o -c fullscreen-shell-unstable-v1-protocol.c",
+    "file": "fullscreen-shell-unstable-v1-protocol.c",
+    "output": "Trixie.p/meson-generated_.._fullscreen-shell-unstable-v1-protocol.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o -MF Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o.d -o Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o -c pointer-constraints-unstable-v1-protocol.c",
+    "file": "pointer-constraints-unstable-v1-protocol.c",
+    "output": "Trixie.p/meson-generated_.._pointer-constraints-unstable-v1-protocol.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_anim.c.o -MF Trixie.p/src_anim.c.o.d -o Trixie.p/src_anim.c.o -c ../src/anim.c",
     "file": "../src/anim.c",
     "output": "Trixie.p/src_anim.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_bar.c.o -MF Trixie.p/src_bar.c.o.d -o Trixie.p/src_bar.c.o -c ../src/bar.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_bar.c.o -MF Trixie.p/src_bar.c.o.d -o Trixie.p/src_bar.c.o -c ../src/bar.c",
     "file": "../src/bar.c",
     "output": "Trixie.p/src_bar.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_config.c.o -MF Trixie.p/src_config.c.o.d -o Trixie.p/src_config.c.o -c ../src/config.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_bar_worker.c.o -MF Trixie.p/src_bar_worker.c.o.d -o Trixie.p/src_bar_worker.c.o -c ../src/bar_worker.c",
+    "file": "../src/bar_worker.c",
+    "output": "Trixie.p/src_bar_worker.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_config.c.o -MF Trixie.p/src_config.c.o.d -o Trixie.p/src_config.c.o -c ../src/config.c",
     "file": "../src/config.c",
     "output": "Trixie.p/src_config.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_deco.c.o -MF Trixie.p/src_deco.c.o.d -o Trixie.p/src_deco.c.o -c ../src/deco.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_deco.c.o -MF Trixie.p/src_deco.c.o.d -o Trixie.p/src_deco.c.o -c ../src/deco.c",
     "file": "../src/deco.c",
     "output": "Trixie.p/src_deco.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_ipc.c.o -MF Trixie.p/src_ipc.c.o.d -o Trixie.p/src_ipc.c.o -c ../src/ipc.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_ipc.c.o -MF Trixie.p/src_ipc.c.o.d -o Trixie.p/src_ipc.c.o -c ../src/ipc.c",
     "file": "../src/ipc.c",
     "output": "Trixie.p/src_ipc.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_layout.c.o -MF Trixie.p/src_layout.c.o.d -o Trixie.p/src_layout.c.o -c ../src/layout.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_layout.c.o -MF Trixie.p/src_layout.c.o.d -o Trixie.p/src_layout.c.o -c ../src/layout.c",
     "file": "../src/layout.c",
     "output": "Trixie.p/src_layout.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_main.c.o -MF Trixie.p/src_main.c.o.d -o Trixie.p/src_main.c.o -c ../src/main.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_lua.c.o -MF Trixie.p/src_lua.c.o.d -o Trixie.p/src_lua.c.o -c ../src/lua.c",
+    "file": "../src/lua.c",
+    "output": "Trixie.p/src_lua.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_main.c.o -MF Trixie.p/src_main.c.o.d -o Trixie.p/src_main.c.o -c ../src/main.c",
     "file": "../src/main.c",
     "output": "Trixie.p/src_main.c.o"
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
-    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_twm.c.o -MF Trixie.p/src_twm.c.o.d -o Trixie.p/src_twm.c.o -c ../src/twm.c",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_overlay.c.o -MF Trixie.p/src_overlay.c.o.d -o Trixie.p/src_overlay.c.o -c ../src/overlay.c",
+    "file": "../src/overlay.c",
+    "output": "Trixie.p/src_overlay.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_twm.c.o -MF Trixie.p/src_twm.c.o.d -o Trixie.p/src_twm.c.o -c ../src/twm.c",
     "file": "../src/twm.c",
     "output": "Trixie.p/src_twm.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -Itrixiectl.p -I. -I.. -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -MD -MQ trixiectl.p/src_trixiectl.c.o -MF trixiectl.p/src_trixiectl.c.o.d -o trixiectl.p/src_trixiectl.c.o -c ../src/trixiectl.c",
+    "file": "../src/trixiectl.c",
+    "output": "trixiectl.p/src_trixiectl.c.o"
   }
 ]

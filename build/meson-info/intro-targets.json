@@ -1,191 +1,5 @@
 [
   {
-    "name": "tearing-control-v1-client-header",
-    "id": "tearing-control-v1-client-header@cus",
-    "type": "custom",
-    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
-    "filename": [
-      "/home/jless/Code/c-cpp/c/Trixie/build/tearing-control-v1-protocol.h"
-    ],
-    "build_by_default": false,
-    "target_sources": [
-      {
-        "language": "unknown",
-        "compiler": [
-          "/usr/bin/wayland-scanner",
-          "client-header",
-          "@INPUT@",
-          "@OUTPUT@"
-        ],
-        "parameters": [],
-        "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/tearing-control-v1.xml"
-        ],
-        "generated_sources": []
-      }
-    ],
-    "extra_files": [],
-    "subproject": null,
-    "dependencies": [],
-    "depends": [],
-    "installed": false
-  },
-  {
-    "name": "tearing-control-v1-private-code",
-    "id": "tearing-control-v1-private-code@cus",
-    "type": "custom",
-    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
-    "filename": [
-      "/home/jless/Code/c-cpp/c/Trixie/build/tearing-control-v1-protocol.c"
-    ],
-    "build_by_default": false,
-    "target_sources": [
-      {
-        "language": "unknown",
-        "compiler": [
-          "/usr/bin/wayland-scanner",
-          "private-code",
-          "@INPUT@",
-          "@OUTPUT@"
-        ],
-        "parameters": [],
-        "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/tearing-control-v1.xml"
-        ],
-        "generated_sources": []
-      }
-    ],
-    "extra_files": [],
-    "subproject": null,
-    "dependencies": [],
-    "depends": [],
-    "installed": false
-  },
-  {
-    "name": "fullscreen-shell-unstable-v1-client-header",
-    "id": "fullscreen-shell-unstable-v1-client-header@cus",
-    "type": "custom",
-    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
-    "filename": [
-      "/home/jless/Code/c-cpp/c/Trixie/build/fullscreen-shell-unstable-v1-protocol.h"
-    ],
-    "build_by_default": false,
-    "target_sources": [
-      {
-        "language": "unknown",
-        "compiler": [
-          "/usr/bin/wayland-scanner",
-          "client-header",
-          "@INPUT@",
-          "@OUTPUT@"
-        ],
-        "parameters": [],
-        "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/fullscreen-shell-unstable-v1.xml"
-        ],
-        "generated_sources": []
-      }
-    ],
-    "extra_files": [],
-    "subproject": null,
-    "dependencies": [],
-    "depends": [],
-    "installed": false
-  },
-  {
-    "name": "fullscreen-shell-unstable-v1-private-code",
-    "id": "fullscreen-shell-unstable-v1-private-code@cus",
-    "type": "custom",
-    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
-    "filename": [
-      "/home/jless/Code/c-cpp/c/Trixie/build/fullscreen-shell-unstable-v1-protocol.c"
-    ],
-    "build_by_default": false,
-    "target_sources": [
-      {
-        "language": "unknown",
-        "compiler": [
-          "/usr/bin/wayland-scanner",
-          "private-code",
-          "@INPUT@",
-          "@OUTPUT@"
-        ],
-        "parameters": [],
-        "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/fullscreen-shell-unstable-v1.xml"
-        ],
-        "generated_sources": []
-      }
-    ],
-    "extra_files": [],
-    "subproject": null,
-    "dependencies": [],
-    "depends": [],
-    "installed": false
-  },
-  {
-    "name": "pointer-constraints-unstable-v1-client-header",
-    "id": "pointer-constraints-unstable-v1-client-header@cus",
-    "type": "custom",
-    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
-    "filename": [
-      "/home/jless/Code/c-cpp/c/Trixie/build/pointer-constraints-unstable-v1-protocol.h"
-    ],
-    "build_by_default": false,
-    "target_sources": [
-      {
-        "language": "unknown",
-        "compiler": [
-          "/usr/bin/wayland-scanner",
-          "client-header",
-          "@INPUT@",
-          "@OUTPUT@"
-        ],
-        "parameters": [],
-        "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/pointer-constraints-unstable-v1.xml"
-        ],
-        "generated_sources": []
-      }
-    ],
-    "extra_files": [],
-    "subproject": null,
-    "dependencies": [],
-    "depends": [],
-    "installed": false
-  },
-  {
-    "name": "pointer-constraints-unstable-v1-private-code",
-    "id": "pointer-constraints-unstable-v1-private-code@cus",
-    "type": "custom",
-    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
-    "filename": [
-      "/home/jless/Code/c-cpp/c/Trixie/build/pointer-constraints-unstable-v1-protocol.c"
-    ],
-    "build_by_default": false,
-    "target_sources": [
-      {
-        "language": "unknown",
-        "compiler": [
-          "/usr/bin/wayland-scanner",
-          "private-code",
-          "@INPUT@",
-          "@OUTPUT@"
-        ],
-        "parameters": [],
-        "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/pointer-constraints-unstable-v1.xml"
-        ],
-        "generated_sources": []
-      }
-    ],
-    "extra_files": [],
-    "subproject": null,
-    "dependencies": [],
-    "depends": [],
-    "installed": false
-  },
-  {
     "name": "xdg-shell-client-header",
     "id": "xdg-shell-client-header@cus",
     "type": "custom",
@@ -198,14 +12,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "client-header",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/xdg-shell.xml"
+          "//usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml"
         ],
         "generated_sources": []
       }
@@ -229,14 +43,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "private-code",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/xdg-shell.xml"
+          "//usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml"
         ],
         "generated_sources": []
       }
@@ -260,7 +74,7 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "client-header",
           "@INPUT@",
           "@OUTPUT@"
@@ -291,7 +105,7 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "private-code",
           "@INPUT@",
           "@OUTPUT@"
@@ -322,7 +136,7 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "client-header",
           "@INPUT@",
           "@OUTPUT@"
@@ -353,7 +167,7 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "private-code",
           "@INPUT@",
           "@OUTPUT@"
@@ -384,14 +198,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "client-header",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/tablet-v2.xml"
+          "//usr/share/wayland-protocols/stable/tablet/tablet-v2.xml"
         ],
         "generated_sources": []
       }
@@ -415,14 +229,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "private-code",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/tablet-v2.xml"
+          "//usr/share/wayland-protocols/stable/tablet/tablet-v2.xml"
         ],
         "generated_sources": []
       }
@@ -446,14 +260,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "client-header",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/content-type-v1.xml"
+          "//usr/share/wayland-protocols/staging/content-type/content-type-v1.xml"
         ],
         "generated_sources": []
       }
@@ -477,14 +291,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "private-code",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/content-type-v1.xml"
+          "//usr/share/wayland-protocols/staging/content-type/content-type-v1.xml"
         ],
         "generated_sources": []
       }
@@ -508,14 +322,14 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "client-header",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/cursor-shape-v1.xml"
+          "//usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml"
         ],
         "generated_sources": []
       }
@@ -539,14 +353,200 @@
       {
         "language": "unknown",
         "compiler": [
-          "/usr/bin/wayland-scanner",
+          "/usr/sbin/wayland-scanner",
           "private-code",
           "@INPUT@",
           "@OUTPUT@"
         ],
         "parameters": [],
         "sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/include/protocols/cursor-shape-v1.xml"
+          "//usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml"
+        ],
+        "generated_sources": []
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "installed": false
+  },
+  {
+    "name": "tearing-control-v1-client-header",
+    "id": "tearing-control-v1-client-header@cus",
+    "type": "custom",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/tearing-control-v1-protocol.h"
+    ],
+    "build_by_default": false,
+    "target_sources": [
+      {
+        "language": "unknown",
+        "compiler": [
+          "/usr/sbin/wayland-scanner",
+          "client-header",
+          "@INPUT@",
+          "@OUTPUT@"
+        ],
+        "parameters": [],
+        "sources": [
+          "//usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml"
+        ],
+        "generated_sources": []
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "installed": false
+  },
+  {
+    "name": "tearing-control-v1-private-code",
+    "id": "tearing-control-v1-private-code@cus",
+    "type": "custom",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/tearing-control-v1-protocol.c"
+    ],
+    "build_by_default": false,
+    "target_sources": [
+      {
+        "language": "unknown",
+        "compiler": [
+          "/usr/sbin/wayland-scanner",
+          "private-code",
+          "@INPUT@",
+          "@OUTPUT@"
+        ],
+        "parameters": [],
+        "sources": [
+          "//usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml"
+        ],
+        "generated_sources": []
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "installed": false
+  },
+  {
+    "name": "fullscreen-shell-unstable-v1-client-header",
+    "id": "fullscreen-shell-unstable-v1-client-header@cus",
+    "type": "custom",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/fullscreen-shell-unstable-v1-protocol.h"
+    ],
+    "build_by_default": false,
+    "target_sources": [
+      {
+        "language": "unknown",
+        "compiler": [
+          "/usr/sbin/wayland-scanner",
+          "client-header",
+          "@INPUT@",
+          "@OUTPUT@"
+        ],
+        "parameters": [],
+        "sources": [
+          "//usr/share/wayland-protocols/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml"
+        ],
+        "generated_sources": []
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "installed": false
+  },
+  {
+    "name": "fullscreen-shell-unstable-v1-private-code",
+    "id": "fullscreen-shell-unstable-v1-private-code@cus",
+    "type": "custom",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/fullscreen-shell-unstable-v1-protocol.c"
+    ],
+    "build_by_default": false,
+    "target_sources": [
+      {
+        "language": "unknown",
+        "compiler": [
+          "/usr/sbin/wayland-scanner",
+          "private-code",
+          "@INPUT@",
+          "@OUTPUT@"
+        ],
+        "parameters": [],
+        "sources": [
+          "//usr/share/wayland-protocols/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml"
+        ],
+        "generated_sources": []
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "installed": false
+  },
+  {
+    "name": "pointer-constraints-unstable-v1-client-header",
+    "id": "pointer-constraints-unstable-v1-client-header@cus",
+    "type": "custom",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/pointer-constraints-unstable-v1-protocol.h"
+    ],
+    "build_by_default": false,
+    "target_sources": [
+      {
+        "language": "unknown",
+        "compiler": [
+          "/usr/sbin/wayland-scanner",
+          "client-header",
+          "@INPUT@",
+          "@OUTPUT@"
+        ],
+        "parameters": [],
+        "sources": [
+          "//usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"
+        ],
+        "generated_sources": []
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "installed": false
+  },
+  {
+    "name": "pointer-constraints-unstable-v1-private-code",
+    "id": "pointer-constraints-unstable-v1-private-code@cus",
+    "type": "custom",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/pointer-constraints-unstable-v1-protocol.c"
+    ],
+    "build_by_default": false,
+    "target_sources": [
+      {
+        "language": "unknown",
+        "compiler": [
+          "/usr/sbin/wayland-scanner",
+          "private-code",
+          "@INPUT@",
+          "@OUTPUT@"
+        ],
+        "parameters": [],
+        "sources": [
+          "//usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"
         ],
         "generated_sources": []
       }
@@ -591,6 +591,7 @@
           "-I/usr/include/json-c",
           "-I/usr/include/libmount",
           "-I/usr/include/blkid",
+          "-I/usr/include/luajit-2.1",
           "-fdiagnostics-color=always",
           "-D_FILE_OFFSET_BITS=64",
           "-Wall",
@@ -608,23 +609,26 @@
         "sources": [
           "/home/jless/Code/c-cpp/c/Trixie/src/anim.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/bar.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/bar_worker.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/config.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/deco.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/ipc.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/layout.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/lua.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/main.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/overlay.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/twm.c"
         ],
         "generated_sources": [
-          "/home/jless/Code/c-cpp/c/Trixie/build/tearing-control-v1-protocol.c",
-          "/home/jless/Code/c-cpp/c/Trixie/build/fullscreen-shell-unstable-v1-protocol.c",
-          "/home/jless/Code/c-cpp/c/Trixie/build/pointer-constraints-unstable-v1-protocol.c",
           "/home/jless/Code/c-cpp/c/Trixie/build/xdg-shell-protocol.c",
           "/home/jless/Code/c-cpp/c/Trixie/build/wlr-layer-shell-unstable-v1-protocol.c",
           "/home/jless/Code/c-cpp/c/Trixie/build/wlr-output-power-management-unstable-v1-protocol.c",
           "/home/jless/Code/c-cpp/c/Trixie/build/tablet-v2-protocol.c",
           "/home/jless/Code/c-cpp/c/Trixie/build/content-type-v1-protocol.c",
-          "/home/jless/Code/c-cpp/c/Trixie/build/cursor-shape-v1-protocol.c"
+          "/home/jless/Code/c-cpp/c/Trixie/build/cursor-shape-v1-protocol.c",
+          "/home/jless/Code/c-cpp/c/Trixie/build/tearing-control-v1-protocol.c",
+          "/home/jless/Code/c-cpp/c/Trixie/build/fullscreen-shell-unstable-v1-protocol.c",
+          "/home/jless/Code/c-cpp/c/Trixie/build/pointer-constraints-unstable-v1-protocol.c"
         ],
         "unity_sources": []
       },
@@ -638,7 +642,6 @@
           "-Wl,--as-needed",
           "-Wl,--start-group",
           "-Wl,--start-group",
-          "-lm",
           "/usr/lib/libhistory.so",
           "/usr/lib/libdrm.so",
           "/usr/lib/libpixman-1.so",
@@ -649,13 +652,15 @@
           "/usr/lib/libglib-2.0.so",
           "/usr/lib/libspandsp.so",
           "/usr/lib/libwlroots-0.18.so",
-          "/usr/lib/libwayland-server.so",
-          "/usr/lib/libxkbcommon.so",
           "/usr/lib/libjack.so",
           "/usr/lib/libjson-c.so",
           "/usr/lib/libgirara.so",
           "/usr/lib/libgio-2.0.so",
+          "/usr/lib/libwayland-server.so",
+          "-lm",
+          "/usr/lib/libxkbcommon.so",
           "/usr/lib/libfreetype.so",
+          "/usr/lib/libluajit-5.1.so",
           "-Wl,--end-group",
           "-Wl,--end-group"
         ]
@@ -664,7 +669,6 @@
     "extra_files": [],
     "subproject": null,
     "dependencies": [
-      "m",
       "history",
       "libdrm",
       "pixman-1",
@@ -672,13 +676,68 @@
       "harfbuzz-gobject",
       "spandsp",
       "wlroots-0.18",
-      "wayland-server",
-      "xkbcommon",
       "jack",
       "json-c",
       "girara",
-      "freetype2"
+      "wayland-server",
+      "xkbcommon",
+      "freetype2",
+      "luajit",
+      "harfbuzz"
     ],
+    "depends": [],
+    "win_subsystem": "console",
+    "installed": false
+  },
+  {
+    "name": "trixiectl",
+    "id": "trixiectl@exe",
+    "type": "executable",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/trixiectl"
+    ],
+    "build_by_default": true,
+    "target_sources": [
+      {
+        "language": "c",
+        "machine": "host",
+        "compiler": [
+          "cc"
+        ],
+        "parameters": [
+          "-I/home/jless/Code/c-cpp/c/Trixie/build/trixiectl.p",
+          "-I/home/jless/Code/c-cpp/c/Trixie/build",
+          "-I/home/jless/Code/c-cpp/c/Trixie",
+          "-fdiagnostics-color=always",
+          "-D_FILE_OFFSET_BITS=64",
+          "-Wall",
+          "-Winvalid-pch",
+          "-Wextra",
+          "-Wpedantic",
+          "-std=c11",
+          "-O2",
+          "-g"
+        ],
+        "sources": [
+          "/home/jless/Code/c-cpp/c/Trixie/src/trixiectl.c"
+        ],
+        "generated_sources": [],
+        "unity_sources": []
+      },
+      {
+        "linker": [
+          "cc"
+        ],
+        "parameters": [
+          "-Wl,--as-needed",
+          "-Wl,--no-undefined"
+        ]
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
     "depends": [],
     "win_subsystem": "console",
     "installed": false
