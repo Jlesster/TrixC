@@ -4055,14 +4055,13 @@ static void draw_panel_deps(uint32_t      *px,
 }
 
 
-void overlay_update(TrixieOverlay *o,
-                    TwmState      *twm,
-                    const Config  *cfg,
+bool overlay_update(TrixieOverlay *o, TwmState *twm, const Config *cfg,
                     BarWorkerPool *pool) {
-  if(!o || !o->visible) return;
+  if(!o) return false;
+  if(!overlay_visible(o)) return false;   /* hidden — no frame needed */
   (void)pool;
   int w = o->w, h = o->h;
-  if(w <= 0 || h <= 0) return;
+  if(w <= 0 || h <= 0) return false;
 
   /* Process deferred workspace switch (queued by key handler, executed here
    * where we have TwmState access).                                          */

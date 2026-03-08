@@ -608,7 +608,7 @@ TrixieBar *bar_create(struct wlr_scene_tree *layer,
                       int                    h,
                       const Config          *cfg,
                       BarWorkerPool         *pool);
-void       bar_update(TrixieBar *b, TwmState *twm, const Config *cfg);
+bool       bar_update(TrixieBar *b, TwmState *twm, const Config *cfg);
 void       bar_resize(TrixieBar *b, int w, int h);
 void       bar_destroy(TrixieBar *b);
 void       bar_set_visible(TrixieBar *b, bool visible);
@@ -621,7 +621,8 @@ void       bar_sync_exec_modules(const Config *cfg);
 
 typedef struct TrixieDeco TrixieDeco;
 
-TrixieDeco *deco_create(struct wlr_scene_tree *layer);
+TrixieDeco *deco_create(struct wlr_scene_tree *layer_tiled,
+                        struct wlr_scene_tree *layer_floating);
 void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg);
 void deco_destroy(TrixieDeco *d);
 void deco_mark_dirty(TrixieDeco *d);
@@ -638,7 +639,7 @@ void overlay_destroy(TrixieOverlay *o);
 void overlay_toggle(TrixieOverlay *o);
 bool overlay_visible(TrixieOverlay *o);
 bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods);
-void overlay_update(TrixieOverlay *o,
+bool overlay_update(TrixieOverlay *o,
                     TwmState      *twm,
                     const Config  *cfg,
                     BarWorkerPool *pool);
@@ -680,6 +681,7 @@ struct TrixieOutput {
   int                      width, height;
   int                      logical_w, logical_h;
   bool                     was_animating;
+  bool                     deco_dirty;
 };
 
 typedef struct {
@@ -760,6 +762,7 @@ struct TrixieServer {
   struct wlr_xdg_output_manager_v1 *output_mgr;
 
   struct wlr_scene_tree *layer_background;
+  struct wlr_scene_tree *layer_chrome_floating;
   struct wlr_scene_tree *layer_windows;
   struct wlr_scene_tree *layer_chrome;
   struct wlr_scene_tree *layer_floating;

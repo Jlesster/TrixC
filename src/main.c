@@ -368,11 +368,18 @@ void server_focus_pane(TrixieServer *s, PaneId id) {
   }
 }
 
+static void server_mark_deco_dirty(TrixieServer *s) {
+  TrixieOutput *o;
+  wl_list_for_each(o, &s->outputs, link) o->deco_dirty = true;
+  server_request_redraw(s);
+}
+
 void server_sync_focus(TrixieServer *s) {
   PaneId id = twm_focused_id(&s->twm);
   if(id) server_focus_pane(s, id);
   ipc_push_focus_changed(s);
   lua_on_focus_changed(s);
+  server_mark_deco_dirty(s);
 }
 
 /* ── Window sync ──────────────────────────────────────────────────────────── */
@@ -607,6 +614,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       }
       server_sync_focus(s);
       server_sync_windows(s);
+      server_mark_deco_dirty(s);
       break;
     }
     case ACTION_MOVE_TO_WS:
@@ -634,6 +642,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       ws->layout    = layout_next(ws->layout);
       twm_reflow(&s->twm);
       server_sync_windows(s);
+      server_mark_deco_dirty(s);
       break;
     }
     case ACTION_PREV_LAYOUT: {
@@ -641,6 +650,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       ws->layout    = layout_prev(ws->layout);
       twm_reflow(&s->twm);
       server_sync_windows(s);
+      server_mark_deco_dirty(s);
       break;
     }
     case ACTION_GROW_MAIN: {
@@ -700,6 +710,7 @@ void server_float_toggle(TrixieServer *s) {
     anim_open(&s->anim, id, p->rect);
   server_sync_windows(s);
   server_sync_focus(s);
+  server_mark_deco_dirty(s);
 }
 
 void server_scratch_toggle(TrixieServer *s, const char *name) {
@@ -724,6 +735,7 @@ void server_scratch_toggle(TrixieServer *s, const char *name) {
   }
   server_sync_windows(s);
   server_sync_focus(s);
+  server_mark_deco_dirty(s);
 }
 
 /* ── Config reload ────────────────────────────────────────────────────────── */
@@ -1142,33 +1154,21 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
   TrixieServer *s = o->server;
 
   bool still_animating = anim_tick(&s->anim);
-  /*
-   * Run server_sync_windows whenever we were animating this tick — including
-   * the frame where still_animating just became false.  On that settling frame
-   * all animated positions snap to p->rect; skipping the call left window scene
-   * nodes at their last interpolated position (1 frame off) while deco_update
-   * placed borders at p->rect, causing a visible 1-frame misalignment.
-   *
-   * We track whether the previous tick had active animations via a bool stored
-   * on the output.  If either this tick or last tick was animating, sync now.
-   */
   bool need_sync       = still_animating || o->was_animating;
   o->was_animating     = still_animating;
   if(need_sync) server_sync_windows(s);
 
-  if(o->bar) bar_update(o->bar, &s->twm, &s->cfg);
-  if(o->deco) deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
-  if(o->overlay) overlay_update(o->overlay, &s->twm, &s->cfg, &s->bar_workers);
+  bool bar_dirty     = bar_update(o->bar, &s->twm, &s->cfg);
+  bool overlay_dirty = overlay_update(o->overlay, &s->twm, &s->cfg, &s->bar_workers);
+  deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
 
   wlr_scene_output_commit(o->scene_output, NULL);
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
   wlr_scene_output_send_frame_done(o->scene_output, &now);
 
-  /* Always schedule the next frame so compositor-side surfaces (bar, deco,
-   * overlay) render at the display's native refresh rate, not just when a
-   * client animation is active. */
-  if(s->running) wlr_output_schedule_frame(o->wlr_output);
+  if(s->running && (still_animating || bar_dirty || overlay_dirty))
+    wlr_output_schedule_frame(o->wlr_output);
 }
 
 static void output_handle_request_state(struct wl_listener *listener, void *data) {
@@ -1220,7 +1220,7 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
     struct wlr_output_mode *m;
     wl_list_for_each(m, &wlr_output->modes, link) {
       if(m->width == mcfg->width && m->height == mcfg->height &&
-         m->refresh == mcfg->refresh * 1000) {
+         abs(m->refresh - (int)(mcfg->refresh * 1000)) < 50) {
         mode = m;
         break;
       }
@@ -1232,6 +1232,13 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   if(mode) wlr_output_state_set_mode(&state, mode);
   wlr_output_commit_state(wlr_output, &state);
   wlr_output_state_finish(&state);
+
+  if(mode)
+    wlr_log(WLR_INFO,
+            "output mode: %dx%d@%dmHz",
+            mode->width,
+            mode->height,
+            mode->refresh);
 
   TrixieOutput *o = calloc(1, sizeof(*o));
   o->server       = s;
@@ -1267,7 +1274,7 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   }
 
   o->bar     = bar_create(s->layer_overlay, ow, oh, &s->cfg, &s->bar_workers);
-  o->deco    = deco_create(s->layer_chrome);
+  o->deco    = deco_create(s->layer_chrome, s->layer_chrome_floating);
   o->overlay = overlay_create(s->layer_overlay, o->logical_w, o->logical_h, &s->cfg);
 
   /* Resize the background rect to cover the full output. */
@@ -2139,11 +2146,12 @@ int main(int argc, char *argv[]) {
   s->scene         = wlr_scene_create();
   s->scene_layout  = wlr_scene_attach_output_layout(s->scene, s->output_layout);
 
-  s->layer_background = wlr_scene_tree_create(&s->scene->tree);
-  s->layer_windows    = wlr_scene_tree_create(&s->scene->tree);
-  s->layer_floating   = wlr_scene_tree_create(&s->scene->tree);
-  s->layer_chrome     = wlr_scene_tree_create(&s->scene->tree);
-  s->layer_overlay    = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_background      = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_windows         = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_chrome          = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_floating        = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_chrome_floating = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_overlay         = wlr_scene_tree_create(&s->scene->tree);
 
   /* Root background rect — sits at the bottom of layer_background.
    * Covers the full screen (resized in handle_new_output / config reload).

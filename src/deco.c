@@ -18,23 +18,27 @@
 typedef struct {
   PaneId                 id;
   bool                   active;
-  struct wlr_scene_rect *borders[4]; /* top, bottom, left, right */
+  struct wlr_scene_rect *borders[4];
   bool                   has_rects;
+  struct wlr_scene_tree *rects_layer; /* which layer borders live on */
 } DecoEntry;
 
 /* ── TrixieDeco ─────────────────────────────────────────────────────────────── */
 
 struct TrixieDeco {
   struct wlr_scene_tree *layer;
+  struct wlr_scene_tree *layer_float;
   DecoEntry              entries[MAX_DECO_PANES];
   int                    count;
 };
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────────── */
 
-TrixieDeco *deco_create(struct wlr_scene_tree *layer) {
-  TrixieDeco *d = calloc(1, sizeof(*d));
-  d->layer      = layer;
+TrixieDeco *deco_create(struct wlr_scene_tree *layer_tiled,
+                        struct wlr_scene_tree *layer_floating) {
+  TrixieDeco *d  = calloc(1, sizeof(*d));
+  d->layer       = layer_tiled;
+  d->layer_float = layer_floating;
   return d;
 }
 
@@ -49,7 +53,6 @@ void deco_destroy(TrixieDeco *d) {
 }
 
 void deco_mark_dirty(TrixieDeco *d) {
-  /* Force colour refresh on next deco_update by clearing active flags. */
   if(!d) return;
   for(int i = 0; i < d->count; i++)
     d->entries[i].active = false;
@@ -80,14 +83,28 @@ static void color_f(Color c, float out[4]) {
   out[3] = c.a / 255.0f;
 }
 
-static void ensure_rects(TrixieDeco *d, DecoEntry *e) {
-  if(e->has_rects) return;
+static void ensure_rects(TrixieDeco *d, DecoEntry *e, struct wlr_scene_tree *layer) {
+  (void)d;
+  if(e->has_rects && e->rects_layer == layer) return; /* correct layer, done */
+
+  /* Wrong layer or not created yet — destroy existing and recreate */
+  if(e->has_rects) {
+    for(int k = 0; k < 4; k++) {
+      if(e->borders[k]) {
+        wlr_scene_node_destroy(&e->borders[k]->node);
+        e->borders[k] = NULL;
+      }
+    }
+    e->has_rects = false;
+  }
+
   float zero[4] = { 0, 0, 0, 1 };
   for(int k = 0; k < 4; k++) {
-    e->borders[k] = wlr_scene_rect_create(d->layer, 1, 1, zero);
+    e->borders[k] = wlr_scene_rect_create(layer, 1, 1, zero);
     wlr_scene_node_set_enabled(&e->borders[k]->node, false);
   }
-  e->has_rects = true;
+  e->has_rects   = true;
+  e->rects_layer = layer;
 }
 
 static void hide_entry(DecoEntry *e) {
@@ -96,25 +113,13 @@ static void hide_entry(DecoEntry *e) {
     wlr_scene_node_set_enabled(&e->borders[k]->node, false);
 }
 
-/* Position and colour the four border rects around `r`.
- *
- * Visual intent: borders should read like tmux pane dividers — a single pixel
- * line, not a frame.  Active border uses the accent colour so the focused pane
- * is immediately obvious without any glow or shadow.  Inactive borders are
- * rendered at near-background brightness so they recede rather than compete.
- *
- * border_width is always respected from config; at 1px this looks exactly like
- * a terminal split line.  At 2px it reads as a thin frame.  No rounding ever.
- */
 static void position_entry(
     TrixieDeco *d, DecoEntry *e, Rect r, int bw, bool focused, const Config *cfg) {
+  (void)d;
   Color col;
   if(focused) {
     col = cfg->colors.active_border;
   } else {
-    /* Inactive: blend the configured inactive border 50% toward background
-     * so unfocused panes truly recede.  This gives a tmux-like effect where
-     * only the active pane has a visible outline.                           */
     Color ib = cfg->colors.inactive_border;
     Color pb = cfg->colors.pane_bg;
     col.r    = (uint8_t)(((int)ib.r + (int)pb.r) / 2);
@@ -125,34 +130,26 @@ static void position_entry(
   float fc[4];
   color_f(col, fc);
 
-  /* top */
   wlr_scene_rect_set_size(e->borders[0], r.w, bw);
   wlr_scene_node_set_position(&e->borders[0]->node, r.x, r.y);
   wlr_scene_rect_set_color(e->borders[0], fc);
   wlr_scene_node_set_enabled(&e->borders[0]->node, true);
 
-  /* bottom */
   wlr_scene_rect_set_size(e->borders[1], r.w, bw);
   wlr_scene_node_set_position(&e->borders[1]->node, r.x, r.y + r.h - bw);
   wlr_scene_rect_set_color(e->borders[1], fc);
   wlr_scene_node_set_enabled(&e->borders[1]->node, true);
 
-  /* left */
   wlr_scene_rect_set_size(e->borders[2], bw, r.h);
   wlr_scene_node_set_position(&e->borders[2]->node, r.x, r.y);
   wlr_scene_rect_set_color(e->borders[2], fc);
   wlr_scene_node_set_enabled(&e->borders[2]->node, true);
 
-  /* right */
   wlr_scene_rect_set_size(e->borders[3], bw, r.h);
   wlr_scene_node_set_position(&e->borders[3]->node, r.x + r.w - bw, r.y);
   wlr_scene_rect_set_color(e->borders[3], fc);
   wlr_scene_node_set_enabled(&e->borders[3]->node, true);
-
-  (void)d;
 }
-
-/* ── deco_update ────────────────────────────────────────────────────────────── */
 
 void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg) {
   if(!d || !twm) return;
@@ -160,14 +157,7 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg)
   int        bw         = cfg->border_width;
   Workspace *ws         = &twm->workspaces[twm->active_ws];
   PaneId     focused_id = twm_focused_id(twm);
-
-  /*
-   * Workspace slide offset — must be added to every border x position so the
-   * chrome travels with its window during workspace transitions.
-   * anim_ws_incoming_x() returns 0 when no workspace animation is active, so
-   * this is always safe to apply unconditionally.
-   */
-  int ws_dx = anim_ws_incoming_x(anim);
+  int        ws_dx      = anim_ws_incoming_x(anim);
 
   for(int i = 0; i < d->count; i++)
     d->entries[i].active = false;
@@ -177,7 +167,6 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg)
     Pane  *p   = twm_pane_by_id(twm, pid);
     if(!p) continue;
 
-    /* Check per-pane noborder window rule. */
     bool noborder = false;
     for(int ri = 0; ri < cfg->win_rule_count; ri++) {
       const WinRule *wr = &cfg->win_rules[ri];
@@ -193,61 +182,8 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg)
       }
     }
 
-    if(p->floating || p->fullscreen || bw <= 0 || noborder) {
+    if(p->fullscreen) {
       DecoEntry *e = deco_find(d, pid);
-      if(p->fullscreen) {
-        /* Fullscreen: hide all chrome. */
-        if(e) {
-          hide_entry(e);
-          e->active = true;
-        }
-        continue;
-      }
-      if(p->floating) {
-        int  fbw     = bw < 2 ? 2 : bw;
-        Rect r       = anim_get_rect(anim, pid, p->rect);
-        Rect shifted = { r.x + ws_dx, r.y, r.w, r.h };
-        bool focused = (pid == focused_id);
-        e            = deco_get_or_create(d, pid);
-        if(!e) continue;
-        e->active = true;
-        ensure_rects(d, e);
-
-        Color col =
-            focused ? cfg->colors.active_border : cfg->colors.inactive_border;
-        float fc[4];
-        color_f(col, fc);
-
-        /* Scale border alpha by the float open/close animation opacity so
-         * the chrome fades in/out in sync with the window content. */
-        float opacity = anim_get_opacity(anim, pid, 1.0f);
-        fc[3] *= opacity;
-
-        /* top */
-        wlr_scene_rect_set_size(e->borders[0], shifted.w, fbw);
-        wlr_scene_node_set_position(&e->borders[0]->node, shifted.x, shifted.y);
-        wlr_scene_rect_set_color(e->borders[0], fc);
-        wlr_scene_node_set_enabled(&e->borders[0]->node, true);
-        /* bottom */
-        wlr_scene_rect_set_size(e->borders[1], shifted.w, fbw);
-        wlr_scene_node_set_position(
-            &e->borders[1]->node, shifted.x, shifted.y + shifted.h - fbw);
-        wlr_scene_rect_set_color(e->borders[1], fc);
-        wlr_scene_node_set_enabled(&e->borders[1]->node, true);
-        /* left */
-        wlr_scene_rect_set_size(e->borders[2], fbw, shifted.h);
-        wlr_scene_node_set_position(&e->borders[2]->node, shifted.x, shifted.y);
-        wlr_scene_rect_set_color(e->borders[2], fc);
-        wlr_scene_node_set_enabled(&e->borders[2]->node, true);
-        /* right */
-        wlr_scene_rect_set_size(e->borders[3], fbw, shifted.h);
-        wlr_scene_node_set_position(
-            &e->borders[3]->node, shifted.x + shifted.w - fbw, shifted.y);
-        wlr_scene_rect_set_color(e->borders[3], fc);
-        wlr_scene_node_set_enabled(&e->borders[3]->node, true);
-        continue;
-      }
-      /* noborder tiled — hide. */
       if(e) {
         hide_entry(e);
         e->active = true;
@@ -255,24 +191,68 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg)
       continue;
     }
 
-    Rect r = anim_get_rect(anim, pid, p->rect);
+    if(p->floating) {
+      int        fbw     = bw < 2 ? 2 : bw;
+      Rect       r       = anim_get_rect(anim, pid, p->rect);
+      Rect       shifted = { r.x + ws_dx, r.y, r.w, r.h };
+      bool       focused = (pid == focused_id);
+      DecoEntry *e       = deco_get_or_create(d, pid);
+      if(!e) continue;
+      e->active = true;
+      /* Floating borders go on layer_float — above floating window content */
+      ensure_rects(d, e, d->layer_float);
 
-    /*
-     * Apply the workspace slide offset so borders travel with their windows
-     * during workspace transitions.
-     */
+      Color col = focused ? cfg->colors.active_border : cfg->colors.inactive_border;
+      float fc[4];
+      color_f(col, fc);
+      float opacity = anim_get_opacity(anim, pid, 1.0f);
+      fc[3] *= opacity;
+
+      wlr_scene_rect_set_size(e->borders[0], shifted.w, fbw);
+      wlr_scene_node_set_position(&e->borders[0]->node, shifted.x, shifted.y);
+      wlr_scene_rect_set_color(e->borders[0], fc);
+      wlr_scene_node_set_enabled(&e->borders[0]->node, true);
+
+      wlr_scene_rect_set_size(e->borders[1], shifted.w, fbw);
+      wlr_scene_node_set_position(
+          &e->borders[1]->node, shifted.x, shifted.y + shifted.h - fbw);
+      wlr_scene_rect_set_color(e->borders[1], fc);
+      wlr_scene_node_set_enabled(&e->borders[1]->node, true);
+
+      wlr_scene_rect_set_size(e->borders[2], fbw, shifted.h);
+      wlr_scene_node_set_position(&e->borders[2]->node, shifted.x, shifted.y);
+      wlr_scene_rect_set_color(e->borders[2], fc);
+      wlr_scene_node_set_enabled(&e->borders[2]->node, true);
+
+      wlr_scene_rect_set_size(e->borders[3], fbw, shifted.h);
+      wlr_scene_node_set_position(
+          &e->borders[3]->node, shifted.x + shifted.w - fbw, shifted.y);
+      wlr_scene_rect_set_color(e->borders[3], fc);
+      wlr_scene_node_set_enabled(&e->borders[3]->node, true);
+      continue;
+    }
+
+    if(bw <= 0 || noborder) {
+      DecoEntry *e = deco_find(d, pid);
+      if(e) {
+        hide_entry(e);
+        e->active = true;
+      }
+      continue;
+    }
+
+    Rect r       = anim_get_rect(anim, pid, p->rect);
     Rect shifted = { r.x + ws_dx, r.y, r.w, r.h };
-
     bool focused = (pid == focused_id);
 
     DecoEntry *e = deco_get_or_create(d, pid);
     if(!e) continue;
     e->active = true;
-    ensure_rects(d, e);
+    /* Tiled borders go on layer_chrome — above tiled windows, below floating */
+    ensure_rects(d, e, d->layer);
     position_entry(d, e, shifted, bw, focused, cfg);
   }
 
-  /* Hide entries no longer on the active workspace. */
   for(int i = 0; i < d->count; i++)
     if(!d->entries[i].active) hide_entry(&d->entries[i]);
 }

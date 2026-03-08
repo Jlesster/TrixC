@@ -505,12 +505,12 @@ void bar_set_visible(TrixieBar *b, bool visible) {
  * §10  bar_update
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-void bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
-  if(!b || !twm) return;
+bool bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
+  if(!b || !twm) return false;
 
   const BarCfg *bar = &cfg->bar;
   int           bw = b->width, bh = b->bar_h;
-  if(bw <= 0 || bh <= 0) return;
+  if(bw <= 0 || bh <= 0) return false;
 
   /* Hot-reload font */
   float want_size = bar->font_size > 0.f ? bar->font_size : cfg->font_size;
@@ -531,16 +531,15 @@ void bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
   int         cur_panes  = twm->workspaces[twm->active_ws].pane_count;
   uint64_t    gen        = b->pool ? atomic_load(&b->pool->generation) : 0;
 
-  if(now - b->last_render_ms >= 1000) b->dirty = true;
+  if(now - b->last_render_ms >= 1000) b->dirty = true; /* clock tick */
   if(twm->active_ws != b->last_active_ws) b->dirty = true;
   if(focused_id != b->last_focused) b->dirty = true;
   if(strcmp(title, b->last_title) != 0) b->dirty = true;
   if(cur_panes != b->last_pane_count) b->dirty = true;
   if(b->pool && gen != b->last_generation) b->dirty = true;
-  /* FEATURE 5: redraw when urgency state changes */
   if(twm->ws_urgent_mask != b->last_urgent_mask) b->dirty = true;
 
-  if(!b->dirty) return;
+  if(!b->dirty) return false; /* ← nothing to do, tell caller to not reschedule */
 
   uint32_t *px     = b->pixels;
   int       stride = bw;
@@ -587,8 +586,6 @@ void bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
     }                                                                        \
   } while(0)
 
-/* Render a single built-in or exec module by name into the given list.
- * FEATURE 5: workspaces branch appends '•' and uses red fg for urgent workspaces. */
 #define RENDER_MODULE(name_, list_, n_)                                             \
   do {                                                                              \
     const char *_mn = (name_);                                                      \
@@ -608,7 +605,7 @@ void bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
           _it.bg     = bar->active_ws_bg;                                           \
           _it.has_bg = true;                                                        \
         } else if(_urgent) {                                                        \
-          _it.fg = (Color){ 0xf3, 0x8b, 0xa8, 0xff }; /* red dot for urgent */      \
+          _it.fg = (Color){ 0xf3, 0x8b, 0xa8, 0xff };                               \
         } else if(_ws->pane_count > 0) {                                            \
           _it.fg = bar->occupied_ws_fg;                                             \
         } else {                                                                    \
@@ -673,76 +670,59 @@ void bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
     }                                                                               \
   } while(0)
 
-  /* ── Left ─────────────────────────────────────────────────────────────── */
   for(int mi = 0; mi < bar->modules_left_n && ln < MAX_ITEMS; mi++)
     RENDER_MODULE(bar->modules_left[mi], left, ln);
-
-  /* ── Center ───────────────────────────────────────────────────────────── */
   for(int mi = 0; mi < bar->modules_center_n && cn < MAX_ITEMS; mi++)
     RENDER_MODULE(bar->modules_center[mi], center, cn);
-
-  /* ── Right ────────────────────────────────────────────────────────────── */
   for(int mi = 0; mi < bar->modules_right_n && rn < MAX_ITEMS; mi++)
     RENDER_MODULE(bar->modules_right[mi], right, rn);
 
 #undef RENDER_MODULE
 #undef SLOT_ITEM
 
-  /* ── Measure section widths ───────────────────────────────────────────── */
-
   int lw = 0;
   for(int i = 0; i < ln; i++)
     lw += bar_item_width(&left[i]) + sp;
-
   int cw_total = 0;
   for(int i = 0; i < cn; i++)
     cw_total += bar_item_width(&center[i]) + sp;
-
   int rw_total = 0;
   for(int i = 0; i < rn; i++)
     rw_total += bar_item_width(&right[i]) + sp;
 
-  /* ── Render left ──────────────────────────────────────────────────────── */
   {
     int x = sp;
     for(int i = 0; i < ln; i++)
       x += flush_item(px, stride, &left[i], x, bh, bw, bh, 0) + sp;
-
     if(bar->sep_style != SEP_NONE && (cn > 0 || rn > 0)) {
       uint32_t dim_c = to_argb(bar->dim);
-      uint32_t bg_c  = to_argb(bar->bg);
+      uint32_t bg_c2 = to_argb(bar->bg);
       switch(bar->sep_style) {
         case SEP_PIPE: draw_sep_pipe(px, stride, x + 2, bh, dim_c, bw); break;
         case SEP_BLOCK: draw_sep_block(px, stride, x + 1, bh, dim_c, bw); break;
         case SEP_ARROW:
-          draw_sep_arrow(px, stride, x, bh, sep_w, bg_c, bg_c, bw);
+          draw_sep_arrow(px, stride, x, bh, sep_w, bg_c2, bg_c2, bw);
           break;
         default: break;
       }
     }
   }
-
-  /* ── Render right (right-aligned) ────────────────────────────────────── */
   {
     int rx = bw - rw_total - sp;
     for(int i = 0; i < rn; i++)
       rx += flush_item(px, stride, &right[i], rx, bh, bw, bh, 0) + sp;
   }
-
-  /* ── Render center ────────────────────────────────────────────────────── */
   {
     int cx = (bw - cw_total + sp) / 2;
     for(int i = 0; i < cn; i++)
       cx += flush_item(px, stride, &center[i], cx, bh, bw, bh, 0) + sp;
   }
 
-  /* ── Upload to scene ────────────────────────────────────────────────────── */
   struct RawBuffer *rb = raw_buffer_create(bw, bh);
   memcpy(rb->data, b->pixels, (size_t)(bw * bh * 4));
   wlr_scene_buffer_set_buffer(b->scene_buf, &rb->base);
   wlr_buffer_drop(&rb->base);
 
-  /* ── Commit dirty state ─────────────────────────────────────────────────── */
   b->dirty            = false;
   b->last_render_ms   = now;
   b->last_active_ws   = twm->active_ws;
@@ -751,4 +731,6 @@ void bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
   b->last_generation  = gen;
   b->last_urgent_mask = twm->ws_urgent_mask;
   snprintf(b->last_title, sizeof(b->last_title), "%s", title);
+
+  return true; /* ← we redrew, caller should schedule next frame to present it */
 }
