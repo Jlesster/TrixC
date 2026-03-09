@@ -12,6 +12,26 @@
 - **Window Model**: Tiling (BSP, Spiral, Columns, Rows, ThreeCol, Monocle)
 - **Embedded Tools**: Full TUI overlay with dev tools
 
+### TUI Overlay Vision
+
+The TUI Overlay is the defining feature of Trixie — it provides an embedded development suite directly within the compositor. The **design goal** is for the TUI overlay to be **visually indistinguishable** from a native TUI application built with established Rust TUI libraries:
+
+- **ratatui** — The most popular Rust TUI library, known for rich widgets, block-based layouts, and terminal compatibility
+- **ncurses** — The classic C library for terminal UIs
+- **bubbletea** — Elm-inspired Rust TUI framework with strong architectural patterns
+
+This means:
+- **Block-based layouts** — Use bordered "blocks" for each panel component (panels should have visible borders, titles, and rounded or squared corners like ratatui widgets)
+- **Consistent color theming** — All colors must map to the selected theme palette; panels should use the theme's background, foreground, and accent colors
+- **Typography** — Monospace terminal fonts only; consistent sizing across all components
+- **Interactive widgets** — Input fields, lists, tables, and progress bars should behave like their ratatui/bubbletea equivalents
+- **Focus states** — Clear visual indication of focused vs unfocused elements (bold text, different background, border color change)
+- **Scrollable regions** — All lists and tables must support scrolling with visible scroll indicators
+- **Keyboard navigation** — Full vim-style keybindings (j/k for up/down, Enter to select, Esc to cancel, / to search)
+- **Mouse support** — Clickable elements where appropriate (scroll, select, buttons)
+
+The TUI overlay should feel like a **first-class citizen** — not an afterthought. When users see the overlay, they should think "this looks like a ratatui/bubbletea app" rather than "this is a compositor overlay."
+
 ### What Makes Trixie Unique
 
 Unlike other compositors (Sway, Hyprland, River) that delegate tooling to external processes, Trixie embeds its development environment directly into the compositor. The **TUI Overlay** provides:
@@ -140,7 +160,13 @@ When Trixie starts with a configured `nvim_socket` path (e.g., `/tmp/trixie-nvim
 
 ### Phase 1: Stabilization (v0.3.x)
 
-**Goal**: Fix critical bugs, complete incomplete features.
+**Goal**: Fix critical bugs, complete incomplete features, establish TUI visual identity.
+
+**TUI Visual Identity** (贯穿 all phases):
+- Audit all panels for visual consistency with ratatui/bubbletea design patterns
+- Add proper borders, titles, and block-based layouts to all components
+- Ensure theme colors apply uniformly across the entire overlay
+- Implement consistent focus states and keyboard navigation
 
 1. **FIX: nvim socket crash**
    - Investigate and fix the crash that occurs when nvim socket connects at startup
@@ -191,7 +217,7 @@ When Trixie starts with a configured `nvim_socket` path (e.g., `/tmp/trixie-nvim
 
 ### Phase 3: Development Suite (v0.5.x)
 
-**Goal**: Make Trixie the "ultimate TUI dev environment."
+**Goal**: Make Trixie the "ultimate TUI dev environment" with a polished, production-quality TUI that rivals standalone ratatui/bubbletea applications.
 
 1. **Command Palette Expansion**
    - Search files in project
@@ -338,5 +364,5 @@ cp examples/trixie.conf ~/.config/trixie/trixie.conf
 
 ---
 
-*Document Version: 0.2*  
+*Document Version: 0.3*  
 *Last Updated: 2026-03-08*

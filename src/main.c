@@ -1,23 +1,4 @@
 /* main.c — Trixie compositor entry point, wlroots backend & event loop
- *
- * Changes vs previous version
- * ───────────────────────────
- * FEAT: XWayland full view lifecycle (map/unmap/destroy/commit/title/appid)
- * FEAT: twm_try_assign_scratch called for XWayland surfaces
- * BUGFIX: pane_id==0 guard — send close immediately if MAX_PANES hit
- * BUGFIX: zero-dimension configure race — skip set_size at anim frame 0
- * FEAT: wp-cursor-shape-v1 so apps can request named cursors
- * PERF: bar/deco dirty flags — only repaint when state actually changed
- * PERF: server_sync_windows skips set_size when dimensions unchanged
- * PERF: output_handle_frame only schedules next frame when animating
- * PROTO: wp-presentation-time
- * PROTO: wp-fractional-scale-v1
- * PROTO: wp-viewporter
- * PROTO: xdg-activation-v1
- * PROTO: zwp-pointer-constraints-v1 + zwp-relative-pointer-manager-v1
- * PROTO: wlr-foreign-toplevel-management-v1
- * PROTO: tearing-control-v1
- * PROTO: content-type-v1
  */
 #include "build/wlr-layer-shell-unstable-v1-protocol.h"
 #include "nvim_panel.h"
@@ -2348,6 +2329,10 @@ int main(int argc, char *argv[]) {
 
   server_init_ipc(s);
   server_init_config_watch(s);
+
+  /* Expose server pointer for marvin_panel / overlay_exports */
+  extern TrixieServer *g_server;
+  g_server = s;
 
   if(s->cfg.idle_timeout > 0) {
     s->idle_timeout_ms = s->cfg.idle_timeout * 1000;

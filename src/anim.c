@@ -1,10 +1,6 @@
 /* anim.c — Slide / scale / morph / fade animations for panes and workspace
  * transitions.
  *
- * Mirrors the Rust AnimRect struct and the anim_* free functions from anim.c /
- * the Easing enum in twm_config.rs.  Every animation is a timed lerp between
- * a `from` rect and a `target` rect, sampled at render time via anim_get_rect.
- *
  * Animation kinds
  * ───────────────
  *   ANIM_OPEN / ANIM_CLOSE        — slide in/out from the nearest screen edge
@@ -21,7 +17,6 @@
  *     OPEN:  from = off-screen position,   target = on-screen rect
  *     CLOSE: from = on-screen rect,        target = off-screen position
  *
- *   BUG FIX: the original ANIM_CLOSE branch did lerp_rect(tgt, from, t) which
  *   reversed the direction.  The convention is now uniform: lerp from→target.
  *
  * Workspace slide

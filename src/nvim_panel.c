@@ -1,18 +1,5 @@
 /* nvim_panel.c — Neovim msgpack-RPC integration for the Trixie overlay.
  *
- * Provides two things:
- *
- *   1. A live connection to a running nvim instance via its --listen Unix
- *      socket.  Trixie can ask nvim to open files at specific lines, get the
- *      currently open buffer, and receive LSP diagnostic counts.
- *
- *   2. draw_panel_nvim() — an overlay panel ([N] tab) that shows:
- *        • current buffer / cursor position reported by nvim
- *        • LSP diagnostic summary (errors / warnings / hints per file)
- *        • a quick-jump list: select an LSP error, press Enter → nvim jumps
- *        • 's' spawns nvim in a terminal if no socket is found
- *        • 'r' refreshes diagnostics + buffer info
- *
  * Two modes of operation:
  *   POLL mode  — overlay polls nvim via msgpack-RPC each lsp_poll_ms
  *   PUSH mode  — nvim plugin pushes state via the IPC socket (preferred)
@@ -674,9 +661,44 @@ void nvim_open_file(const char *path, int line) {
   mpbuf_free(&b);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §6b  Bridge receivers — called by ipc.c when the nvim plugin pushes state
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* Execute an arbitrary Lua snippet in the connected nvim instance.
+ * Safe to call from the main thread only (same as nvim_open_file). */
+void nvim_send_lua(const char *lua) {
+  if(!g_nv.connected) return;
+  MpBuf b;
+  mpbuf_init(&b);
+  mp_encode_array_hdr(&b, 4);
+  mp_encode_int(&b, 0);
+  mp_encode_int(&b, (int32_t)g_nv.next_msgid++);
+  mp_encode_str(&b, "nvim_exec_lua");
+  mp_encode_array_hdr(&b, 2);
+  mp_encode_str(&b, lua);
+  mp_encode_array_hdr(&b, 0); /* empty args table */
+  nv_send(&b);
+  mpbuf_free(&b);
+}
+
+/* Return the cwd implied by the bridge file path (directory of current buf).
+ * out must be at least NV_BUF_PATH_MAX bytes.  Returns false if not connected. */
+bool nvim_bridge_cwd(char *out, int sz) {
+  pthread_mutex_lock(&g_nv.lock);
+  bool ok = g_nv.bridge_connected && g_nv.bridge_file[0];
+  if(ok) strncpy(out, g_nv.bridge_file, sz - 1);
+  pthread_mutex_unlock(&g_nv.lock);
+  if(!ok) return false;
+  out[sz - 1] = '\0';
+  char *slash = strrchr(out, '/');
+  if(slash && slash != out) *slash = '\0';
+  return true;
+}
+
+/* Return the current filetype from the bridge push. */
+void nvim_bridge_ft(char *out, int sz) {
+  pthread_mutex_lock(&g_nv.lock);
+  strncpy(out, g_nv.bridge_ft, sz - 1);
+  pthread_mutex_unlock(&g_nv.lock);
+  out[sz - 1] = '\0';
+}
 
 void overlay_nvim_state(
     TrixieOverlay *o, const char *file, int line, int col, const char *filetype) {
@@ -693,6 +715,8 @@ void overlay_nvim_state(
     g_nv.cursor_col  = col;
   }
   pthread_mutex_unlock(&g_nv.lock);
+  /* marvin_lua_detect is called by overlay_set_cwd which ipc.c invokes
+   * immediately after this function for every nvim_state push */
 }
 
 void overlay_nvim_diag(TrixieOverlay *o, const char *json) {

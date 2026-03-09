@@ -10,8 +10,7 @@ C linker for the host machine: cc ld.bfd 2.46
 Host machine cpu family: x86_64
 Host machine cpu: x86_64
 Dependency wayland-protocols found: YES 1.47 (cached)
-Found pkg-config: YES (/usr/sbin/pkg-config) 2.5.1
-Run-time dependency libinput found: YES 1.30.1
+Dependency libinput found: YES 1.30.1 (cached)
 Dependency history found: YES 8.3 (cached)
 Dependency luajit found: YES 2.1.1767980792 (cached)
 Dependency libdrm found: YES 2.4.131 (cached)

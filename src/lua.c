@@ -1,10 +1,5 @@
 /* lua.c — LuaJIT scripting layer for the Trixie compositor.
  *
- * Loads ~/.config/trixie/init.lua after the main config and exposes the full
- * compositor surface as a `trixie` Lua module.  The script runs on the Wayland
- * event-loop thread — no locking needed; callbacks are called synchronously
- * from within the compositor's own event processing.
- *
  * ── API exposed to Lua ───────────────────────────────────────────────────────
  *
  * Actions

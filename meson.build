@@ -25,6 +25,7 @@ src = files(
   'src/main.c',
   'src/nvim_panel.c',
   'src/overlay.c',
+  'src/overlay_exports.c',
   'src/run_panel.c',
   'src/screenshot.c',
   'src/twm.c',

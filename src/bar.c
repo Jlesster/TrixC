@@ -4,18 +4,6 @@
  * modules) has been moved to bar_worker.c.  bar_update() only reads from
  * the pre-populated BarWorkerPool slots — zero popen(), zero blocking.
  *
- * New in 0.2.0
- * ────────────
- * • Reads from BarWorkerPool instead of calling popen() inline
- * • Powerline separator glyphs between sections (configurable)
- * • CPU and memory modules
- * • Per-module color from config honoured for built-in slots
- * • generation-based dirty check (skips redraw if workers haven't updated)
- *
- * New in 0.2.1
- * ────────────
- * • Feature 5: workspace urgency dot — appends '•' to label when
- *   twm->ws_urgent_mask has the bit set; renders in red.
  */
 #include "trixie.h"
 #include <dirent.h>

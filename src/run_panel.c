@@ -1,20 +1,5 @@
 /* run_panel.c — Run-configurations panel for the Trixie overlay.
  *
- * Also contains:
- *   - run_configs_init(const OverlayCfg *)  — config-aware preset detection
- *   - nvim_get_diag_snapshot()              — bridge for lsp_panel
- *
- * Owns everything related to the [9] Run tab:
- *   - RunConfig struct + global state
- *   - stdout/stderr capture via pipe + reader thread (the main fix)
- *   - Per-config output ring buffer so each process has its own tail log
- *   - Auto-detect presets: Cargo, Go, Maven, Gradle, Python, Make
- *   - draw_panel_run()  — two-pane layout: config list (top) + output (bottom)
- *   - run_panel_key()   — key handler, called from overlay_key()
- *   - run_configs_init(), run_configs_poll() — lifecycle helpers
- *
- * Layout (two-pane split inside the panel content area):
- *
  *   ┌─────────────────────────────────────────────────────┐
  *   │  ● cargo run          cargo run 2>&1       12.3s    │  ← config list
  *   │  ○ cargo test         cargo test 2>&1               │    (upper ~40%)

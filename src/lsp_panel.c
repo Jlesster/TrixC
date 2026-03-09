@@ -1,9 +1,5 @@
 /* lsp_panel.c — Aggregated LSP diagnostics panel for the Trixie overlay.
  *
- * This panel ([L] tab) supplements the per-file nvim panel with a project-wide
- * view of all LSP diagnostics across every language server active in nvim.
- *
- * Layout (three-pane: severity filter left | diagnostics centre | detail right):
  *
  *   ┌─ filter ──┬─ diagnostics ──────────────────────────┬─ detail ───────┐
  *   │ [E] Error │  main.c:42   undefined reference to … │  main.c        │

@@ -621,6 +621,7 @@
           "/home/jless/Code/c-cpp/c/Trixie/src/main.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/nvim_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/overlay.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/overlay_exports.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/run_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/screenshot.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/twm.c"

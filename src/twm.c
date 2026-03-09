@@ -1,8 +1,5 @@
 /* twm.c — Tiling window manager state: panes, workspaces, scratchpads.
  *
- * Mirrors the Rust Twm struct (twm.rs) and its methods.  The public surface
- * intentionally matches the Rust API shape:
- *
  *   twm_init / twm_resize / twm_reflow     — lifecycle
  *   twm_open / twm_close                   — pane management
  *   twm_focused_id / twm_focused           — focus queries
@@ -12,11 +9,6 @@
  *   twm_swap / twm_swap_main               — pane reordering
  *   twm_register_scratch / twm_try_assign_scratch / twm_toggle_scratch
  *
- * 0.2.1 changes
- * ─────────────
- * • twm_set_focused: clears ws_urgent_mask bit for the focused workspace
- *   so the bar urgency dot disappears when the user visits the workspace.
- * • twm_switch_ws: also clears the bit for the destination workspace.
  */
 #include "trixie.h"
 #include <math.h>

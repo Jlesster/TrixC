@@ -1,10 +1,5 @@
 /* screenshot.c — screenshot via grim subprocess
  *
- * wlroots 0.18 has no compositor-side pixel readback API.
- * The wlr_screencopy_v1 protocol is for CLIENT apps only.
- * The correct approach is to spawn grim, which uses the screencopy
- * client protocol that our compositor already advertises.
- *
  * Dependencies: grim (full/window), slurp (region picker)
  *   pacman -S grim slurp   /   apt install grim slurp
  */

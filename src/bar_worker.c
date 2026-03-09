@@ -1,31 +1,18 @@
 /* bar_worker.c — Async background polling for bar modules.
  *
- * Each built-in module (battery, network, volume, cpu, memory) and each
- * user-defined exec module runs in its own pthread.  Workers sleep for their
- * configured interval, poll their data source, write the result into a
- * BarModuleSlot, and bump a shared generation counter.
- *
- * bar_update() reads the slots directly — zero blocking, zero popen() on the
- * render thread.
- *
- * Thread safety
- * ─────────────
- * Slot writes are protected by pool->mu.  Reads from bar_update happen on the
- * Wayland event-loop thread without holding the mutex; this is safe because:
- *   - slot->text is written atomically (single strncpy into a buffer whose
- *     address never changes)
- *   - slot->valid is written after slot->text (acquire/release via the mutex)
- *   - generation is _Atomic so bar_update can cheaply check if anything new
- *     arrived since the last frame
- *
- * Shutdown
- * ────────
- * bar_workers_stop() sets pool->running = false, then joins all threads.
- * Workers check pool->running each iteration and exit cleanly.
  */
 
 #define _POSIX_C_SOURCE 200809L
 #include "trixie.h"
+
+/* Slot constants for new built-in workers.
+ * If trixie.h already defines these they will be no-ops. */
+#ifndef BAR_SLOT_GPU
+#define BAR_SLOT_GPU (BAR_SLOT_BUILTIN_COUNT)
+#endif
+#ifndef BAR_SLOT_TEMP
+#define BAR_SLOT_TEMP (BAR_SLOT_BUILTIN_COUNT + 1)
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <math.h>
@@ -141,6 +128,32 @@ static void *worker_battery(void *arg) {
  * §2  Network worker
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Per-interface rx/tx byte counters for bandwidth calculation */
+static char      g_net_iface[32] = { 0 };
+static long long g_net_rx_prev   = 0;
+static long long g_net_tx_prev   = 0;
+static int64_t   g_net_last_ms   = 0;
+
+static long long read_net_counter(const char *iface, const char *dir) {
+  char path[128];
+  snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/%s_bytes", iface, dir);
+  FILE *f = fopen(path, "r");
+  if(!f) return 0;
+  long long v = 0;
+  fscanf(f, "%lld", &v);
+  fclose(f);
+  return v;
+}
+
+static void fmt_rate(long long Bps, char *out, int sz) {
+  if(Bps >= 1024 * 1024)
+    snprintf(out, sz, "%.1fM", Bps / (1024.0 * 1024.0));
+  else if(Bps >= 1024)
+    snprintf(out, sz, "%.0fK", Bps / 1024.0);
+  else
+    snprintf(out, sz, "%lldB", Bps);
+}
+
 static void poll_network(BarWorkerPool *pool) {
   char iface[32] = "---";
   bool up        = false;
@@ -196,8 +209,35 @@ static void poll_network(BarWorkerPool *pool) {
   }
 
 done:;
-  char buf[64];
-  snprintf(buf, sizeof(buf), "%s %s", up ? "NET" : "---", iface);
+  char buf[96];
+  if(!up || iface[0] == '-') {
+    snprintf(buf, sizeof(buf), "--- %s", iface);
+    slot_write(pool, BAR_SLOT_NETWORK, buf);
+    return;
+  }
+
+  long long rx = read_net_counter(iface, "rx");
+  long long tx = read_net_counter(iface, "tx");
+  int64_t   ms = now_ms();
+
+  if(g_net_last_ms > 0 && !strcmp(g_net_iface, iface)) {
+    double    dt  = (ms - g_net_last_ms) / 1000.0;
+    long long drx = (long long)((rx - g_net_rx_prev) / dt);
+    long long dtx = (long long)((tx - g_net_tx_prev) / dt);
+    if(drx < 0) drx = 0;
+    if(dtx < 0) dtx = 0;
+    char rs[16], ts[16];
+    fmt_rate(drx, rs, sizeof(rs));
+    fmt_rate(dtx, ts, sizeof(ts));
+    snprintf(buf, sizeof(buf), "↓%s ↑%s", rs, ts);
+  } else {
+    snprintf(buf, sizeof(buf), "NET %s", iface);
+  }
+
+  strncpy(g_net_iface, iface, sizeof(g_net_iface) - 1);
+  g_net_rx_prev = rx;
+  g_net_tx_prev = tx;
+  g_net_last_ms = ms;
   slot_write(pool, BAR_SLOT_NETWORK, buf);
 }
 
@@ -302,7 +342,10 @@ static bool read_cpu_stat(long long *idle_out, long long *total_out) {
 static void *worker_cpu(void *arg) {
   BarWorkerPool *pool      = arg;
   long long      prev_idle = 0, prev_total = 0;
+
+  /* Prime with first sample so we can show a value immediately */
   read_cpu_stat(&prev_idle, &prev_total);
+  slot_write(pool, BAR_SLOT_CPU, "CPU --%%");
 
   while(pool->running) {
     sleep_ms(pool, 1000);
@@ -351,6 +394,163 @@ static void *worker_memory(void *arg) {
   while(pool->running) {
     poll_memory(pool);
     sleep_ms(pool, 2000);
+  }
+  return NULL;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §5b  GPU worker  (nvidia-smi or /sys/class/drm + hwmon)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static bool poll_gpu_nvidia(BarWorkerPool *pool) {
+  /* Try nvidia-smi query — fast and reliable on Nvidia systems */
+  FILE *p = popen("nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total"
+                  " --format=csv,noheader,nounits 2>/dev/null | head -1",
+                  "r");
+  if(!p) return false;
+  char buf[128] = { 0 };
+  bool got      = fgets(buf, sizeof(buf), p) != NULL;
+  pclose(p);
+  if(!got || !buf[0] || buf[0] == '\n') return false;
+  int       util = 0;
+  long long used = 0, total = 0;
+  if(sscanf(buf, "%d, %lld, %lld", &util, &used, &total) < 1) return false;
+  char out[64];
+  if(total > 0)
+    snprintf(out, sizeof(out), "GPU %d%% %lldM", util, used);
+  else
+    snprintf(out, sizeof(out), "GPU %d%%", util);
+  slot_write(pool, BAR_SLOT_GPU, out);
+  return true;
+}
+
+static bool poll_gpu_amd(BarWorkerPool *pool) {
+  /* AMD: /sys/class/drm/card.../device/gpu_busy_percent */
+  DIR *d = opendir("/sys/class/drm");
+  if(!d) return false;
+  struct dirent *e;
+  bool           found = false;
+  while((e = readdir(d)) && !found) {
+    if(strncmp(e->d_name, "card", 4) != 0 || strchr(e->d_name + 4, '-')) continue;
+    char path[256];
+    snprintf(
+        path, sizeof(path), "/sys/class/drm/%s/device/gpu_busy_percent", e->d_name);
+    FILE *f = fopen(path, "r");
+    if(!f) continue;
+    int pct = 0;
+    if(fscanf(f, "%d", &pct) == 1) {
+      /* also try vram */
+      char vpath[256], out[64];
+      snprintf(vpath,
+               sizeof(vpath),
+               "/sys/class/drm/%s/device/mem_info_vram_used",
+               e->d_name);
+      FILE     *vf        = fopen(vpath, "r");
+      long long vram_used = 0;
+      if(vf) {
+        fscanf(vf, "%lld", &vram_used);
+        fclose(vf);
+        vram_used /= (1024 * 1024);
+      }
+      if(vram_used > 0)
+        snprintf(out, sizeof(out), "GPU %d%% %lldM", pct, vram_used);
+      else
+        snprintf(out, sizeof(out), "GPU %d%%", pct);
+      slot_write(pool, BAR_SLOT_GPU, out);
+      found = true;
+    }
+    fclose(f);
+  }
+  closedir(d);
+  return found;
+}
+
+static void *worker_gpu(void *arg) {
+  BarWorkerPool *pool      = arg;
+  /* Detect which GPU type we have once */
+  bool           is_nvidia = (system("nvidia-smi -L >/dev/null 2>&1") == 0);
+  while(pool->running) {
+    bool ok = is_nvidia ? poll_gpu_nvidia(pool) : poll_gpu_amd(pool);
+    if(!ok) {
+      sleep_ms(pool, 10000);
+      continue;
+    } /* back off if no GPU */
+    sleep_ms(pool, 2000);
+  }
+  return NULL;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * §5c  Temperature worker  (/sys/class/hwmon)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void poll_temperature(BarWorkerPool *pool) {
+  /* Walk hwmon devices looking for CPU/package temperature.
+   * Priority: coretemp (Intel) > k10temp (AMD) > any with "Tdie"/"Package" */
+  DIR *d = opendir("/sys/class/hwmon");
+  if(!d) return;
+
+  struct dirent *e;
+  int            best_temp  = -1;
+  /* score: 3=package/tdie, 2=coretemp/k10temp, 1=anything */
+  int            best_score = 0;
+
+  while((e = readdir(d))) {
+    if(e->d_name[0] == '.') continue;
+    char base[128];
+    snprintf(base, sizeof(base), "/sys/class/hwmon/%s", e->d_name);
+
+    /* Read driver name */
+    char npath[160], name[32] = { 0 };
+    snprintf(npath, sizeof(npath), "%s/name", base);
+    FILE *nf = fopen(npath, "r");
+    if(nf) {
+      fscanf(nf, "%31s", name);
+      fclose(nf);
+    }
+    bool is_cpu = (!strcmp(name, "coretemp") || !strcmp(name, "k10temp") ||
+                   !strcmp(name, "zenpower") || !strcmp(name, "nct6775"));
+
+    /* Scan temp*_input files */
+    for(int ti = 1; ti <= 12; ti++) {
+      char tpath[180], lpath[180], label[64] = { 0 };
+      snprintf(tpath, sizeof(tpath), "%s/temp%d_input", base, ti);
+      snprintf(lpath, sizeof(lpath), "%s/temp%d_label", base, ti);
+      FILE *tf = fopen(tpath, "r");
+      if(!tf) continue;
+      int millic = 0;
+      fscanf(tf, "%d", &millic);
+      fclose(tf);
+      FILE *lf = fopen(lpath, "r");
+      if(lf) {
+        fscanf(lf, "%63[^\n]", label);
+        fclose(lf);
+      }
+      int temp = millic / 1000;
+      if(temp <= 0 || temp > 120) continue;
+
+      bool is_pkg = (strstr(label, "Package") || strstr(label, "Tdie") ||
+                     strstr(label, "Tccd") || strstr(label, "Tctl"));
+      int  score  = is_pkg ? 3 : (is_cpu ? 2 : 1);
+      if(score > best_score || (score == best_score && temp > best_temp)) {
+        best_score = score;
+        best_temp  = temp;
+      }
+    }
+  }
+  closedir(d);
+
+  if(best_temp < 0) return;
+  char buf[32];
+  snprintf(buf, sizeof(buf), "CPU %d°C", best_temp);
+  slot_write(pool, BAR_SLOT_TEMP, buf);
+}
+
+static void *worker_temperature(void *arg) {
+  BarWorkerPool *pool = arg;
+  while(pool->running) {
+    poll_temperature(pool);
+    sleep_ms(pool, 3000);
   }
   return NULL;
 }
@@ -415,6 +615,17 @@ void bar_workers_init(BarWorkerPool *pool, const Config *cfg) {
   pthread_create(&pool->threads[BAR_SLOT_VOLUME], NULL, worker_volume, pool);
   pthread_create(&pool->threads[BAR_SLOT_CPU], NULL, worker_cpu, pool);
   pthread_create(&pool->threads[BAR_SLOT_MEMORY], NULL, worker_memory, pool);
+  /* GPU and temperature — detached, exit gracefully if hardware absent */
+  {
+    pthread_t t;
+    pthread_create(&t, NULL, worker_gpu, pool);
+    pthread_detach(t);
+  }
+  {
+    pthread_t t;
+    pthread_create(&t, NULL, worker_temperature, pool);
+    pthread_detach(t);
+  }
 
   /* Exec module workers */
   bar_workers_sync_exec(pool, cfg);

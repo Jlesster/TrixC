@@ -1,7 +1,5 @@
 /* files_panel.c — File browser panel for the Trixie overlay.
  *
- * Layout (two-pane: file tree left, preview/info right):
- *
  *   ┌─ cwd ───────────────────────┬─ preview ──────────────────────────────┐
  *   │  📁 ..                      │  README.md                             │
  *   │  📁 src/                    │  ─────────────────────────────────────  │
