@@ -13,30 +13,14 @@
 #include <stdint.h>
 #include <string.h>
 
-/* ── Layout constants ───────────────────────────────────────────────────────
- *
- * ROW_H  — height of one text row including inter-row breathing room.
- *           Previously g_ov_th+6 which packed rows too tightly at typical
- *           font sizes.  Now g_ov_th*2 so each row has a full line-height of
- *           padding around the glyph cap-height — doubles the vertical
- *           density and makes the panel feel spacious rather than crammed.
- *
- * PAD    — horizontal/vertical gutter inside the panel border.
- *           Raised from 12 → 16 so text never feels glued to edges.
- *
- * HEADER_H — tab-bar + rule height.  One full ROW_H plus a 2 px rule gap.
- *
- * COL_GAP  — minimum pixel gap between adjacent columns of text.
- *
- * SECTION_GAP — vertical space between logical sections (e.g. between the
- *               config list and the output pane).
- */
+/* ── Layout constants ────────────────────────────────────────────────────── */
 extern int g_ov_th;  /* total glyph height  (ascender − descender) */
 extern int g_ov_asc; /* ascender in pixels                          */
 
 #define ROW_H       (g_ov_th * 2)
 #define PAD         16
 #define HEADER_H    (ROW_H + 6)
+#define HDR_H       HEADER_H /* alias used by panel files */
 #define COL_GAP     20
 #define SECTION_GAP 10
 
@@ -58,6 +42,44 @@ extern LogRing g_log_ring;
 
 void        log_ring_push(const char *line);
 const char *log_ring_get(int idx);
+
+/* ── TUI composite widgets (defined in overlay.c) ───────────────────────── */
+void tui_box(uint32_t   *px,
+             int         stride,
+             int         bx,
+             int         by,
+             int         bw,
+             int         bh,
+             const char *title,
+             const char *hint,
+             Color       ac,
+             Color       bg,
+             int         cw,
+             int         ch);
+
+void tui_hsep(uint32_t   *px,
+              int         stride,
+              int         bx,
+              int         by_sep,
+              int         bw,
+              const char *label,
+              Color       ac,
+              Color       bg,
+              int         cw,
+              int         ch);
+
+void tui_scrollbar(uint32_t *px,
+                   int       stride,
+                   int       bx,
+                   int       by,
+                   int       bw,
+                   int       bh,
+                   int       scroll,
+                   int       total,
+                   int       visible,
+                   Color     ac,
+                   int       cw,
+                   int       ch);
 
 /* ── Time helper (defined in overlay.c) ─────────────────────────────────── */
 int64_t ov_now_ms(void);

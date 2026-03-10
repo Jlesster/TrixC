@@ -619,11 +619,13 @@
           "/home/jless/Code/c-cpp/c/Trixie/src/lsp_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/lua.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/main.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/marvin_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/nvim_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/overlay.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/overlay_exports.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/run_panel.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/screenshot.c",
+          "/home/jless/Code/c-cpp/c/Trixie/src/shader.c",
           "/home/jless/Code/c-cpp/c/Trixie/src/twm.c"
         ],
         "generated_sources": [
@@ -668,6 +670,8 @@
           "/usr/lib/libxkbcommon.so",
           "/usr/lib/libfreetype.so",
           "/usr/lib/libluajit-5.1.so",
+          "/usr/lib/libEGL.so",
+          "/usr/lib/libGLESv2.so",
           "/usr/lib/libinput.so",
           "-Wl,--end-group",
           "-Wl,--end-group"
@@ -691,6 +695,8 @@
       "xkbcommon",
       "freetype2",
       "luajit",
+      "egl",
+      "glesv2",
       "harfbuzz",
       "libinput"
     ],
@@ -752,6 +758,62 @@
     "installed": true,
     "install_filename": [
       "/usr/local/bin/trixiectl"
+    ]
+  },
+  {
+    "name": "tls",
+    "id": "tls@exe",
+    "type": "executable",
+    "defined_in": "/home/jless/Code/c-cpp/c/Trixie/meson.build",
+    "filename": [
+      "/home/jless/Code/c-cpp/c/Trixie/build/tls"
+    ],
+    "build_by_default": true,
+    "target_sources": [
+      {
+        "language": "c",
+        "machine": "host",
+        "compiler": [
+          "cc"
+        ],
+        "parameters": [
+          "-I/home/jless/Code/c-cpp/c/Trixie/build/tls.p",
+          "-I/home/jless/Code/c-cpp/c/Trixie/build",
+          "-I/home/jless/Code/c-cpp/c/Trixie",
+          "-fdiagnostics-color=always",
+          "-D_FILE_OFFSET_BITS=64",
+          "-Wall",
+          "-Winvalid-pch",
+          "-Wextra",
+          "-Wpedantic",
+          "-std=c11",
+          "-O2",
+          "-g"
+        ],
+        "sources": [
+          "/home/jless/Code/c-cpp/c/Trixie/src/lsp/tls.c"
+        ],
+        "generated_sources": [],
+        "unity_sources": []
+      },
+      {
+        "linker": [
+          "cc"
+        ],
+        "parameters": [
+          "-Wl,--as-needed",
+          "-Wl,--no-undefined"
+        ]
+      }
+    ],
+    "extra_files": [],
+    "subproject": null,
+    "dependencies": [],
+    "depends": [],
+    "win_subsystem": "console",
+    "installed": true,
+    "install_filename": [
+      "/usr/local/bin/tls"
     ]
   }
 ]

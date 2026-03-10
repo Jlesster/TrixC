@@ -23,11 +23,13 @@ src = files(
   'src/lsp_panel.c',
   'src/lua.c',
   'src/main.c',
+  'src/marvin_panel.c',
   'src/nvim_panel.c',
   'src/overlay.c',
   'src/overlay_exports.c',
   'src/run_panel.c',
   'src/screenshot.c',
+  'src/shader.c',
   'src/twm.c',
 )
 
@@ -41,6 +43,8 @@ libinput_dep = dependency('libinput', required: true)
 history_dep = dependency('history', required: true)
 lua_dep = dependency('luajit', required: true)
 libdrm_dep = dependency('libdrm', required: true)
+gles_dep = dependency('glesv2', required: true)
+egl_dep = dependency('egl', required: true)
 pixman_1_dep = dependency('pixman-1', required: true)
 fontconfig_dep = dependency('fontconfig', required: true)
 harfbuzz_gobject_dep = dependency('harfbuzz-gobject', required: true)
@@ -206,6 +210,8 @@ exe = executable(
     xkbcommon_dep,
     freetype_dep,
     lua_dep,
+    egl_dep,
+    gles_dep,
     harfbuzz_dep,
     libinput_dep,
   ],
@@ -218,4 +224,10 @@ executable(
   sources: ['src/trixiectl.c'],
   install: true,
   # no special deps needed — just libc
+)
+
+executable(
+  'tls',
+  sources: ['src/lsp/tls.c'],
+  install: true,
 )

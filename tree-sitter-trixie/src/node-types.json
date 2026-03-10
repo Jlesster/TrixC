@@ -1,0 +1,554 @@
+[
+  {
+    "type": "action",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "assignment",
+    "named": true,
+    "fields": {
+      "key": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "key",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "bind_value",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "color",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "string_value",
+            "named": true
+          },
+          {
+            "type": "variable",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "bind_value",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "action",
+          "named": true
+        },
+        {
+          "type": "key_sym",
+          "named": true
+        },
+        {
+          "type": "modifier",
+          "named": true
+        },
+        {
+          "type": "string_value",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "block",
+    "named": true,
+    "fields": {
+      "label": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "block_label",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block_name",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "hash_comment",
+          "named": true
+        },
+        {
+          "type": "variable_def",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "block_name",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "boolean",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "color",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "directive",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "directive_name",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "string_value",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "modifier",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "source_file",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "assignment",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "directive",
+          "named": true
+        },
+        {
+          "type": "hash_comment",
+          "named": true
+        },
+        {
+          "type": "variable_def",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "variable_def",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "bind_value",
+          "named": true
+        },
+        {
+          "type": "boolean",
+          "named": true
+        },
+        {
+          "type": "color",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "string_value",
+          "named": true
+        },
+        {
+          "type": "variable",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": ",",
+    "named": false
+  },
+  {
+    "type": "=",
+    "named": false
+  },
+  {
+    "type": "ALT",
+    "named": false
+  },
+  {
+    "type": "CTRL",
+    "named": false
+  },
+  {
+    "type": "HYPER",
+    "named": false
+  },
+  {
+    "type": "META",
+    "named": false
+  },
+  {
+    "type": "MOD1",
+    "named": false
+  },
+  {
+    "type": "MOD2",
+    "named": false
+  },
+  {
+    "type": "MOD3",
+    "named": false
+  },
+  {
+    "type": "MOD4",
+    "named": false
+  },
+  {
+    "type": "MOD5",
+    "named": false
+  },
+  {
+    "type": "SHIFT",
+    "named": false
+  },
+  {
+    "type": "SUPER",
+    "named": false
+  },
+  {
+    "type": "animations",
+    "named": false
+  },
+  {
+    "type": "bar",
+    "named": false
+  },
+  {
+    "type": "bar_module",
+    "named": false
+  },
+  {
+    "type": "block_label",
+    "named": true
+  },
+  {
+    "type": "close",
+    "named": false
+  },
+  {
+    "type": "colors",
+    "named": false
+  },
+  {
+    "type": "colour",
+    "named": false
+  },
+  {
+    "type": "decoration",
+    "named": false
+  },
+  {
+    "type": "dev_lang",
+    "named": false
+  },
+  {
+    "type": "directive_name",
+    "named": true
+  },
+  {
+    "type": "emergency_quit",
+    "named": false
+  },
+  {
+    "type": "emergencyquit",
+    "named": false
+  },
+  {
+    "type": "exec",
+    "named": false
+  },
+  {
+    "type": "exit",
+    "named": false
+  },
+  {
+    "type": "false",
+    "named": false
+  },
+  {
+    "type": "focus",
+    "named": false
+  },
+  {
+    "type": "fullscreen",
+    "named": false
+  },
+  {
+    "type": "general",
+    "named": false
+  },
+  {
+    "type": "grow_main",
+    "named": false
+  },
+  {
+    "type": "growmain",
+    "named": false
+  },
+  {
+    "type": "hash_comment",
+    "named": true
+  },
+  {
+    "type": "input",
+    "named": false
+  },
+  {
+    "type": "key",
+    "named": true
+  },
+  {
+    "type": "key_sym",
+    "named": true
+  },
+  {
+    "type": "keyboard",
+    "named": false
+  },
+  {
+    "type": "line_comment",
+    "named": true,
+    "extra": true
+  },
+  {
+    "type": "monitor",
+    "named": false
+  },
+  {
+    "type": "move",
+    "named": false
+  },
+  {
+    "type": "move_to_workspace",
+    "named": false
+  },
+  {
+    "type": "movefocus",
+    "named": false
+  },
+  {
+    "type": "movetoworkspace",
+    "named": false
+  },
+  {
+    "type": "movewindow",
+    "named": false
+  },
+  {
+    "type": "next_layout",
+    "named": false
+  },
+  {
+    "type": "next_workspace",
+    "named": false
+  },
+  {
+    "type": "nextlayout",
+    "named": false
+  },
+  {
+    "type": "nextworkspace",
+    "named": false
+  },
+  {
+    "type": "no",
+    "named": false
+  },
+  {
+    "type": "number",
+    "named": true
+  },
+  {
+    "type": "off",
+    "named": false
+  },
+  {
+    "type": "on",
+    "named": false
+  },
+  {
+    "type": "overlay",
+    "named": false
+  },
+  {
+    "type": "prev_layout",
+    "named": false
+  },
+  {
+    "type": "prev_workspace",
+    "named": false
+  },
+  {
+    "type": "prevlayout",
+    "named": false
+  },
+  {
+    "type": "prevworkspace",
+    "named": false
+  },
+  {
+    "type": "quit",
+    "named": false
+  },
+  {
+    "type": "reload",
+    "named": false
+  },
+  {
+    "type": "resize_ratio",
+    "named": false
+  },
+  {
+    "type": "scratchpad",
+    "named": false
+  },
+  {
+    "type": "shrink_main",
+    "named": false
+  },
+  {
+    "type": "shrinkmain",
+    "named": false
+  },
+  {
+    "type": "string_value",
+    "named": true
+  },
+  {
+    "type": "swap_main",
+    "named": false
+  },
+  {
+    "type": "swapwithmaster",
+    "named": false
+  },
+  {
+    "type": "switch_vt",
+    "named": false
+  },
+  {
+    "type": "switchvt",
+    "named": false
+  },
+  {
+    "type": "toggle_bar",
+    "named": false
+  },
+  {
+    "type": "toggle_float",
+    "named": false
+  },
+  {
+    "type": "togglebar",
+    "named": false
+  },
+  {
+    "type": "togglefloating",
+    "named": false
+  },
+  {
+    "type": "true",
+    "named": false
+  },
+  {
+    "type": "variable",
+    "named": true
+  },
+  {
+    "type": "workspace",
+    "named": false
+  },
+  {
+    "type": "yes",
+    "named": false
+  },
+  {
+    "type": "{",
+    "named": false
+  },
+  {
+    "type": "}",
+    "named": false
+  }
+]

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "trixlang",
+      "camelcase": "TrixLang",
+      "title": "Trix-Lang",
+      "scope": "source.trixlang",
+      "file-types": [
+        ".conf"
+      ],
+      "injection-regex": "^trixlang$",
+      "class-name": "TreeSitterTrixlang"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "parser and syntax highlighting for Trixie's config files",
+    "authors": [
+      {
+        "name": "Jless",
+        "email": "jns.corey@gmail.com",
+        "url": ""
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/Jlesster/TrixC.git",
+      "funding": ""
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "java": false,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}

@@ -14,6 +14,8 @@ Dependency libinput found: YES 1.30.1 (cached)
 Dependency history found: YES 8.3 (cached)
 Dependency luajit found: YES 2.1.1767980792 (cached)
 Dependency libdrm found: YES 2.4.131 (cached)
+Dependency glesv2 found: YES 3.2 (cached)
+Dependency egl found: YES 1.5 (cached)
 Dependency pixman-1 found: YES 0.46.4 (cached)
 Dependency fontconfig found: YES 2.17.1 (cached)
 Dependency harfbuzz-gobject found: YES 12.3.2 (cached)
@@ -27,6 +29,6 @@ Dependency xkbcommon found: YES 1.13.1 (cached)
 Dependency freetype2 found: YES 26.4.20 (cached)
 Dependency harfbuzz found: YES 12.3.2 (cached)
 Program wayland-scanner found: YES (/usr/sbin/wayland-scanner)
-Build targets in project: 20
+Build targets in project: 21
 
 Found ninja-1.13.2 at /usr/sbin/ninja

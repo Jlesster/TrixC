@@ -1174,6 +1174,21 @@ static void parse_block(Lexer      *l,
       lex_skip_to_nl(l);
       continue;
     }
+    if(!strcmp(key, "build_dir") && !block[0]) {
+      /* Path to the build directory for hot-reload (ninja is run here).
+       * Tilde expansion is handled: ~/foo -> /home/user/foo            */
+      char expanded[512] = { 0 };
+      if(val[0] == '~' && (val[1] == '/' || val[1] == '\0')) {
+        const char *home = getenv("HOME");
+        if(!home) home = "/root";
+        snprintf(expanded, sizeof(expanded), "%s%s", home, val + 1);
+      } else {
+        strncpy(expanded, val, sizeof(expanded) - 1);
+      }
+      strncpy(c->build_dir, expanded, sizeof(c->build_dir) - 1);
+      lex_skip_to_nl(l);
+      continue;
+    }
     if(!strncasecmp(key, "bind", 4)) {
       parse_bind(c, l, val);
       lex_skip_to_nl(l);
@@ -1216,6 +1231,10 @@ static void parse_block(Lexer      *l,
         c->colors.background = color_from_str(val);
       else if(!strcmp(bk, "border_size") || !strcmp(bk, "border_width"))
         c->border_width = (int)str_to_num(val);
+      else if(!strcmp(bk, "saturation"))
+        c->saturation = (float)str_to_num(val);
+      else if(!strcmp(bk, "shader"))
+        c->shader_enabled = str_to_bool(val);
       else if(!strcmp(bk, "corner_radius") || !strcmp(bk, "rounding"))
         c->corner_radius = (int)str_to_num(val);
       else if(!strcmp(bk, "smart_gaps"))
@@ -1415,7 +1434,13 @@ static void parse_block(Lexer      *l,
         m->refresh = (int)str_to_num(val);
       else if(!strcmp(bk, "scale"))
         m->scale = (float)str_to_num(val);
-      else if(!strcmp(bk, "position")) {
+      else if(!strcmp(bk, "saturation")) {
+        m->saturation = (float)str_to_num(val);
+        m->shader_set = true;
+      } else if(!strcmp(bk, "shader")) {
+        m->shader_enabled = str_to_bool(val);
+        m->shader_set     = true;
+      } else if(!strcmp(bk, "position")) {
         CVals pv = collect_vals(l, val);
         if(pv.n == 1)
           parse_WxH(pv.s[0], &m->pos_x, &m->pos_y);
@@ -1432,6 +1457,8 @@ static void parse_block(Lexer      *l,
       ScratchpadCfg *sp = &c->scratchpads[c->scratchpad_count - 1];
       if(!strcmp(bk, "app_id") || !strcmp(bk, "class"))
         strncpy(sp->app_id, val, sizeof(sp->app_id) - 1);
+      else if(!strcmp(bk, "exec"))
+        strncpy(sp->exec, val, sizeof(sp->exec) - 1);
       else if(!strcmp(bk, "name"))
         strncpy(sp->name, val, sizeof(sp->name) - 1);
       else if(!strcmp(bk, "width")) {
@@ -1812,6 +1839,9 @@ void config_defaults(Config *c) {
   strncpy(c->seat_name, "seat0", sizeof(c->seat_name) - 1);
   c->idle_timeout = 0;
   c->xwayland     = false;
+
+  c->saturation     = 1.0f; /* neutral — no colour change */
+  c->shader_enabled = true;
 
   c->colors.active_border   = color_hex(0x94e2d5);
   c->colors.inactive_border = color_hex(0x313244);

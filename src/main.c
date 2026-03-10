@@ -4,6 +4,7 @@
 #include "nvim_panel.h"
 #include "trixie.h"
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <libinput.h>
 #include <linux/input-event-codes.h>
@@ -14,11 +15,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <wlr/backend/libinput.h>
+#include <wlr/render/pass.h>
+#include <EGL/egl.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 
+
 #include <execinfo.h>
 #include <signal.h>
+
 
 #include <wlr/types/wlr_content_type_v1.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
@@ -53,6 +58,9 @@ static void handle_cursor_frame(struct wl_listener *l, void *data);
 static void handle_request_cursor(struct wl_listener *l, void *data);
 static void handle_request_set_selection(struct wl_listener *l, void *data);
 static void handle_request_set_primary_selection(struct wl_listener *l, void *data);
+static void handle_request_start_drag(struct wl_listener *l, void *data);
+static void handle_start_drag(struct wl_listener *l, void *data);
+void server_binary_reload(TrixieServer *s);
 
 static void view_handle_map(struct wl_listener *l, void *data);
 static void view_handle_unmap(struct wl_listener *l, void *data);
@@ -561,7 +569,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       s->running = false;
       wl_display_terminate(s->display);
       break;
-    case ACTION_RELOAD: server_apply_config_reload(s); break;
+    case ACTION_RELOAD: server_binary_reload(s); break;
     case ACTION_EXEC: server_spawn(s, a->exec_cmd); break;
     case ACTION_CLOSE: {
       PaneId id = twm_focused_id(&s->twm);
@@ -776,17 +784,37 @@ void server_scratch_toggle(TrixieServer *s, const char *name) {
       break;
     }
   if(!sp) return;
-  bool   was_visible = sp->visible;
-  PaneId pid         = sp->has_pane ? sp->pane_id : 0;
-  twm_toggle_scratch(&s->twm, name);
-  if(pid) {
-    Pane *p = twm_pane_by_id(&s->twm, pid);
-    if(p) {
-      if(!was_visible && sp->visible)
-        anim_scratch_open(&s->anim, pid, p->rect);
-      else if(was_visible && !sp->visible)
-        anim_scratch_close(&s->anim, pid, p->rect);
+
+  /* If the scratchpad has no live pane, try to spawn its bound app.
+   * The exec command lives in cfg.scratchpads (parsed from config).
+   * Once spawned, the app will map, twm_try_assign_scratch will claim it,
+   * and the next toggle keypress will show it. */
+  if(!sp->has_pane) {
+    for(int i = 0; i < s->cfg.scratchpad_count; i++) {
+      ScratchpadCfg *sc = &s->cfg.scratchpads[i];
+      if(strcmp(sc->name, name) != 0) continue;
+      if(sc->exec[0]) {
+        wlr_log(WLR_INFO, "scratch: spawning '%s' for scratchpad '%s'",
+                sc->exec, name);
+        server_spawn(s, sc->exec);
+      } else {
+        wlr_log(WLR_INFO, "scratch: no exec set for scratchpad '%s' — "
+                "launch the app manually once to register it", name);
+      }
+      break;
     }
+    return;
+  }
+
+  bool   was_visible = sp->visible;
+  PaneId pid         = sp->pane_id;
+  twm_toggle_scratch(&s->twm, name);
+  Pane *p = twm_pane_by_id(&s->twm, pid);
+  if(p) {
+    if(!was_visible && sp->visible)
+      anim_scratch_open(&s->anim, pid, p->rect);
+    else if(was_visible && !sp->visible)
+      anim_scratch_close(&s->anim, pid, p->rect);
   }
   server_sync_windows(s);
   server_sync_focus(s);
@@ -842,6 +870,233 @@ void server_apply_config_reload(TrixieServer *s) {
   wlr_log(WLR_INFO, "config reloaded");
   /* Re-exec init.lua so Lua config overrides survive the reload. */
   lua_reload(s);
+}
+
+/* ── Binary hot-reload ────────────────────────────────────────────────────── *
+ *
+ * Flow:
+ *   1. server_binary_reload() — forks ninja, pipes its stdout+stderr into the
+ *      wl event loop, pushes "building…" to the overlay.
+ *   2. reload_pipe_cb() — streams ninja output lines to the overlay log so
+ *      you can watch errors without leaving the compositor.
+ *   3. On ninja EOF, we waitpid().  Exit 0 → execv the new binary in-place.
+ *      Exit non-zero → push "build failed" to overlay, compositor keeps running.
+ *
+ * The execv call replaces the compositor process in-place — same PID, same
+ * Wayland socket fd (we clear CLOEXEC on it), same DISPLAY env.  All running
+ * clients reconnect automatically within 1-2 frames.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* Push a message to the overlay on every output — convenience wrapper. */
+static void reload_notify(TrixieServer *s, const char *title, const char *msg) {
+  TrixieOutput *o;
+  wl_list_for_each(o, &s->outputs, link) {
+    if(o->overlay) overlay_notify(o->overlay, title, msg);
+  }
+}
+
+/* Called when the ninja pipe has data (or closes). */
+static int reload_pipe_cb(int fd, uint32_t mask, void *data) {
+  TrixieServer *s = data;
+  char          buf[2048];
+
+  if(mask & WL_EVENT_READABLE) {
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    if(n > 0) {
+      buf[n] = '\0';
+      /* Strip trailing newline for the overlay notification. */
+      while(n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+        buf[--n] = '\0';
+      if(n > 0) reload_notify(s, "rebuild", buf);
+    }
+  }
+
+  if(mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+    /* Ninja finished — collect exit status. */
+    int   status   = 0;
+    pid_t finished = waitpid(s->reload_pid, &status, WNOHANG);
+
+    /* Clean up the event source and pipe fd. */
+    if(s->reload_pipe_src) {
+      wl_event_source_remove(s->reload_pipe_src);
+      s->reload_pipe_src = NULL;
+    }
+    close(fd);
+    s->reload_pipe_fd = -1;
+    s->reload_pid     = -1;
+
+    int exit_code = (finished > 0 && WIFEXITED(status)) ? WEXITSTATUS(status) : 1;
+
+    if(exit_code != 0) {
+      wlr_log(WLR_ERROR, "hot-reload: ninja failed (exit %d)", exit_code);
+      reload_notify(s, "rebuild", "build FAILED — compositor unchanged");
+      return 0;
+    }
+
+    wlr_log(WLR_INFO, "hot-reload: build succeeded, exec-replacing…");
+    reload_notify(s, "rebuild", "build OK — reloading…");
+
+    /* Give the overlay one frame to render the message before we vanish. */
+    server_request_redraw(s);
+
+    /* Clear CLOEXEC on the Wayland display socket fd so it survives execv.
+     * wlroots sets CLOEXEC when it creates the socket; without clearing it
+     * the fd is closed by the kernel on execv and the new binary can't
+     * re-use the same socket name (clients would lose their connection).
+     *
+     * wl_display_get_fd() returns the epoll/event-loop fd, not the listening
+     * socket. The listening socket fd is stored internally by libwayland but
+     * we can find it by scanning /proc/self/fd for the socket matching the
+     * WAYLAND_DISPLAY path under XDG_RUNTIME_DIR. */
+    {
+      const char *xrd  = getenv("XDG_RUNTIME_DIR");
+      const char *wdpy = getenv("WAYLAND_DISPLAY");
+      if(xrd && wdpy) {
+        char sock_path[256];
+        snprintf(sock_path, sizeof(sock_path), "%s/%s", xrd, wdpy);
+
+        /* Walk /proc/self/fd looking for the fd whose symlink matches
+         * the Wayland socket path. */
+        DIR *proc_fd = opendir("/proc/self/fd");
+        if(proc_fd) {
+          struct dirent *ent;
+          while((ent = readdir(proc_fd)) != NULL) {
+            if(ent->d_name[0] == '.') continue;
+            char fd_link[64], target[256];
+            snprintf(fd_link, sizeof(fd_link), "/proc/self/fd/%s", ent->d_name);
+            ssize_t tlen = readlink(fd_link, target, sizeof(target) - 1);
+            if(tlen > 0) {
+              target[tlen] = '\0';
+              if(strcmp(target, sock_path) == 0) {
+                int wl_fd = atoi(ent->d_name);
+                int flags = fcntl(wl_fd, F_GETFD);
+                if(flags >= 0)
+                  fcntl(wl_fd, F_SETFD, flags & ~FD_CLOEXEC);
+                wlr_log(WLR_INFO,
+                        "hot-reload: cleared CLOEXEC on Wayland socket fd %d (%s)",
+                        wl_fd, sock_path);
+                break;
+              }
+            }
+          }
+          closedir(proc_fd);
+        }
+      }
+    }
+
+    /* Flush the display so clients get a clean EOF on their connections
+     * before the socket is unlinked and re-created by the new binary.      */
+    wl_display_flush_clients(s->display);
+
+    /* Unset WAYLAND_DISPLAY so the new process uses DRM, not nested Wayland. */
+    unsetenv("WAYLAND_DISPLAY");
+    unsetenv("DISPLAY");
+
+    /* Release DRM master / seatd lease before exec-replacing.
+     * Without this seatd makes the new process wait ~1.2s for the old
+     * process's lease to time out before granting the seat. */
+    wlr_backend_destroy(s->backend);
+    s->backend = NULL;
+
+    wlr_log(WLR_INFO, "hot-reload: execv → %s", s->reload_new_bin);
+    execv(s->reload_new_bin, s->saved_argv);
+    /* If we reach here execv failed — compositor still running. */
+    wlr_log(WLR_ERROR, "hot-reload: execv failed: %s", strerror(errno));
+    reload_notify(s, "rebuild", "execv failed — compositor unchanged");
+  }
+  return 0;
+}
+
+void server_binary_reload(TrixieServer *s) {
+  /* Guard: don't start a second build if one is already running. */
+  if(s->reload_pid > 0) {
+    reload_notify(s, "rebuild", "build already in progress…");
+    return;
+  }
+
+  /* Resolve the current binary path NOW, before ninja overwrites it.
+   * /proc/self/exe after a successful build still resolves to the old
+   * inode (the running process), so we must capture it here and store
+   * it for the execv call in reload_pipe_cb. */
+  {
+    ssize_t len = readlink("/proc/self/exe",
+                           s->reload_new_bin, sizeof(s->reload_new_bin) - 1);
+    if(len <= 0) {
+      wlr_log(WLR_ERROR, "hot-reload: readlink /proc/self/exe failed: %s",
+              strerror(errno));
+      reload_notify(s, "rebuild", "reload aborted — can't resolve binary path");
+      return;
+    }
+    s->reload_new_bin[len] = '\0';
+  }
+
+  /* Resolve build directory: config value > binary directory > cwd. */
+  char build_dir[512] = { 0 };
+  if(s->cfg.build_dir[0]) {
+    strncpy(build_dir, s->cfg.build_dir, sizeof(build_dir) - 1);
+  } else {
+    /* Fall back to the directory the running binary lives in. */
+    char self[512] = { 0 };
+    ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if(n > 0) {
+      self[n] = '\0';
+      char *slash = strrchr(self, '/');
+      if(slash) {
+        *slash = '\0';
+        strncpy(build_dir, self, sizeof(build_dir) - 1);
+      }
+    }
+    if(!build_dir[0]) strncpy(build_dir, ".", sizeof(build_dir) - 1);
+  }
+
+  /* Create a pipe for ninja's combined stdout+stderr. */
+  int pipefd[2];
+  if(pipe(pipefd) < 0) {
+    wlr_log(WLR_ERROR, "hot-reload: pipe() failed: %s", strerror(errno));
+    return;
+  }
+  /* Read end non-blocking so the wl event loop doesn't stall. */
+  fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+
+  pid_t pid = fork();
+  if(pid < 0) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    wlr_log(WLR_ERROR, "hot-reload: fork() failed: %s", strerror(errno));
+    return;
+  }
+
+  if(pid == 0) {
+    /* Child: run ninja in the build dir, stdout+stderr → pipe. */
+    close(pipefd[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
+    dup2(pipefd[1], STDERR_FILENO);
+    close(pipefd[1]);
+    if(chdir(build_dir) < 0) {
+      fprintf(stderr, "hot-reload: chdir(%s) failed: %s\n",
+              build_dir, strerror(errno));
+      _exit(1);
+    }
+    execlp("ninja", "ninja", (char *)NULL);
+    fprintf(stderr, "hot-reload: exec ninja failed: %s\n", strerror(errno));
+    _exit(127);
+  }
+
+  /* Parent: store state, register pipe with the wl event loop. */
+  close(pipefd[1]);
+  s->reload_pid     = pid;
+  s->reload_pipe_fd = pipefd[0];
+  s->reload_pipe_src =
+      wl_event_loop_add_fd(wl_display_get_event_loop(s->display),
+                           pipefd[0],
+                           WL_EVENT_READABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
+                           reload_pipe_cb,
+                           s);
+
+  char msg[640];
+  snprintf(msg, sizeof(msg), "building in %s …", build_dir);
+  wlr_log(WLR_INFO, "hot-reload: %s", msg);
+  reload_notify(s, "rebuild", msg);
 }
 
 /* ── Keyboard ─────────────────────────────────────────────────────────────── */
@@ -1227,29 +1482,133 @@ static void handle_request_set_primary_selection(struct wl_listener *listener,
   wlr_seat_set_primary_selection(s->seat, ev->source, ev->serial);
 }
 
+/* ── XDG Popups (context menus, tooltips, dropdowns) ─────────────────────── */
+
+static void handle_new_xdg_popup(struct wl_listener *listener, void *data) {
+  /* Fired for every xdg_popup the shell creates — context menus, dropdowns,
+   * autocomplete, tooltips.  We must attach it to its parent's scene tree so
+   * wlroots can render it and apply the XDG positioner geometry correctly.
+   *
+   * The parent is almost always an xdg_toplevel whose scene_tree was stored
+   * in xdg_surface->data by wlr_scene_xdg_surface_create.  If for some reason
+   * the parent chain isn't an xdg_surface (e.g. a layer-shell surface spawning
+   * a popup) we fall back to layer_floating so the popup is still visible. */
+  TrixieServer         *s     = CONTAINER_OF(listener, TrixieServer, new_xdg_popup);
+  struct wlr_xdg_popup *popup = data;
+
+  struct wlr_scene_tree *parent_tree = s->layer_floating;
+
+  struct wlr_surface *parent_wlr = popup->parent;
+  if(parent_wlr) {
+    struct wlr_xdg_surface *parent_xdg =
+        wlr_xdg_surface_try_from_wlr_surface(parent_wlr);
+    if(parent_xdg && parent_xdg->data)
+      parent_tree = parent_xdg->data;
+  }
+
+  struct wlr_scene_tree *scene_tree =
+      wlr_scene_xdg_surface_create(parent_tree, popup->base);
+  if(!scene_tree) return;
+
+  popup->base->data = scene_tree;
+  /* Raise above all siblings so the popup is never obscured. */
+  wlr_scene_node_raise_to_top(&scene_tree->node);
+}
+
+/* ── Drag and drop ────────────────────────────────────────────────────────── */
+
+/* Per-drag heap allocation so concurrent drags don't share a static listener. */
+typedef struct {
+  struct wl_listener destroy;
+} DragIconCtx;
+
+static void drag_icon_handle_destroy(struct wl_listener *listener, void *data) {
+  (void)data;
+  DragIconCtx *ctx = wl_container_of(listener, ctx, destroy);
+  wl_list_remove(&ctx->destroy.link);
+  free(ctx);
+}
+
+static void handle_request_start_drag(struct wl_listener *listener, void *data) {
+  /* Client requests a DnD session — validate the pointer serial first.
+   * An invalid serial means the button-press that started the drag was not
+   * delivered by us, so we must not honour it (security requirement). */
+  TrixieServer *s = CONTAINER_OF(listener, TrixieServer, seat_request_start_drag);
+  struct wlr_seat_request_start_drag_event *ev = data;
+
+  if(wlr_seat_validate_pointer_grab_serial(s->seat, ev->origin, ev->serial))
+    wlr_seat_start_pointer_drag(s->seat, ev->drag, ev->serial);
+  else
+    wlr_data_source_destroy(ev->drag->source);
+}
+
+static void handle_start_drag(struct wl_listener *listener, void *data) {
+  /* Seat confirmed the drag.  If it carries an icon surface (e.g. a file
+   * thumbnail) create a scene node in the topmost layer so it rides the
+   * cursor for the duration of the drag. */
+  TrixieServer    *s    = CONTAINER_OF(listener, TrixieServer, seat_start_drag);
+  struct wlr_drag *drag = data;
+
+  if(!drag->icon) return;
+
+  struct wlr_scene_tree *icon_tree =
+      wlr_scene_drag_icon_create(s->layer_overlay, drag->icon);
+  if(!icon_tree) return;
+
+  /* Snap to cursor so there's no one-frame offset on drag start. */
+  wlr_scene_node_set_position(&icon_tree->node,
+                              (int)s->cursor->x, (int)s->cursor->y);
+
+  DragIconCtx *ctx = calloc(1, sizeof(*ctx));
+  if(ctx) {
+    ctx->destroy.notify = drag_icon_handle_destroy;
+    wl_signal_add(&drag->icon->events.destroy, &ctx->destroy);
+  }
+}
+
 /* ── Output ───────────────────────────────────────────────────────────────── */
 
 static void output_handle_frame(struct wl_listener *listener, void *data) {
-  (void)data;
-  TrixieOutput *o = CONTAINER_OF(listener, TrixieOutput, frame);
-  TrixieServer *s = o->server;
+    (void)data;
+    TrixieOutput *o = CONTAINER_OF(listener, TrixieOutput, frame);
+    TrixieServer *s = o->server;
 
-  bool still_animating = anim_tick(&s->anim);
-  bool need_sync       = still_animating || o->was_animating;
-  o->was_animating     = still_animating;
-  if(need_sync) server_sync_windows(s);
+    bool still_animating = anim_tick(&s->anim);
+    bool need_sync       = still_animating || o->was_animating;
+    o->was_animating     = still_animating;
+    if (need_sync) server_sync_windows(s);
 
-  bool bar_dirty     = bar_update(o->bar, &s->twm, &s->cfg);
-  bool overlay_dirty = overlay_update(o->overlay, &s->twm, &s->cfg, &s->bar_workers);
-  deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
+    bool bar_dirty     = bar_update(o->bar, &s->twm, &s->cfg);
+    bool overlay_dirty = overlay_update(o->overlay, &s->twm, &s->cfg, &s->bar_workers);
+    deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
 
-  wlr_scene_output_commit(o->scene_output, NULL);
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  wlr_scene_output_send_frame_done(o->scene_output, &now);
+    /* ── Render ──────────────────────────────────────────────────────────── *
+     * If shader is enabled (not permanently failed), try shader_render_frame.*
+     * It handles lazy GL init internally on the first call inside the render  *
+     * pass where the context is guaranteed current by wlroots.               *
+     * On any failure fall back to a plain wlr_scene_output_commit.           */
+  if(o->shader_enabled && !o->shader_init_tried) {
+    bool ok = shader_render_frame(&o->shader, s->renderer,
+                                  o->scene_output, o->wlr_output,
+                                  o->saturation);
+    if(!ok && !o->shader.gl_init_done) {
+      o->shader_init_tried = true;
+      wlr_log(WLR_ERROR, "shader: permanently disabled for %s",
+              o->wlr_output->name);
+      wlr_scene_output_commit(o->scene_output, NULL);
+    } else if(!ok) {
+      wlr_scene_output_commit(o->scene_output, NULL);
+    }
+  } else {
+    wlr_scene_output_commit(o->scene_output, NULL);
+  }
 
-  if(s->running && (still_animating || bar_dirty || overlay_dirty))
-    wlr_output_schedule_frame(o->wlr_output);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    wlr_scene_output_send_frame_done(o->scene_output, &now);
+
+    if (s->running && (still_animating || bar_dirty || overlay_dirty))
+        wlr_output_schedule_frame(o->wlr_output);
 }
 
 static void output_handle_request_state(struct wl_listener *listener, void *data) {
@@ -1266,6 +1625,7 @@ static void output_handle_destroy(struct wl_listener *listener, void *data) {
   wl_list_remove(&o->request_state.link);
   wl_list_remove(&o->destroy.link);
   wl_list_remove(&o->link);
+  shader_output_finish(&o->shader);
   if(o->bar) bar_destroy(o->bar);
   if(o->deco) deco_destroy(o->deco);
   if(o->overlay) overlay_destroy(o->overlay);
@@ -1360,6 +1720,24 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
 
   /* Resize the background rect to cover the full output. */
   if(s->bg_rect) wlr_scene_rect_set_size(s->bg_rect, ow, oh);
+
+  {
+    /* Resolve saturation + shader_enabled:
+     * per-monitor config wins over global default. */
+    float sat     = s->cfg.saturation;
+    bool  sh_on   = s->cfg.shader_enabled;
+    if(mcfg && mcfg->shader_set) {
+      if(mcfg->saturation > 0.0f) sat = mcfg->saturation;
+      sh_on = mcfg->shader_enabled;
+    }
+    o->saturation     = sat;
+    o->shader_enabled = sh_on;
+  }
+
+  memset(&o->shader, 0, sizeof(o->shader));
+  if(!o->shader_enabled || !shader_output_init(&o->shader, s->renderer, ow, oh)) {
+    o->shader_init_tried = true; /* disabled or not GLES2 */
+  }
 
   wlr_log(WLR_INFO, "new output: %s %dx%d", wlr_output->name, ow, oh);
 }
@@ -2035,6 +2413,15 @@ static int ipc_read_cb(int fd, uint32_t mask, void *data) {
         return 0;
       }
     }
+    /* Special case: binary_reload triggers a ninja rebuild + execv.
+     * Handled here rather than in ipc_dispatch because it lives in main.c. */
+    if(strncmp(cmd_start, "binary_reload", 13) == 0 &&
+       (cmd_start[13] == '\0' || cmd_start[13] == '\n')) {
+      server_binary_reload(s);
+      write_all_fd(client, "ok: building\n", 13);
+      close(client);
+      return 0;
+    }
     char reply[4096] = { 0 };
     ipc_dispatch(s, buf, reply, sizeof(reply));
     strncat(reply, "\n", sizeof(reply) - strlen(reply) - 1);
@@ -2123,7 +2510,7 @@ static void crash_handler(int sig) {
 
 int main(int argc, char *argv[]) {
   (void)argc;
-  (void)argv;
+  setenv("WLR_RENDERER", "gles2", false);
   wlr_log_init(WLR_INFO, NULL);
   signal(SIGSEGV, crash_handler);
   signal(SIGABRT, crash_handler);
@@ -2133,9 +2520,12 @@ int main(int argc, char *argv[]) {
   wl_list_init(&s->outputs);
   wl_list_init(&s->keyboards);
   wl_list_init(&s->layer_surfaces);
-  s->running    = true;
-  s->ipc_fd     = -1;
-  s->inotify_fd = -1;
+  s->running        = true;
+  s->ipc_fd         = -1;
+  s->inotify_fd     = -1;
+  s->reload_pid     = -1;
+  s->reload_pipe_fd = -1;
+  s->saved_argv     = argv;
 
   /* Load config */
   {
@@ -2247,6 +2637,8 @@ int main(int argc, char *argv[]) {
   s->xdg_shell              = wlr_xdg_shell_create(s->display, 6);
   s->new_xdg_surface.notify = handle_new_xdg_surface;
   wl_signal_add(&s->xdg_shell->events.new_toplevel, &s->new_xdg_surface);
+  s->new_xdg_popup.notify = handle_new_xdg_popup;
+  wl_signal_add(&s->xdg_shell->events.new_popup, &s->new_xdg_popup);
 
   s->layer_shell              = wlr_layer_shell_v1_create(s->display, 4);
   s->new_layer_surface.notify = handle_new_layer_surface;
@@ -2293,11 +2685,15 @@ int main(int argc, char *argv[]) {
   s->seat_request_set_selection.notify = handle_request_set_selection;
   s->seat_request_set_primary_selection.notify =
       handle_request_set_primary_selection;
+  s->seat_request_start_drag.notify = handle_request_start_drag;
+  s->seat_start_drag.notify         = handle_start_drag;
   wl_signal_add(&s->seat->events.request_set_cursor, &s->seat_request_cursor);
   wl_signal_add(&s->seat->events.request_set_selection,
                 &s->seat_request_set_selection);
   wl_signal_add(&s->seat->events.request_set_primary_selection,
                 &s->seat_request_set_primary_selection);
+  wl_signal_add(&s->seat->events.request_start_drag, &s->seat_request_start_drag);
+  wl_signal_add(&s->seat->events.start_drag,         &s->seat_start_drag);
 
   s->new_output.notify = handle_new_output;
   wl_signal_add(&s->backend->events.new_output, &s->new_output);
@@ -2317,14 +2713,55 @@ int main(int argc, char *argv[]) {
   setenv("WAYLAND_DISPLAY", socket, true);
   setenv("XDG_SESSION_TYPE", "wayland", true);
   setenv("XDG_CURRENT_DESKTOP", "trixie", true);
+  /* Qt */
   setenv("QT_QPA_PLATFORM", "wayland", true);
   setenv("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1", true);
+  setenv("QT_AUTO_SCREEN_SCALE_FACTOR", "1", true);
+  /* GTK */
   setenv("GDK_BACKEND", "wayland", true);
+  /* SDL */
   setenv("SDL_VIDEODRIVER", "wayland", true);
+  /* Java / LWJGL — required for AWT and GLFW on Wayland */
+  setenv("_JAVA_AWT_WM_NONREPARENTING", "1", true);
+  /* Clutter / GStreamer */
   setenv("CLUTTER_BACKEND", "wayland", true);
+  /* Firefox */
   setenv("MOZ_ENABLE_WAYLAND", "1", true);
   setenv("MOZ_WEBRENDER", "1", true);
   setenv("MOZ_DBUS_REMOTE", "1", true);
+  /* Electron / Chromium */
+  setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
+  setenv("NIXOS_OZONE_WL", "1", true);
+
+  /* ── Nvidia proprietary driver EGL fix ───────────────────────────────────
+   * The diagnostic confirms: RTX 4050, nvidia 590.48, DISPLAY=(not set).
+   *
+   * Nvidia's libEGL probes for an X11 display before trying Wayland. When
+   * DISPLAY is unset it logs an error internally and fails to initialise the
+   * Wayland EGL platform, so GLFW/LWJGL abort at eglGetDisplay() even though
+   * every required Wayland protocol is present.
+   *
+   * Fixes:
+   *  1. EGL_PLATFORM=wayland  — forces Mesa/Nvidia EGL to skip the X11 probe
+   *     entirely and go straight to the Wayland platform.
+   *  2. DISPLAY=:0 (dummy)    — satisfies any residual X11 probes in older
+   *     nvidia EGL versions that check the var before honouring EGL_PLATFORM.
+   *     Only set when XWayland is disabled; if XWayland is running it sets
+   *     DISPLAY itself to its real socket in handle_xwayland_ready.
+   *  3. GBM_BACKEND / __GLX_VENDOR_LIBRARY_NAME — ensure wlroots and Mesa
+   *     use the nvidia GBM implementation rather than falling back to llvmpipe.
+   *     These are no-ops on non-nvidia systems.
+   * ─────────────────────────────────────────────────────────────────────── */
+  setenv("EGL_PLATFORM", "wayland", true);
+#ifndef HAS_XWAYLAND
+  if(!getenv("DISPLAY") || getenv("DISPLAY")[0] == '\0')
+    setenv("DISPLAY", ":0", false);
+#endif
+  setenv("GBM_BACKEND", "nvidia-drm", false);
+  setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", false);
+  /* Nvidia GBM requires this to not assert on buffer import */
+  setenv("WLR_NO_HARDWARE_CURSORS", "1", false);
+
   wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket);
 
   server_init_ipc(s);

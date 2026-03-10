@@ -184,7 +184,7 @@ static void usage(void) {
        "  spawn <cmd>                execute command\n"
        "  dpms <on|off>              display power\n"
        "  idle_reset                 reset idle timer\n"
-       "  reload                     hot-reload config\n"
+       "  reload                     hot-reload: rebuild binary and exec-replace\n"
        "  quit                       exit compositor\n"
        "\n"
        "Introspection\n"
@@ -227,6 +227,13 @@ int main(int argc, char **argv) {
 
   if(!strcmp(argv[1], "subscribe")) {
     return subscribe_mode();
+  }
+
+  /* Map user-facing "reload" to the IPC command "binary_reload" which triggers
+   * a ninja rebuild + exec-replace.  The compositor's existing "reload" IPC
+   * command does a config-only reload and is intentionally kept separate.   */
+  if(!strcmp(argv[1], "reload")) {
+    return send_command("binary_reload");
   }
 
   /* Reconstruct the command string from argv */

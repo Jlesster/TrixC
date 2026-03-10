@@ -33,15 +33,18 @@
 #include <wlr/backend/session.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_alpha_modifier_v1.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output_management_v1.h>
@@ -283,11 +286,15 @@ typedef struct {
   int   width, height, refresh;
   int   pos_x, pos_y;
   float scale;
+  float saturation;
+  bool  shader_enabled;
+  bool  shader_set;
 } MonitorCfg;
 
 typedef struct {
   char  name[64];
   char  app_id[64];
+  char  exec[256]; /* command to spawn when the scratchpad has no live pane */
   float width_pct, height_pct;
 } ScratchpadCfg;
 
@@ -434,6 +441,12 @@ typedef struct {
   int           exec_once_count;
   char          exec[16][256];
   int           exec_count;
+  /* Hot-reload build path — directory where ninja should be run.
+   * Set via:  build_dir = ~/Code/Trixie/build
+   * Defaults to the directory the trixie binary lives in.          */
+  char          build_dir[512];
+  float         saturation;     /* global default saturation (1.0 = neutral) */
+  bool          shader_enabled; /* global shader on/off */
   OverlayCfg    overlay;
   GestureConfig gestures;
 } Config;
@@ -670,6 +683,8 @@ void overlay_quickfix_json(char *out, size_t sz);
  * §11  Compositor structs
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+#include "shader.h"
+
 typedef struct TrixieServer TrixieServer;
 typedef struct TrixieView   TrixieView;
 typedef struct TrixieOutput TrixieOutput;
@@ -685,6 +700,10 @@ struct TrixieOutput {
   TrixieBar               *bar;
   TrixieDeco              *deco;
   TrixieOverlay           *overlay;
+  TrixieShader             shader;
+  float                    saturation;
+  bool                     shader_enabled;
+  bool                     shader_init_tried;
   int                      width, height;
   int                      logical_w, logical_h;
   bool                     was_animating;
@@ -800,6 +819,8 @@ struct TrixieServer {
 
   struct wlr_presentation                *presentation;
   struct wlr_fractional_scale_manager_v1 *fractional_scale_mgr;
+  struct wlr_linux_dmabuf_v1             *linux_dmabuf;
+  struct wlr_alpha_modifier_v1           *alpha_modifier;
   struct wlr_xdg_activation_v1           *xdg_activation;
   struct wlr_pointer_constraints_v1      *pointer_constraints;
   struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
@@ -809,6 +830,7 @@ struct TrixieServer {
   struct wl_listener new_output;
   struct wl_listener new_input;
   struct wl_listener new_xdg_surface;
+  struct wl_listener new_xdg_popup;
   struct wl_listener new_layer_surface;
   struct wl_listener new_deco;
   struct wl_listener cursor_motion;
@@ -819,6 +841,8 @@ struct TrixieServer {
   struct wl_listener seat_request_cursor;
   struct wl_listener seat_request_set_selection;
   struct wl_listener seat_request_set_primary_selection;
+  struct wl_listener seat_request_start_drag;
+  struct wl_listener seat_start_drag;
   struct wl_listener xdg_activation_request;
   struct wl_listener new_pointer_constraint;
   struct wl_listener cursor_shape_request;
@@ -842,6 +866,17 @@ struct TrixieServer {
 
   bool running;
   bool exec_once_done;
+
+  /* ── Hot-reload state ───────────────────────────────────────────────────
+   * When the user triggers a binary reload (keybind or trixie-ctl reload),
+   * we fork ninja, pipe its output into the overlay, and exec-replace
+   * ourselves on success.  saved_argv lets us pass the original argv to
+   * execv so flags like --config are preserved across reloads.           */
+  char **saved_argv;          /* pointer to main()'s argv                */
+  char   reload_new_bin[512]; /* binary path captured before ninja runs  */
+  pid_t  reload_pid;          /* pid of the running ninja process, or -1 */
+  int    reload_pipe_fd;      /* read-end of ninja's stdout+stderr pipe  */
+  struct wl_event_source *reload_pipe_src; /* wl event source for the pipe */
 
   int                     ipc_fd;
   struct wl_event_source *ipc_src;

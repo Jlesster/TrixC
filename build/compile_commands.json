@@ -127,6 +127,12 @@
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_marvin_panel.c.o -MF Trixie.p/src_marvin_panel.c.o.d -o Trixie.p/src_marvin_panel.c.o -c ../src/marvin_panel.c",
+    "file": "../src/marvin_panel.c",
+    "output": "Trixie.p/src_marvin_panel.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
     "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_nvim_panel.c.o -MF Trixie.p/src_nvim_panel.c.o.d -o Trixie.p/src_nvim_panel.c.o -c ../src/nvim_panel.c",
     "file": "../src/nvim_panel.c",
     "output": "Trixie.p/src_nvim_panel.c.o"
@@ -157,6 +163,12 @@
   },
   {
     "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_shader.c.o -MF Trixie.p/src_shader.c.o.d -o Trixie.p/src_shader.c.o -c ../src/shader.c",
+    "file": "../src/shader.c",
+    "output": "Trixie.p/src_shader.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
     "command": "cc -ITrixie.p -I. -I.. -I../include -I../include/protocols -I/usr/include/libdrm -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/wlroots-0.18 -I/usr/include/json-c -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/luajit-2.1 -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -pthread -D_REENTRANT -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -MD -MQ Trixie.p/src_twm.c.o -MF Trixie.p/src_twm.c.o.d -o Trixie.p/src_twm.c.o -c ../src/twm.c",
     "file": "../src/twm.c",
     "output": "Trixie.p/src_twm.c.o"
@@ -166,5 +178,11 @@
     "command": "cc -Itrixiectl.p -I. -I.. -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -MD -MQ trixiectl.p/src_trixiectl.c.o -MF trixiectl.p/src_trixiectl.c.o.d -o trixiectl.p/src_trixiectl.c.o -c ../src/trixiectl.c",
     "file": "../src/trixiectl.c",
     "output": "trixiectl.p/src_trixiectl.c.o"
+  },
+  {
+    "directory": "/home/jless/Code/c-cpp/c/Trixie/build",
+    "command": "cc -Itls.p -I. -I.. -fdiagnostics-color=always -D_FILE_OFFSET_BITS=64 -Wall -Winvalid-pch -Wextra -Wpedantic -std=c11 -O2 -g -MD -MQ tls.p/src_lsp_tls.c.o -MF tls.p/src_lsp_tls.c.o.d -o tls.p/src_lsp_tls.c.o -c ../src/lsp/tls.c",
+    "file": "../src/lsp/tls.c",
+    "output": "tls.p/src_lsp_tls.c.o"
   }
 ]

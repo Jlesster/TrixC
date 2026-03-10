@@ -754,7 +754,145 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     } else {
       REPLY("err: nvim not connected");
     }
+  } else if(!strcmp(cmd, "saturation")) {
+    /* saturation <value>          — set all outputs
+     * saturation <output> <value> — set one output by name
+     * saturation                  — query current value(s) */
+    if(!rest || !rest[0]) {
+      /* Query */
+      int           len = 0;
+      char         *p   = reply;
+      TrixieOutput *o;
+      wl_list_for_each(o, &s->outputs, link) {
+        len += snprintf(p + len,
+                        reply_sz - (size_t)len,
+                        "%s: %.3f\n",
+                        o->wlr_output->name,
+                        o->saturation);
+      }
+      if(len == 0) snprintf(reply, reply_sz, "err: no outputs");
 
+    } else {
+      /* Parse: optional output name then float value */
+      char        arg1[64] = { 0 };
+      char        arg2[32] = { 0 };
+      int         nargs    = sscanf(rest, "%63s %31s", arg1, arg2);
+      float       val;
+      const char *target_name = NULL;
+
+      if(nargs == 2) {
+        /* saturation <name> <value> */
+        target_name = arg1;
+        val         = (float)atof(arg2);
+      } else {
+        /* saturation <value> */
+        val = (float)atof(arg1);
+      }
+
+      if(val < 0.0f) val = 0.0f;
+      if(val > 4.0f) val = 4.0f;
+
+      int           count = 0;
+      TrixieOutput *o;
+      wl_list_for_each(o, &s->outputs, link) {
+        if(target_name && strcmp(o->wlr_output->name, target_name) != 0) continue;
+        o->saturation = val;
+        /* Also update config so reload preserves the value */
+        if(!target_name)
+          s->cfg.saturation = val;
+        else {
+          for(int i = 0; i < s->cfg.monitor_count; i++) {
+            if(!strcmp(s->cfg.monitors[i].name, target_name)) {
+              s->cfg.monitors[i].saturation = val;
+              s->cfg.monitors[i].shader_set = true;
+              break;
+            }
+          }
+        }
+        count++;
+      }
+      server_request_redraw(s);
+
+      if(count == 0 && target_name)
+        REPLY("err: output '%s' not found", target_name);
+      else
+        REPLY("ok: saturation %.3f on %d output(s)", val, count);
+    }
+
+  } else if(!strcmp(cmd, "shader")) {
+    /* shader [on|off]              — toggle/set all outputs
+     * shader <output> [on|off]     — set one output by name */
+    if(!rest || !rest[0]) {
+      /* Toggle all */
+      TrixieOutput *o;
+      wl_list_for_each(o, &s->outputs, link) {
+        o->shader_enabled    = !o->shader_enabled;
+        o->shader_init_tried = !o->shader_enabled; /* disable retry when off */
+      }
+      s->cfg.shader_enabled = !s->cfg.shader_enabled;
+      server_request_redraw(s);
+      REPLY("ok: shader toggled → %s", s->cfg.shader_enabled ? "on" : "off");
+
+    } else {
+      char arg1[64] = { 0 };
+      char arg2[8]  = { 0 };
+      int  nargs    = sscanf(rest, "%63s %7s", arg1, arg2);
+
+      bool        set_val     = true;
+      const char *target_name = NULL;
+
+      if(nargs == 2) {
+        target_name = arg1;
+        set_val =
+            (!strcmp(arg2, "on") || !strcmp(arg2, "1") || !strcmp(arg2, "true"));
+      } else {
+        /* single arg: on/off or output name */
+        if(!strcmp(arg1, "on") || !strcmp(arg1, "1") || !strcmp(arg1, "true")) {
+          set_val = true;
+        } else if(!strcmp(arg1, "off") || !strcmp(arg1, "0") ||
+                  !strcmp(arg1, "false")) {
+          set_val = false;
+        } else {
+          /* treat as output name, toggle */
+          target_name = arg1;
+          TrixieOutput *o;
+          wl_list_for_each(o, &s->outputs, link) {
+            if(!strcmp(o->wlr_output->name, target_name)) {
+              set_val = !o->shader_enabled;
+              break;
+            }
+          }
+        }
+      }
+
+      int           count = 0;
+      TrixieOutput *o;
+      wl_list_for_each(o, &s->outputs, link) {
+        if(target_name && strcmp(o->wlr_output->name, target_name) != 0) continue;
+        o->shader_enabled    = set_val;
+        o->shader_init_tried = !set_val;
+        /* Reset gl_init_done so it re-inits next frame when re-enabled */
+        if(set_val && !o->shader.gl_init_done) o->shader_init_tried = false;
+        count++;
+        if(!target_name)
+          s->cfg.shader_enabled = set_val;
+        else {
+          for(int i = 0; i < s->cfg.monitor_count; i++) {
+            if(!strcmp(s->cfg.monitors[i].name, target_name)) {
+              s->cfg.monitors[i].shader_enabled = set_val;
+              s->cfg.monitors[i].shader_set     = true;
+              break;
+            }
+          }
+        }
+      }
+      server_request_redraw(s);
+
+      if(count == 0 && target_name)
+        REPLY("err: output '%s' not found", target_name);
+      else
+        REPLY("ok: shader %s on %d output(s)", set_val ? "on" : "off", count);
+    }
   } else {
     REPLY("err: unknown command '%s'", cmd);
   }

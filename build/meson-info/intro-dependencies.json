@@ -365,5 +365,39 @@
     "meson_variables": [
       "libinput_dep"
     ]
+  },
+  {
+    "name": "glesv2",
+    "type": "pkgconfig",
+    "version": "3.2",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libGLESv2.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "gles_dep"
+    ]
+  },
+  {
+    "name": "egl",
+    "type": "pkgconfig",
+    "version": "1.5",
+    "compile_args": [],
+    "link_args": [
+      "/usr/lib/libEGL.so"
+    ],
+    "include_directories": [],
+    "sources": [],
+    "extra_files": [],
+    "dependencies": [],
+    "depends": [],
+    "meson_variables": [
+      "egl_dep"
+    ]
   }
 ]

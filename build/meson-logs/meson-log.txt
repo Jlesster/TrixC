@@ -1,4 +1,4 @@
-Build started at 2026-03-09T19:13:28.778724
+Build started at 2026-03-10T03:24:10.430038
 Main binary: /usr/bin/python
 Build Options: 
 Python system: Linux
@@ -50,6 +50,8 @@ Dependency libinput found: YES 1.30.1 (cached)
 Dependency history found: YES 8.3 (cached)
 Dependency luajit found: YES 2.1.1767980792 (cached)
 Dependency libdrm found: YES 2.4.131 (cached)
+Dependency glesv2 found: YES 3.2 (cached)
+Dependency egl found: YES 1.5 (cached)
 Dependency pixman-1 found: YES 0.46.4 (cached)
 Dependency fontconfig found: YES 2.17.1 (cached)
 Dependency harfbuzz-gobject found: YES 12.3.2 (cached)
@@ -63,15 +65,15 @@ Dependency xkbcommon found: YES 1.13.1 (cached)
 Dependency freetype2 found: YES 26.4.20 (cached)
 Dependency harfbuzz found: YES 12.3.2 (cached)
 Program wayland-scanner found: YES (/usr/sbin/wayland-scanner)
-Build targets in project: 20
+Build targets in project: 21
 
 Found ninja-1.13.2 at /usr/sbin/ninja
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgm09bmhk
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgbttcdgc
 Code:
 
 -----------
-Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgm09bmhk/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgm09bmhk/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgbttcdgc/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgbttcdgc/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
 stdout:
 install: /usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/
 programs: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/

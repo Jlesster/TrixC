@@ -6,6 +6,13 @@
       "subproject": null,
       "install_rpath": null,
       "build_rpaths": []
+    },
+    "/home/jless/Code/c-cpp/c/Trixie/build/tls": {
+      "destination": "{bindir}/tls",
+      "tag": "runtime",
+      "subproject": null,
+      "install_rpath": null,
+      "build_rpaths": []
     }
   }
 }
