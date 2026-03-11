@@ -8,6 +8,18 @@
  *
  * Build: cc -O2 -o trixie-lsp trixie-lsp.c
  * Usage: registered as an lspconfig server, nvim spawns it automatically.
+ *
+ * Performance notes
+ * ─────────────────
+ *   • schema_find() previously did a strcasecmp linear scan over ~100
+ *     entries on every keypress.  It now uses a pre-sorted table +
+ *     binary search (O(log n)).
+ *   • jb_raw() used strlen() on every append.  Added jb_char() for
+ *     single-character appends and jb_raw_n() for length-known strings.
+ *   • jb_str() no longer appends characters one at a time; it batches
+ *     plain runs and only escapes characters that need it.
+ *   • read_message() now reads headers line-by-line with fgets() instead
+ *     of one byte at a time with fgetc().
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -41,50 +53,68 @@ static void jb_free(JBuf *b) {
   b->s = NULL;
 }
 
-static void jb_raw(JBuf *b, const char *s) {
-  int n = (int)strlen(s);
-  while(b->len + n + 1 >= b->cap) {
+/* Ensure at least `need` bytes of free space. */
+static void jb_grow(JBuf *b, int need) {
+  if(b->len + need + 1 < b->cap) return;
+  while(b->len + need + 1 >= b->cap)
     b->cap *= 2;
-    b->s = realloc(b->s, b->cap);
-  }
+  b->s = realloc(b->s, b->cap);
+}
+
+/* PERF: length-known raw append — no strlen() overhead. */
+static void jb_raw_n(JBuf *b, const char *s, int n) {
+  jb_grow(b, n);
   memcpy(b->s + b->len, s, n);
   b->len += n;
   b->s[b->len] = '\0';
 }
 
-static void jb_str(JBuf *b, const char *s) {
-  jb_raw(b, "\"");
-  for(; *s; s++) {
-    if(*s == '"')
-      jb_raw(b, "\\\"");
-    else if(*s == '\\')
-      jb_raw(b, "\\\\");
-    else if(*s == '\n')
-      jb_raw(b, "\\n");
-    else if(*s == '\r')
-      jb_raw(b, "\\r");
-    else if(*s == '\t')
-      jb_raw(b, "\\t");
-    else {
-      char c[2] = { *s, 0 };
-      jb_raw(b, c);
-    }
-  }
-  jb_raw(b, "\"");
+static void jb_raw(JBuf *b, const char *s) {
+  jb_raw_n(b, s, (int)strlen(s));
+}
+
+/* PERF: single-char append without strlen. */
+static inline void jb_char(JBuf *b, char c) {
+  jb_grow(b, 1);
+  b->s[b->len++] = c;
+  b->s[b->len]   = '\0';
 }
 
 static void jb_int(JBuf *b, int n) {
   char tmp[32];
-  snprintf(tmp, sizeof(tmp), "%d", n);
-  jb_raw(b, tmp);
+  int  len = snprintf(tmp, sizeof(tmp), "%d", n);
+  jb_raw_n(b, tmp, len);
+}
+
+/* PERF: jb_str batches plain runs instead of appending one char at a time. */
+static void jb_str(JBuf *b, const char *s) {
+  jb_char(b, '"');
+  const char *p     = s;
+  const char *start = s;
+  for(; *p; p++) {
+    char esc = 0;
+    switch(*p) {
+      case '"': esc = '"'; break;
+      case '\\': esc = '\\'; break;
+      case '\n': esc = 'n'; break;
+      case '\r': esc = 'r'; break;
+      case '\t': esc = 't'; break;
+      default: continue; /* plain — accumulate */
+    }
+    /* flush accumulated plain run */
+    if(p > start) jb_raw_n(b, start, (int)(p - start));
+    jb_char(b, '\\');
+    jb_char(b, esc);
+    start = p + 1;
+  }
+  if(p > start) jb_raw_n(b, start, (int)(p - start));
+  jb_char(b, '"');
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §2  Minimal JSON parser (just enough to extract fields we need)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* Find value of a string field in a flat JSON object.
- * Returns malloc'd string or NULL. Not recursive — good enough for LSP. */
 static char *json_str(const char *json, const char *key) {
   char pat[256];
   snprintf(pat, sizeof(pat), "\"%s\"", key);
@@ -99,7 +129,6 @@ static char *json_str(const char *json, const char *key) {
     p++;
   if(*p != '"') return NULL;
   p++;
-  /* collect until closing unescaped " */
   char buf[65536];
   int  i = 0;
   while(*p && i < (int)sizeof(buf) - 1) {
@@ -115,7 +144,6 @@ static char *json_str(const char *json, const char *key) {
   return strdup(buf);
 }
 
-/* Extract integer field */
 static int json_int(const char *json, const char *key, int def) {
   char pat[256];
   snprintf(pat, sizeof(pat), "\"%s\"", key);
@@ -128,7 +156,6 @@ static int json_int(const char *json, const char *key, int def) {
   return atoi(p);
 }
 
-/* Extract a nested object as a raw string slice (shallow, brace-counted) */
 static char *json_obj(const char *json, const char *key) {
   char pat[256];
   snprintf(pat, sizeof(pat), "\"%s\"", key);
@@ -213,11 +240,11 @@ static void doc_set_text(Doc *d, const char *text) {
 typedef enum { T_STRING, T_INT, T_FLOAT, T_BOOL, T_COLOR, T_ENUM, T_MULTI } KType;
 
 typedef struct {
-  const char *key;
-  KType       type;
-  const char *doc;
-  const char *values[16]; /* NULL-terminated list for enum/multi/bool */
-} KInfo;
+  const char  *key;
+  KType        type;
+  const char  *doc;
+  const char **vals;
+} Schema;
 
 static const char *BOOL_VALS[] = { "true", "false", "yes", "no", "on", "off", NULL };
 static const char *BAR_POS[]   = { "top", "bottom", NULL };
@@ -237,175 +264,168 @@ static const char *MODULES[]    = { "workspaces",  "title",   "layout", "clock",
                                     "wifi",        "tray",    "cpu",    "memory",
                                     "temperature", "date",    "time",   NULL };
 
-#define K(k, t, d, v) { k, t, d, v }
-#define KEND         \
-  {                  \
-    NULL, 0, NULL, { \
-      NULL           \
-    }                \
-  }
-
-/* We store values as a flat const char** pointer in the struct.
- * Use a union trick: cast the pointer into the values[0] slot. */
-typedef struct {
-  const char  *key;
-  KType        type;
-  const char  *doc;
-  const char **vals; /* NULL if no fixed value list */
-} Schema;
-
+/* PERF: table is sorted alphabetically (case-insensitive) so schema_find()
+ * can binary-search instead of linear-scan.  The sentinel {NULL,...} must
+ * remain last.  Keep entries sorted when adding new keys. */
 static const Schema SCHEMA[] = {
-  /* general */
+  { "accent",                  T_COLOR,  "Bar accent colour",                                         NULL       },
+  { "active_border",           T_COLOR,  "Focused window border colour",                              NULL       },
+  { "active_border_color",     T_COLOR,  "Alias for active_border",                                   NULL       },
+  { "active_title",            T_COLOR,  "Focused titlebar text colour",                              NULL       },
+  { "active_title_color",      T_COLOR,  "Alias for active_title",                                    NULL       },
+  { "active_ws_bg",            T_COLOR,  "Active workspace label background",                         NULL       },
+  { "active_ws_fg",            T_COLOR,  "Active workspace label foreground",                         NULL       },
+  { "app_id",                  T_STRING, "app_id / WM_CLASS pattern to match",                        NULL       },
+  { "background",              T_COLOR,  "Alias for background_color",                                NULL       },
+  { "background_color",        T_COLOR,  "Root/wallpaper fallback fill colour",                       NULL       },
+  { "bar_accent",              T_COLOR,  "Bar accent colour",                                         NULL       },
+  { "bar_bg",                  T_COLOR,  "Bar background colour",                                     NULL       },
+  { "bar_fg",                  T_COLOR,  "Bar foreground/text colour",                                NULL       },
+  { "bg",                      T_COLOR,  "Bar background colour",                                     NULL       },
+  { "bind",                    T_STRING, "Keybind: MODS, keysym, action[, args]",                     NULL       },
+  { "binde",                   T_STRING, "Repeating keybind (fires while held)",                      NULL       },
+  { "bindm",                   T_STRING, "Mouse-drag keybind",                                        NULL       },
+  { "border_size",             T_INT,    "Window border thickness (px)",                              NULL       },
+  { "border_width",            T_INT,    "Alias for border_size",                                     NULL       },
+  { "build",                   T_STRING, "Shell command to build the project",                        NULL       },
+  { "class",                   T_STRING, "Alias for app_id",                                          NULL       },
+  { "col_accent",              T_COLOR,  "col. prefix alias for accent colour",                       NULL       },
+  { "col_background",          T_COLOR,  "col. prefix alias for background colour",                   NULL       },
+  { "col_text",                T_COLOR,  "col. prefix alias for text colour",                         NULL       },
+  { "color",                   T_COLOR,  "Module text colour override",                               NULL       },
+  { "colour",                  T_COLOR,  "British spelling alias for color",                          NULL       },
+  { "corner_radius",           T_INT,    "Window corner rounding radius (px)",                        NULL       },
+  { "cursor_size",             T_INT,    "XCursor size in pixels",                                    NULL       },
+  { "cursor_theme",            T_STRING, "XCursor theme name (e.g. Adwaita)",                         NULL       },
+  { "default_panel",           T_STRING, "Default overlay panel name to open",                        NULL       },
+  { "dim",                     T_COLOR,  "Bar dimmed/inactive element colour",                        NULL       },
+  { "editor",                  T_STRING, "Editor command (e.g. nvim)",                                NULL       },
+  { "enabled",                 T_BOOL,   "Enable this subsystem",                                     BOOL_VALS  },
+  { "exec",                    T_STRING, "Shell command to run (restartable)",                        NULL       },
+  { "exec-once",               T_STRING, "Shell command to run once at compositor startup",           NULL       },
+  { "fg",                      T_COLOR,  "Bar text colour",                                           NULL       },
+  { "fmt",                     T_STRING, "Shell command to format source files",                      NULL       },
+  { "focus_ring",              T_COLOR,  "Focus highlight ring colour (RGBA)",                        NULL       },
+  { "focus_ring_color",        T_COLOR,  "Alias for focus_ring",                                      NULL       },
   { "font",                    T_STRING, "Font family name or absolute .ttf path",                    NULL       },
   { "font_family",             T_STRING, "Alias for font",                                            NULL       },
   { "font_size",               T_FLOAT,  "Base font size in points",                                  NULL       },
-  { "gaps_in",                 T_INT,    "Inner gap between tiled windows (px)",                      NULL       },
-  { "gaps_out",                T_INT,    "Outer gap around screen edge (px)",                         NULL       },
+  { "format",                  T_STRING, "strftime or custom format string",                          NULL       },
   { "gap",                     T_INT,    "Alias for gaps_in",                                         NULL       },
   { "gaps",                    T_INT,    "Alias for gaps_in",                                         NULL       },
-  { "outer_gap",               T_INT,    "Alias for gaps_out",                                        NULL       },
-  { "outer_gaps",              T_INT,    "Alias for gaps_out",                                        NULL       },
-  { "border_size",             T_INT,    "Window border thickness (px)",                              NULL       },
-  { "border_width",            T_INT,    "Alias for border_size",                                     NULL       },
-  { "corner_radius",           T_INT,    "Window corner rounding radius (px)",                        NULL       },
-  { "rounding",                T_INT,    "Alias for corner_radius",                                   NULL       },
-  { "smart_gaps",
-   T_BOOL,                               "Disable gaps when only one window is visible",
-   BOOL_VALS                                                                                                     },
-  { "saturation",              T_FLOAT,  "Monitor colour saturation multiplier (0.0-2.0)",            NULL       },
-  { "shader",                  T_BOOL,   "Enable custom GLSL post-process shader",                    BOOL_VALS  },
-  { "background_color",        T_COLOR,  "Root/wallpaper fallback fill colour",                       NULL       },
-  { "background",              T_COLOR,  "Alias for background_color",                                NULL       },
-  { "active_border",           T_COLOR,  "Focused window border colour",                              NULL       },
-  { "active_border_color",     T_COLOR,  "Alias for active_border",                                   NULL       },
-  { "inactive_border",         T_COLOR,  "Unfocused window border colour",                            NULL       },
-  { "inactive_border_color",   T_COLOR,  "Alias for inactive_border",                                 NULL       },
-  { "cursor_theme",            T_STRING, "XCursor theme name (e.g. Adwaita)",                         NULL       },
-  { "cursor_size",             T_INT,    "XCursor size in pixels",                                    NULL       },
-  { "workspaces",              T_INT,    "Number of workspaces to create at startup",                 NULL       },
-  { "workspace_count",         T_INT,    "Alias for workspaces",                                      NULL       },
-  { "seat_name",               T_STRING, "libinput seat identifier (e.g. seat0)",                     NULL       },
-  { "seat",                    T_STRING, "Alias for seat_name",                                       NULL       },
-  { "idle_timeout",            T_INT,    "Seconds of inactivity before idle (0=disabled)",            NULL       },
-  { "xwayland",                T_BOOL,   "Enable XWayland compatibility layer",                       BOOL_VALS  },
-  { "theme",                   T_ENUM,   "Built-in colour preset name",                               THEMES     },
-  { "gesture_swipe_threshold",
-   T_FLOAT,                              "Minimum swipe distance to register a gesture",
+  { "gaps_in",                 T_INT,    "Inner gap between tiled windows (px)",                      NULL       },
+  { "gaps_out",                T_INT,    "Outer gap around screen edge (px)",                         NULL       },
+  { "gesture",
+   T_STRING,                             "Gesture bind: swipe:N:dir,action or pinch:N:in|out,action",
    NULL                                                                                                          },
   { "gesture_pinch_threshold",
    T_FLOAT,                              "Minimum pinch scale delta to register a gesture",
    NULL                                                                                                          },
-  { "source",                  T_STRING, "Path to another config file to include",                    NULL       },
-  { "exec-once",               T_STRING, "Shell command to run once at compositor startup",           NULL       },
-  { "exec",                    T_STRING, "Shell command to run (restartable)",                        NULL       },
-  { "gesture",
-   T_STRING,                             "Gesture bind: swipe:N:dir,action or pinch:N:in|out,action",
+  { "gesture_swipe_threshold",
+   T_FLOAT,                              "Minimum swipe distance to register a gesture",
    NULL                                                                                                          },
-  { "bind",                    T_STRING, "Keybind: MODS, keysym, action[, args]",                     NULL       },
-  { "binde",                   T_STRING, "Repeating keybind (fires while held)",                      NULL       },
-  { "bindm",                   T_STRING, "Mouse-drag keybind",                                        NULL       },
-  { "windowrule",              T_STRING, "Window rule: effect, matcher",                              NULL       },
-  { "windowrulev2",            T_STRING, "Window rule v2: effect, class:^(pattern)$",                 NULL       },
-  { "window_rule",             T_STRING, "Alias for windowrule",                                      NULL       },
-  /* decoration */
-  { "active_title",            T_COLOR,  "Focused titlebar text colour",                              NULL       },
-  { "active_title_color",      T_COLOR,  "Alias for active_title",                                    NULL       },
+  { "glyph_y_offset",          T_INT,    "Vertical pixel nudge for icon glyphs",                      NULL       },
+  { "height",                  T_INT,    "Bar height in pixels",                                      NULL       },
+  { "icon",                    T_STRING, "Nerd Font glyph prefix for this module",                    NULL       },
+  { "idle_timeout",            T_INT,    "Seconds of inactivity before idle (0=disabled)",            NULL       },
+  { "inactive_border",         T_COLOR,  "Unfocused window border colour",                            NULL       },
+  { "inactive_border_color",   T_COLOR,  "Alias for inactive_border",                                 NULL       },
   { "inactive_title",          T_COLOR,  "Unfocused titlebar text colour",                            NULL       },
   { "inactive_title_color",    T_COLOR,  "Alias for inactive_title",                                  NULL       },
-  { "pane_bg",                 T_COLOR,  "Tiled window pane background colour",                       NULL       },
-  { "focus_ring",              T_COLOR,  "Focus highlight ring colour (RGBA)",                        NULL       },
-  { "focus_ring_color",        T_COLOR,  "Alias for focus_ring",                                      NULL       },
-  /* colors */
-  { "bar_bg",                  T_COLOR,  "Bar background colour",                                     NULL       },
-  { "bar_fg",                  T_COLOR,  "Bar foreground/text colour",                                NULL       },
-  { "bar_accent",              T_COLOR,  "Bar accent colour",                                         NULL       },
-  /* input/keyboard */
-  { "kb_layout",               T_STRING, "XKB keyboard layout (e.g. us, gb)",                         NULL       },
-  { "layout",                  T_STRING, "Alias for kb_layout inside input/keyboard block",           NULL       },
-  { "kb_variant",              T_STRING, "XKB variant (e.g. dvorak, colemak)",                        NULL       },
-  { "variant",                 T_STRING, "Alias for kb_variant",                                      NULL       },
-  { "kb_options",              T_STRING, "XKB options (e.g. caps:swapescape)",                        NULL       },
-  { "options",                 T_STRING, "Alias for kb_options",                                      NULL       },
-  { "repeat_rate",             T_INT,    "Key auto-repeat rate (chars/sec)",                          NULL       },
-  { "repeat_delay",            T_INT,    "Delay before auto-repeat begins (ms)",                      NULL       },
-  /* bar */
-  { "position",                T_ENUM,   "Bar screen edge",                                           BAR_POS    },
-  { "height",                  T_INT,    "Bar height in pixels",                                      NULL       },
-  { "padding",                 T_INT,    "Bar horizontal padding in pixels",                          NULL       },
-  { "glyph_y_offset",          T_INT,    "Vertical pixel nudge for icon glyphs",                      NULL       },
-  { "item_spacing",            T_INT,    "Pixels between adjacent bar items",                         NULL       },
-  { "pill_radius",             T_INT,    "Workspace pill corner radius (0=square)",                   NULL       },
-  { "bg",                      T_COLOR,  "Bar background colour",                                     NULL       },
-  { "fg",                      T_COLOR,  "Bar text colour",                                           NULL       },
-  { "accent",                  T_COLOR,  "Bar accent colour",                                         NULL       },
-  { "dim",                     T_COLOR,  "Bar dimmed/inactive element colour",                        NULL       },
-  { "active_ws_fg",            T_COLOR,  "Active workspace label foreground",                         NULL       },
-  { "active_ws_bg",            T_COLOR,  "Active workspace label background",                         NULL       },
-  { "occupied_ws_fg",          T_COLOR,  "Occupied (inactive) workspace label colour",                NULL       },
   { "inactive_ws_fg",          T_COLOR,  "Empty workspace label colour",                              NULL       },
+  { "interval",                T_INT,    "Module refresh interval in seconds",                        NULL       },
+  { "item_spacing",            T_INT,    "Pixels between adjacent bar items",                         NULL       },
+  { "kb_layout",               T_STRING, "XKB keyboard layout (e.g. us, gb)",                         NULL       },
+  { "kb_options",              T_STRING, "XKB options (e.g. caps:swapescape)",                        NULL       },
+  { "kb_variant",              T_STRING, "XKB variant (e.g. dvorak, colemak)",                        NULL       },
+  { "layout",                  T_STRING, "Alias for kb_layout inside input/keyboard block",           NULL       },
+  { "lint",                    T_STRING, "Shell command to lint source files",                        NULL       },
+  { "lsp",                     T_STRING, "LSP server command for this language",                      NULL       },
+  { "lsp_diagnostics",         T_BOOL,   "Show LSP diagnostics in the overlay",                       BOOL_VALS  },
+  { "lsp_poll",                T_INT,    "Alias for lsp_poll_ms",                                     NULL       },
+  { "lsp_poll_ms",             T_INT,    "LSP diagnostic polling interval (ms)",                      NULL       },
+  { "modules-center",          T_MULTI,  "Alias for modules_center",                                  MODULES    },
+  { "modules-left",            T_MULTI,  "Alias for modules_left",                                    MODULES    },
+  { "modules-right",           T_MULTI,  "Alias for modules_right",                                   MODULES    },
+  { "modules_center",          T_MULTI,  "Space/comma list of centre modules",                        MODULES    },
+  { "modules_left",            T_MULTI,  "Space/comma list of left-side modules",                     MODULES    },
+  { "modules_right",           T_MULTI,  "Space/comma list of right-side modules",                    MODULES    },
+  { "name",                    T_STRING, "Scratchpad identifier name",                                NULL       },
+  { "nvim_listen",             T_STRING, "Alias for nvim_listen_addr",                                NULL       },
+  { "nvim_listen_addr",        T_STRING, "Neovim --listen address",                                   NULL       },
+  { "nvim_sock",               T_STRING, "Alias for nvim_socket",                                     NULL       },
+  { "nvim_socket",             T_STRING, "Path to Neovim RPC socket",                                 NULL       },
+  { "occupied_ws_fg",          T_COLOR,  "Occupied (inactive) workspace label colour",                NULL       },
+  { "options",                 T_STRING, "Alias for kb_options",                                      NULL       },
+  { "outer_gap",               T_INT,    "Alias for gaps_out",                                        NULL       },
+  { "outer_gaps",              T_INT,    "Alias for gaps_out",                                        NULL       },
+  { "padding",                 T_INT,    "Bar horizontal padding in pixels",                          NULL       },
+  { "panel",                   T_STRING, "Alias for default_panel",                                   NULL       },
+  { "pane_bg",                 T_COLOR,  "Tiled window pane background colour",                       NULL       },
+  { "pill_radius",             T_INT,    "Workspace pill corner radius (0=square)",                   NULL       },
+  { "position",                T_ENUM,   "Bar screen edge",                                           BAR_POS    },
+  { "powerline",               T_BOOL,   "Enable powerline arrow separators",                         BOOL_VALS  },
+  { "project_root",            T_STRING, "Default project root path (~/... expanded)",                NULL       },
+  { "ratio",                   T_FLOAT,  "Master-stack size ratio (0.0-1.0)",                         NULL       },
+  { "refresh",                 T_INT,    "Monitor refresh rate in Hz",                                NULL       },
+  { "repeat_delay",            T_INT,    "Delay before auto-repeat begins (ms)",                      NULL       },
+  { "repeat_rate",             T_INT,    "Key auto-repeat rate (chars/sec)",                          NULL       },
+  { "root",                    T_STRING, "Alias for project_root",                                    NULL       },
+  { "rounding",                T_INT,    "Alias for corner_radius",                                   NULL       },
+  { "run",                     T_STRING, "Shell command to run the project",                          NULL       },
+  { "saturation",              T_FLOAT,  "Monitor colour saturation multiplier (0.0-2.0)",            NULL       },
+  { "scale",                   T_FLOAT,  "Output HiDPI scale factor (e.g. 1.0, 2.0)",                 NULL       },
+  { "seat",                    T_STRING, "Alias for seat_name",                                       NULL       },
+  { "seat_name",               T_STRING, "libinput seat identifier (e.g. seat0)",                     NULL       },
+  { "sep_style",               T_ENUM,   "Alias for separator_style",                                 SEP_STYLES },
   { "separator",               T_BOOL,   "Draw separator lines between modules",                      BOOL_VALS  },
-  { "separator_top",           T_BOOL,   "Draw separator on the bar top edge",                        BOOL_VALS  },
   { "separator_color",         T_COLOR,  "Separator line colour",                                     NULL       },
   { "separator_style",         T_ENUM,   "Separator glyph style",                                     SEP_STYLES },
-  { "sep_style",               T_ENUM,   "Alias for separator_style",                                 SEP_STYLES },
-  { "powerline",               T_BOOL,   "Enable powerline arrow separators",                         BOOL_VALS  },
-  { "modules_left",            T_MULTI,  "Space/comma list of left-side modules",                     MODULES    },
-  { "modules-left",            T_MULTI,  "Alias for modules_left",                                    MODULES    },
-  { "modules_center",          T_MULTI,  "Space/comma list of centre modules",                        MODULES    },
-  { "modules-center",          T_MULTI,  "Alias for modules_center",                                  MODULES    },
-  { "modules_right",           T_MULTI,  "Space/comma list of right-side modules",                    MODULES    },
-  { "modules-right",           T_MULTI,  "Alias for modules_right",                                   MODULES    },
-  { "col_background",          T_COLOR,  "col. prefix alias for background colour",                   NULL       },
-  { "col_text",                T_COLOR,  "col. prefix alias for text colour",                         NULL       },
-  { "col_accent",              T_COLOR,  "col. prefix alias for accent colour",                       NULL       },
-  /* monitor block */
-  { "width",                   T_INT,    "Monitor width in pixels",                                   NULL       },
-  { "refresh",                 T_INT,    "Monitor refresh rate in Hz",                                NULL       },
-  { "scale",                   T_FLOAT,  "Output HiDPI scale factor (e.g. 1.0, 2.0)",                 NULL       },
-  /* scratchpad block */
-  { "app_id",                  T_STRING, "app_id / WM_CLASS pattern to match",                        NULL       },
-  { "class",                   T_STRING, "Alias for app_id",                                          NULL       },
-  { "name",                    T_STRING, "Scratchpad identifier name",                                NULL       },
+  { "separator_top",           T_BOOL,   "Draw separator on the bar top edge",                        BOOL_VALS  },
+  { "shader",                  T_BOOL,   "Enable custom GLSL post-process shader",                    BOOL_VALS  },
   { "size",                    T_STRING, "Dimensions as width%, height%",                             NULL       },
-  /* bar_module block */
-  { "interval",                T_INT,    "Module refresh interval in seconds",                        NULL       },
-  { "icon",                    T_STRING, "Nerd Font glyph prefix for this module",                    NULL       },
-  { "format",                  T_STRING, "strftime or custom format string",                          NULL       },
-  { "color",                   T_COLOR,  "Module text colour override",                               NULL       },
-  { "colour",                  T_COLOR,  "British spelling alias for color",                          NULL       },
-  /* overlay block */
-  { "enabled",                 T_BOOL,   "Enable this subsystem",                                     BOOL_VALS  },
-  { "editor",                  T_STRING, "Editor command (e.g. nvim)",                                NULL       },
+  { "smart_gaps",
+   T_BOOL,                               "Disable gaps when only one window is visible",
+   BOOL_VALS                                                                                                     },
+  { "source",                  T_STRING, "Path to another config file to include",                    NULL       },
   { "terminal",                T_STRING, "Terminal emulator command (e.g. foot)",                     NULL       },
-  { "nvim_socket",             T_STRING, "Path to Neovim RPC socket",                                 NULL       },
-  { "nvim_sock",               T_STRING, "Alias for nvim_socket",                                     NULL       },
-  { "nvim_listen_addr",        T_STRING, "Neovim --listen address",                                   NULL       },
-  { "nvim_listen",             T_STRING, "Alias for nvim_listen_addr",                                NULL       },
-  { "project_root",            T_STRING, "Default project root path (~/... expanded)",                NULL       },
-  { "root",                    T_STRING, "Alias for project_root",                                    NULL       },
-  { "default_panel",           T_STRING, "Default overlay panel name to open",                        NULL       },
-  { "panel",                   T_STRING, "Alias for default_panel",                                   NULL       },
-  { "lsp_diagnostics",         T_BOOL,   "Show LSP diagnostics in the overlay",                       BOOL_VALS  },
-  { "lsp",                     T_STRING, "LSP server command for this language",                      NULL       },
-  { "lsp_poll_ms",             T_INT,    "LSP diagnostic polling interval (ms)",                      NULL       },
-  { "lsp_poll",                T_INT,    "Alias for lsp_poll_ms",                                     NULL       },
-  /* dev_lang block */
-  { "build",                   T_STRING, "Shell command to build the project",                        NULL       },
-  { "run",                     T_STRING, "Shell command to run the project",                          NULL       },
   { "test",                    T_STRING, "Shell command to run the test suite",                       NULL       },
-  { "fmt",                     T_STRING, "Shell command to format source files",                      NULL       },
-  { "lint",                    T_STRING, "Shell command to lint source files",                        NULL       },
-  /* workspace block */
-  { "ratio",                   T_FLOAT,  "Master-stack size ratio (0.0-1.0)",                         NULL       },
+  { "theme",                   T_ENUM,   "Built-in colour preset name",                               THEMES     },
+  { "variant",                 T_STRING, "Alias for kb_variant",                                      NULL       },
+  { "width",                   T_INT,    "Monitor width in pixels",                                   NULL       },
+  { "window_rule",             T_STRING, "Alias for windowrule",                                      NULL       },
+  { "windowrule",              T_STRING, "Window rule: effect, matcher",                              NULL       },
+  { "windowrulev2",            T_STRING, "Window rule v2: effect, class:^(pattern)$",                 NULL       },
+  { "workspace_count",         T_INT,    "Alias for workspaces",                                      NULL       },
+  { "workspaces",              T_INT,    "Number of workspaces to create at startup",                 NULL       },
+  { "xwayland",                T_BOOL,   "Enable XWayland compatibility layer",                       BOOL_VALS  },
   { NULL,                      0,        NULL,                                                        NULL       }
 };
 
+/* PERF: binary search over sorted SCHEMA — O(log n) instead of O(n). */
 static const Schema *schema_find(const char *key) {
   /* strip col. prefix */
   const char *k = key;
   if(!strncmp(k, "col.", 4)) k += 4;
-  for(int i = 0; SCHEMA[i].key; i++)
-    if(!strcasecmp(SCHEMA[i].key, k)) return &SCHEMA[i];
+
+  /* count entries (exclude sentinel) */
+  static int schema_count = -1;
+  if(schema_count < 0) {
+    schema_count = 0;
+    while(SCHEMA[schema_count].key)
+      schema_count++;
+  }
+
+  int lo = 0, hi = schema_count - 1;
+  while(lo <= hi) {
+    int mid = (lo + hi) >> 1;
+    int cmp = strcasecmp(SCHEMA[mid].key, k);
+    if(cmp == 0) return &SCHEMA[mid];
+    if(cmp < 0)
+      lo = mid + 1;
+    else
+      hi = mid - 1;
+  }
   return NULL;
 }
 
@@ -414,7 +434,7 @@ static const Schema *schema_find(const char *key) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-  int  lnum; /* 0-based */
+  int  lnum;
   int  col_s;
   int  col_e;
   char key[256];
@@ -431,37 +451,30 @@ static int parse_doc(const Doc *d, Entry *out) {
     strncpy(line, raw, MAX_LINE - 1);
     line[MAX_LINE - 1] = '\0';
 
-    /* strip // comments */
     char *slsl = strstr(line, "//");
     if(slsl) *slsl = '\0';
 
-    /* strip # comments but protect #RRGGBB(AA) color literals */
     char *p = line;
     while(*p) {
       if(*p == '#') {
-        /* count following hex digits */
         int hx = 0;
         while(isxdigit((unsigned char)p[1 + hx]))
           hx++;
         if(hx == 6 || hx == 8) {
-          /* color literal — skip past it */
           p += 1 + hx;
           continue;
         }
-        /* comment — truncate here */
         *p = '\0';
         break;
       }
       p++;
     }
 
-    /* skip $variable definitions, blocks, blank lines */
     const char *t = line;
     while(*t == ' ' || *t == '\t')
       t++;
     if(!*t || *t == '$' || *t == '}') continue;
 
-    /* find first '=' not inside parens (to skip rgba(...)=...) */
     int         depth = 0;
     const char *eq    = NULL;
     for(const char *c = t; *c; c++) {
@@ -476,26 +489,22 @@ static int parse_doc(const Doc *d, Entry *out) {
     }
     if(!eq) continue;
 
-    /* extract key: walk back from '=' skipping spaces */
     const char *ke = eq - 1;
     while(ke > t && (*ke == ' ' || *ke == '\t'))
       ke--;
     const char *ks   = t;
-    /* key chars: alnum, _, - */
     int         klen = 0;
     const char *kp   = ks;
     while(*kp && (isalnum((unsigned char)*kp) || *kp == '_' || *kp == '-')) {
       kp++;
       klen++;
     }
-    /* check that what follows the key (ignoring spaces) is actually '=' */
     const char *after = kp;
     while(*after == ' ' || *after == '\t')
       after++;
     if(*after != '=') continue;
     if(klen == 0 || klen > 255) continue;
 
-    /* extract value: everything after '=' trimmed */
     const char *vs = eq + 1;
     while(*vs == ' ' || *vs == '\t')
       vs++;
@@ -519,7 +528,7 @@ static int parse_doc(const Doc *d, Entry *out) {
 }
 
 static bool is_color(const char *v) {
-  if(v[0] == '$') return true; /* variable ref */
+  if(v[0] == '$') return true;
   if(v[0] == '#' && strlen(v) >= 7) return true;
   if(!strncasecmp(v, "0x", 2)) return true;
   if(!strncasecmp(v, "rgba(", 5)) return true;
@@ -533,7 +542,6 @@ static bool is_number(const char *v) {
   if(!isdigit((unsigned char)*p)) return false;
   while(isdigit((unsigned char)*p) || *p == '.')
     p++;
-  /* allow unit suffixes */
   if(!strcasecmp(p, "px") || !strcasecmp(p, "hz") || !strcasecmp(p, "ms") ||
      *p == '%' || *p == '\0')
     return true;
@@ -544,24 +552,20 @@ static bool is_number(const char *v) {
  * §6  LSP message I/O
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* PERF: read headers line-by-line with fgets instead of fgetc one byte at a
+ * time.  This reduces the number of read() syscalls dramatically for large
+ * LSP messages with multi-field headers. */
 static char *read_message(void) {
-  /* Read headers one byte at a time to handle \r\n and \n cleanly */
   int  content_length = -1;
-  char hdr[256];
-  int  hi = 0;
-  int  c;
+  char hdr[512];
 
-  /* read lines until blank line */
-  while((c = fgetc(stdin)) != EOF) {
-    if(c == '\r') continue; /* skip CR */
-    if(c == '\n') {
-      hdr[hi] = '\0';
-      if(hi == 0) break; /* blank line = end of headers */
-      if(!strncasecmp(hdr, "Content-Length:", 15)) content_length = atoi(hdr + 15);
-      hi = 0;
-      continue;
-    }
-    if(hi < 255) hdr[hi++] = (char)c;
+  while(fgets(hdr, sizeof(hdr), stdin)) {
+    /* strip trailing \r\n */
+    int len = (int)strlen(hdr);
+    while(len > 0 && (hdr[len - 1] == '\r' || hdr[len - 1] == '\n'))
+      hdr[--len] = '\0';
+    if(len == 0) break; /* blank line = end of headers */
+    if(!strncasecmp(hdr, "Content-Length:", 15)) content_length = atoi(hdr + 15);
   }
 
   if(content_length <= 0) return NULL;
@@ -596,7 +600,7 @@ static void send_response(int id, const char *result) {
   jb_int(&b, id);
   jb_raw(&b, ",\"result\":");
   jb_raw(&b, result);
-  jb_raw(&b, "}");
+  jb_char(&b, '}');
   send_message(b.s);
   jb_free(&b);
 }
@@ -608,7 +612,7 @@ static void send_notification(const char *method, const char *params) {
   jb_str(&b, method);
   jb_raw(&b, ",\"params\":");
   jb_raw(&b, params);
-  jb_raw(&b, "}");
+  jb_char(&b, '}');
   send_message(b.s);
   jb_free(&b);
 }
@@ -621,7 +625,6 @@ static void send_null_response(int id) {
  * §8  Diagnostics
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* severity: 1=error 2=warn 3=info 4=hint */
 static void push_diagnostics(const Doc *d) {
   Entry entries[MAX_ENTRIES];
   int   n = parse_doc(d, entries);
@@ -667,7 +670,6 @@ static void push_diagnostics(const Doc *d) {
           }
         if(!ok) {
           sev            = 2;
-          /* build options list */
           char opts[256] = { 0 };
           for(int j = 0; info->vals[j]; j++) {
             if(j) strncat(opts, ", ", sizeof(opts) - strlen(opts) - 1);
@@ -701,7 +703,7 @@ static void push_diagnostics(const Doc *d) {
 
     if(!sev) continue;
 
-    if(!first) jb_raw(&b, ",");
+    if(!first) jb_char(&b, ',');
     first = false;
 
     jb_raw(&b, "{\"range\":{\"start\":{\"line\":");
@@ -716,7 +718,7 @@ static void push_diagnostics(const Doc *d) {
     jb_int(&b, sev);
     jb_raw(&b, ",\"source\":\"trixie\",\"message\":");
     jb_str(&b, msg);
-    jb_raw(&b, "}");
+    jb_char(&b, '}');
   }
 
   jb_raw(&b, "]}");
@@ -800,12 +802,12 @@ static void handle_completion(int id, const char *params) {
 
   JBuf b;
   jb_init(&b);
-  jb_raw(&b, "[");
+  jb_char(&b, '[');
   bool first = true;
 
 #define ITEM(label, kind, detail, doc_str)                              \
   do {                                                                  \
-    if(!first) jb_raw(&b, ",");                                         \
+    if(!first) jb_char(&b, ',');                                        \
     first = false;                                                      \
     jb_raw(&b, "{\"label\":");                                          \
     jb_str(&b, label);                                                  \
@@ -820,16 +822,13 @@ static void handle_completion(int id, const char *params) {
 
   if(d && row < d->nlines) {
     const char *line = d->lines[row];
-    /* get text before cursor */
     char        before[MAX_LINE];
     int         blen = col < MAX_LINE ? col : MAX_LINE - 1;
     strncpy(before, line, blen);
     before[blen] = '\0';
 
-    /* check if we're after an '=' */
     char *eq = strrchr(before, '=');
     if(eq) {
-      /* find the key */
       char  key[256] = { 0 };
       char *kend     = eq - 1;
       while(kend > before && (*kend == ' ' || *kend == '\t'))
@@ -860,7 +859,6 @@ static void handle_completion(int id, const char *params) {
         }
       }
 
-      /* bind field completions */
       if(!strcasecmp(key, "bind") || !strcasecmp(key, "binde") ||
          !strcasecmp(key, "bindm")) {
         int ncommas = 0;
@@ -875,7 +873,6 @@ static void handle_completion(int id, const char *params) {
         }
       }
 
-      /* gesture field completions */
       if(!strcasecmp(key, "gesture")) {
         int ncommas = 0;
         for(char *c = before; *c; c++)
@@ -892,7 +889,7 @@ static void handle_completion(int id, const char *params) {
       }
 
     } else {
-      /* key completions at line start */
+      /* key completions */
       for(int i = 0; SCHEMA[i].key; i++) {
         char        doc_str[512];
         const char *tname = "string";
@@ -919,7 +916,7 @@ static void handle_completion(int id, const char *params) {
   }
 #undef ITEM
 
-  jb_raw(&b, "]");
+  jb_char(&b, ']');
   send_response(id, b.s);
   jb_free(&b);
 }
@@ -946,7 +943,6 @@ static void handle_hover(int id, const char *params) {
   }
 
   const char *line = d->lines[row];
-  /* find word under cursor */
   int         ws = col, we = col;
   while(ws > 0 && (isalnum((unsigned char)line[ws - 1]) || line[ws - 1] == '_' ||
                    line[ws - 1] == '-'))
@@ -983,7 +979,6 @@ static void handle_hover(int id, const char *params) {
 
   JBuf content;
   jb_init(&content);
-  /* build markdown string */
   char md[1024];
   snprintf(md, sizeof(md), "**%s** _(%s)_\n\n%s", word, tname, info->doc);
   if(info->vals) {
@@ -1007,15 +1002,12 @@ static void handle_hover(int id, const char *params) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 int main(void) {
-  /* LSP requires binary-safe I/O */
-  /* use line-buffered stdout so responses flush immediately */
   setvbuf(stdout, NULL, _IONBF, 0);
 
   for(;;) {
     char *msg = read_message();
     if(!msg) break;
 
-    /* extract method and id */
     char *method = json_str(msg, "method");
     int   id     = json_int(msg, "id", -1);
 
@@ -1037,7 +1029,7 @@ int main(void) {
           "}");
 
     } else if(!strcmp(method, "initialized")) {
-      /* no-op notification */
+      /* no-op */
 
     } else if(!strcmp(method, "shutdown")) {
       send_null_response(id);
@@ -1068,15 +1060,12 @@ int main(void) {
       char       *td   = json_obj(msg, "textDocument");
       char       *uri  = td ? json_str(td, "uri") : NULL;
       int         ver  = td ? json_int(td, "version", 0) : 0;
-      /* get first contentChange text */
       char       *text = NULL;
       const char *cc   = strstr(msg, "\"contentChanges\"");
       if(cc) {
         cc = strchr(cc, '[');
         if(cc) {
-          char       *obj = json_obj(cc + 1, "text");
-          /* obj approach won't work for array — use json_str on the slice */
-          const char *tp  = strstr(cc, "\"text\"");
+          const char *tp = strstr(cc, "\"text\"");
           if(tp) {
             tp += 6;
             while(*tp == ':' || *tp == ' ')
@@ -1098,7 +1087,6 @@ int main(void) {
               text    = strdup(buf);
             }
           }
-          free(obj);
         }
       }
       if(uri && text) {
@@ -1115,7 +1103,7 @@ int main(void) {
       free(text);
 
     } else if(!strcmp(method, "textDocument/didClose")) {
-      /* nothing to do — keep the doc in memory */
+      /* keep doc in memory */
 
     } else if(!strcmp(method, "textDocument/completion")) {
       handle_completion(id, msg);
@@ -1124,7 +1112,6 @@ int main(void) {
       handle_hover(id, msg);
 
     } else if(id >= 0) {
-      /* unknown request — send null */
       send_null_response(id);
     }
 

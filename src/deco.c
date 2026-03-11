@@ -21,6 +21,10 @@ typedef struct {
   struct wlr_scene_rect *borders[4];
   bool                   has_rects;
   struct wlr_scene_tree *rects_layer; /* which layer borders live on */
+  /* Cached state — skip wlr_scene calls when nothing changed. */
+  Rect                   last_rect;
+  float                  last_color[4];
+  bool                   last_enabled;
 } DecoEntry;
 
 /* ── TrixieDeco ─────────────────────────────────────────────────────────────── */
@@ -30,6 +34,12 @@ struct TrixieDeco {
   struct wlr_scene_tree *layer_float;
   DecoEntry              entries[MAX_DECO_PANES];
   int                    count;
+  /* Dirty tracking — skip full update when nothing relevant has changed. */
+  bool                   dirty;
+  uint64_t               last_gen; /* compared against a caller-supplied gen */
+  PaneId                 last_focus;
+  int                    last_ws;
+  int                    last_ws_dx;
 };
 
 /* ── Lifecycle ──────────────────────────────────────────────────────────────── */
@@ -39,6 +49,7 @@ TrixieDeco *deco_create(struct wlr_scene_tree *layer_tiled,
   TrixieDeco *d  = calloc(1, sizeof(*d));
   d->layer       = layer_tiled;
   d->layer_float = layer_floating;
+  d->dirty       = true; /* force update on first frame */
   return d;
 }
 
@@ -54,6 +65,7 @@ void deco_destroy(TrixieDeco *d) {
 
 void deco_mark_dirty(TrixieDeco *d) {
   if(!d) return;
+  d->dirty = true;
   for(int i = 0; i < d->count; i++)
     d->entries[i].active = false;
 }
@@ -130,6 +142,20 @@ static void position_entry(
   float fc[4];
   color_f(col, fc);
 
+  /* Skip all wlr_scene calls when geometry and colour are unchanged. */
+  bool geom_same  = (r.x == e->last_rect.x && r.y == e->last_rect.y &&
+                    r.w == e->last_rect.w && r.h == e->last_rect.h);
+  bool color_same = (fc[0] == e->last_color[0] && fc[1] == e->last_color[1] &&
+                     fc[2] == e->last_color[2] && fc[3] == e->last_color[3]);
+  if(geom_same && color_same && e->last_enabled) return;
+
+  e->last_rect     = r;
+  e->last_color[0] = fc[0];
+  e->last_color[1] = fc[1];
+  e->last_color[2] = fc[2];
+  e->last_color[3] = fc[3];
+  e->last_enabled  = true;
+
   wlr_scene_rect_set_size(e->borders[0], r.w, bw);
   wlr_scene_node_set_position(&e->borders[0]->node, r.x, r.y);
   wlr_scene_rect_set_color(e->borders[0], fc);
@@ -154,33 +180,56 @@ static void position_entry(
 void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg) {
   if(!d || !twm) return;
 
-  int        bw         = cfg->border_width;
-  Workspace *ws         = &twm->workspaces[twm->active_ws];
-  PaneId     focused_id = twm_focused_id(twm);
-  int        ws_dx      = anim_ws_incoming_x(anim);
+  int    bw         = cfg->border_width;
+  PaneId focused_id = twm_focused_id(twm);
+  int    ws_dx      = anim_ws_incoming_x(anim);
+  bool   animating  = anim_any(anim);
+
+  /* Skip the full update when nothing has changed.
+   * deco_mark_dirty() is called on focus change, layout change, ws switch,
+   * config reload, and open/close.  During animations we must update every
+   * frame (positions change).  When still, we only re-run if dirty. */
+  if(!animating && !d->dirty && focused_id == d->last_focus &&
+     twm->active_ws == d->last_ws && ws_dx == d->last_ws_dx)
+    return;
+
+  d->dirty      = false;
+  d->last_focus = focused_id;
+  d->last_ws    = twm->active_ws;
+  d->last_ws_dx = ws_dx;
+
+  Workspace *ws = &twm->workspaces[twm->active_ws];
 
   for(int i = 0; i < d->count; i++)
     d->entries[i].active = false;
+
+  /* Precompute noborder flags once for all win-rules (O(n+m) instead of O(n*m)). */
+  bool noborder_map[MAX_DECO_PANES] = { false };
+  for(int i = 0; i < ws->pane_count && i < MAX_DECO_PANES; i++) {
+    PaneId pid = ws->panes[i];
+    Pane  *p   = twm_pane_by_id(twm, pid);
+    if(!p) continue;
+    for(int ri = 0; ri < cfg->win_rule_count; ri++) {
+      const WinRule *wr = &cfg->win_rules[ri];
+      if(!wr->app_id[0] || !wr->noborder) continue;
+      bool match = false;
+      if(!strncmp(wr->app_id, "title:", 6))
+        match = strstr(p->title, wr->app_id + 6) != NULL;
+      else
+        match = strstr(p->app_id, wr->app_id) != NULL;
+      if(match) {
+        noborder_map[i] = true;
+        break;
+      }
+    }
+  }
 
   for(int i = 0; i < ws->pane_count; i++) {
     PaneId pid = ws->panes[i];
     Pane  *p   = twm_pane_by_id(twm, pid);
     if(!p) continue;
 
-    bool noborder = false;
-    for(int ri = 0; ri < cfg->win_rule_count; ri++) {
-      const WinRule *wr = &cfg->win_rules[ri];
-      if(!wr->app_id[0]) continue;
-      bool match = false;
-      if(!strncmp(wr->app_id, "title:", 6))
-        match = strstr(p->title, wr->app_id + 6) != NULL;
-      else
-        match = strstr(p->app_id, wr->app_id) != NULL;
-      if(match && wr->noborder) {
-        noborder = true;
-        break;
-      }
-    }
+    bool noborder = noborder_map[i];
 
     if(p->fullscreen) {
       DecoEntry *e = deco_find(d, pid);

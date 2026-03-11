@@ -32,6 +32,7 @@
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
 #include <wlr/types/wlr_primary_selection.h>
@@ -50,6 +51,7 @@ static void handle_new_input(struct wl_listener *l, void *data);
 static void handle_new_xdg_surface(struct wl_listener *l, void *data);
 static void handle_new_layer_surface(struct wl_listener *l, void *data);
 static void handle_new_deco(struct wl_listener *l, void *data);
+static void handle_new_idle_inhibitor(struct wl_listener *l, void *data);
 static void handle_cursor_motion(struct wl_listener *l, void *data);
 static void handle_cursor_motion_abs(struct wl_listener *l, void *data);
 static void handle_cursor_button(struct wl_listener *l, void *data);
@@ -237,6 +239,8 @@ static void handle_foreign_toplevel_request_close(struct wl_listener *listener,
 
 static int idle_timer_cb(void *data) {
   TrixieServer *s = data;
+  /* Do not blank if any inhibitor is active (e.g. video player). */
+  if(s->idle_inhibit_count > 0) return 0;
   wlr_log(WLR_INFO, "idle: blanking outputs");
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) {
@@ -247,6 +251,43 @@ static int idle_timer_cb(void *data) {
     wlr_output_state_finish(&st);
   }
   return 0;
+}
+
+/* ── Idle-inhibit handlers ────────────────────────────────────────────────── */
+
+typedef struct {
+  struct wl_listener destroy;
+  TrixieServer      *server;
+} IdleInhibitorCtx;
+
+static void handle_idle_inhibitor_destroy(struct wl_listener *listener, void *data) {
+  (void)data;
+  IdleInhibitorCtx *ctx = wl_container_of(listener, ctx, destroy);
+  TrixieServer     *s   = ctx->server;
+  if(s->idle_inhibit_count > 0) s->idle_inhibit_count--;
+  if(s->idle_inhibit_count == 0) {
+    /* Resume the idle timer now that all inhibitors are gone. */
+    wlr_log(WLR_INFO, "idle-inhibit: all inhibitors released, resuming idle timer");
+    if(s->idle_timer && s->idle_timeout_ms > 0)
+      wl_event_source_timer_update(s->idle_timer, s->idle_timeout_ms);
+  }
+  wl_list_remove(&ctx->destroy.link);
+  free(ctx);
+}
+
+static void handle_new_idle_inhibitor(struct wl_listener *listener, void *data) {
+  TrixieServer                     *s   = CONTAINER_OF(listener, TrixieServer, idle_inhibit_new);
+  struct wlr_idle_inhibitor_v1     *inh = data;
+  s->idle_inhibit_count++;
+  wlr_log(WLR_INFO, "idle-inhibit: inhibitor added (count=%d)", s->idle_inhibit_count);
+  /* While any inhibitor is active, pause the idle timer. */
+  if(s->idle_timer) wl_event_source_timer_update(s->idle_timer, 0);
+  IdleInhibitorCtx *ctx = calloc(1, sizeof(*ctx));
+  if(ctx) {
+    ctx->server          = s;
+    ctx->destroy.notify  = handle_idle_inhibitor_destroy;
+    wl_signal_add(&inh->events.destroy, &ctx->destroy);
+  }
 }
 
 void server_reset_idle(TrixieServer *s) {
@@ -278,6 +319,11 @@ static int pane_title_extra(TrixieServer *s, Pane *p) {
 // near the other static callbacks at the top of main.c
 static int  s_nvim_retry_count         = 0;
 static bool s_nvim_socket_existed_last = false;
+
+/* DnD drag-icon scene node — updated every cursor motion so the icon follows
+ * the cursor.  NULL when no drag is active.  File-scope so it requires no
+ * change to TrixieServer's struct layout in trixie.h. */
+static struct wlr_scene_tree *g_drag_icon_tree = NULL;
 
 void nvim_retry_reset(void) {
   s_nvim_retry_count         = 0;
@@ -484,13 +530,22 @@ void server_sync_windows(TrixieServer *s) {
     wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
 
     bool  is_focused = (v->pane_id == focused_id);
-    float opacity    = 1.0f;
-    for(int ri = 0; ri < s->cfg.win_rule_count; ri++) {
-      WinRule *wr = &s->cfg.win_rules[ri];
-      if(wr->opacity > 0.0f && wr->app_id[0] && strstr(p->app_id, wr->app_id)) {
-        opacity = wr->opacity;
-        break;
+    /* Use the cached rule opacity (set at map time / rule reload).
+     * Fall back to scanning only when not cached (opacity == 0.0 sentinel). */
+    float opacity = p->rule_opacity > 0.0f ? p->rule_opacity : 1.0f;
+    if(p->rule_opacity == 0.0f) {
+      /* Cache miss — scan once and store. */
+      opacity = 1.0f;
+      for(int ri = 0; ri < s->cfg.win_rule_count; ri++) {
+        WinRule *wr = &s->cfg.win_rules[ri];
+        if(wr->opacity > 0.0f && wr->app_id[0] && strstr(p->app_id, wr->app_id)) {
+          opacity = wr->opacity;
+          break;
+        }
       }
+      p->rule_opacity = opacity > 0.0f ? opacity : -1.0f; /* -1 = scanned, no rule */
+    } else if(p->rule_opacity < 0.0f) {
+      opacity = 1.0f; /* scanned previously, no rule matched */
     }
     if(opacity >= 1.0f && !is_focused && !p->floating && !p->fullscreen)
       opacity = 0.88f;
@@ -554,6 +609,68 @@ void server_request_redraw(TrixieServer *s) {
   wl_list_for_each(o, &s->outputs, link) wlr_output_schedule_frame(o->wlr_output);
 }
 
+/* ── Animated layout reflow ───────────────────────────────────────────────── *
+ * Call this instead of bare twm_reflow() whenever a layout change should be  *
+ * animated.  It snapshots every tiled pane's current rect, performs the      *
+ * reflow, then fires anim_morph(old→new) for each pane that moved.           *
+ *                                                                             *
+ * Floating and fullscreen panes are skipped — they don't participate in the  *
+ * tiling layout.  Panes with an active open/close animation are also skipped *
+ * (anim_morph guards those internally).                                       *
+ *                                                                             *
+ * TWM_MORPH_SWAP(s, call) wraps any twm call that internally calls           *
+ * twm_reflow itself (twm_swap, twm_swap_main): snapshot BEFORE, morph AFTER. */
+#define TWM_MORPH_SWAP(s_, call_) do { \
+  Workspace *_ws = &(s_)->twm.workspaces[(s_)->twm.active_ws]; \
+  typedef struct { PaneId id; Rect r; } _Snap; \
+  _Snap _snaps[64]; int _nsn = 0; \
+  for(int _i = 0; _i < _ws->pane_count && _nsn < 64; _i++) { \
+    Pane *_p = twm_pane_by_id(&(s_)->twm, _ws->panes[_i]); \
+    if(_p && !_p->floating && !_p->fullscreen) _snaps[_nsn++] = (_Snap){ _p->id, _p->rect }; \
+  } \
+  (call_); \
+  for(int _i = 0; _i < _nsn; _i++) { \
+    Pane *_p = twm_pane_by_id(&(s_)->twm, _snaps[_i].id); \
+    if(_p) { \
+      anim_morph(&(s_)->anim, _snaps[_i].id, _snaps[_i].r, _p->rect); \
+      TrixieView *_v = view_from_pane((s_), _snaps[_i].id); \
+      if(_v) view_apply_geom((s_), _v, _p); \
+    } \
+  } \
+  server_sync_windows(s_); server_mark_deco_dirty(s_); server_request_redraw(s_); \
+} while(0)
+static void server_reflow_with_morph(TrixieServer *s) {
+  Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
+
+  /* Snapshot current rects keyed by pane id. */
+  typedef struct { PaneId id; Rect r; } Snap;
+  Snap snap[64];
+  int  snap_n = 0;
+  for(int i = 0; i < ws->pane_count && snap_n < 64; i++) {
+    Pane *p = twm_pane_by_id(&s->twm, ws->panes[i]);
+    if(!p || p->floating || p->fullscreen) continue;
+    snap[snap_n++] = (Snap){ p->id, p->rect };
+  }
+
+  twm_reflow(&s->twm);
+
+  /* Fire morph animations for every pane whose rect changed. */
+  for(int i = 0; i < snap_n; i++) {
+    Pane *p = twm_pane_by_id(&s->twm, snap[i].id);
+    if(!p) continue;
+    anim_morph(&s->anim, snap[i].id, snap[i].r, p->rect);
+    /* Also send a configure so the client knows its new size immediately.
+     * Without this the client only hears about the size change once the
+     * animation completes (via server_sync_windows size check). */
+    TrixieView *v = view_from_pane(s, snap[i].id);
+    if(v) view_apply_geom(s, v, p);
+  }
+
+  server_sync_windows(s);
+  server_mark_deco_dirty(s);
+  server_request_redraw(s);
+}
+
 /* ── Action dispatch ──────────────────────────────────────────────────────── */
 
 void server_dispatch_action(TrixieServer *s, Action *a) {
@@ -608,8 +725,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
             wlr_xdg_toplevel_set_fullscreen(v->xdg_toplevel, p->fullscreen);
 #endif
         }
-        twm_reflow(&s->twm);
-        server_sync_windows(s);
+        server_reflow_with_morph(s);
       }
       break;
     }
@@ -624,9 +740,7 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
         wl_list_for_each(o, &s->outputs, link)
             bar_set_visible(o->bar, s->twm.bar_visible);
       }
-      twm_reflow(&s->twm);
-      server_sync_windows(s);
-      server_request_redraw(s);
+      server_reflow_with_morph(s);
       break;
     case ACTION_FOCUS_LEFT:
       twm_focus_dir(&s->twm, -1, 0);
@@ -645,26 +759,19 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
       server_sync_focus(s);
       break;
     case ACTION_MOVE_LEFT:
-      twm_swap(&s->twm, false);
-      server_sync_windows(s);
+      TWM_MORPH_SWAP(s, twm_swap_dir(&s->twm, -1,  0));
       break;
     case ACTION_MOVE_RIGHT:
-      twm_swap(&s->twm, true);
-      server_sync_windows(s);
+      TWM_MORPH_SWAP(s, twm_swap_dir(&s->twm,  1,  0));
       break;
     case ACTION_MOVE_UP:
-      twm_focus_dir(&s->twm, 0, -1);
-      twm_swap(&s->twm, false);
-      server_sync_windows(s);
+      TWM_MORPH_SWAP(s, twm_swap_dir(&s->twm,  0, -1));
       break;
     case ACTION_MOVE_DOWN:
-      twm_focus_dir(&s->twm, 0, 1);
-      twm_swap(&s->twm, true);
-      server_sync_windows(s);
+      TWM_MORPH_SWAP(s, twm_swap_dir(&s->twm,  0,  1));
       break;
     case ACTION_SWAP_MAIN:
-      twm_swap_main(&s->twm);
-      server_sync_windows(s);
+      TWM_MORPH_SWAP(s, twm_swap_main(&s->twm));
       break;
     case ACTION_WORKSPACE: {
       int old = s->twm.active_ws;
@@ -703,33 +810,27 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
     case ACTION_NEXT_LAYOUT: {
       Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
       ws->layout    = layout_next(ws->layout);
-      twm_reflow(&s->twm);
-      server_sync_windows(s);
-      server_mark_deco_dirty(s);
+      server_reflow_with_morph(s);
       break;
     }
     case ACTION_PREV_LAYOUT: {
       Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
       ws->layout    = layout_prev(ws->layout);
-      twm_reflow(&s->twm);
-      server_sync_windows(s);
-      server_mark_deco_dirty(s);
+      server_reflow_with_morph(s);
       break;
     }
     case ACTION_GROW_MAIN: {
       Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
       ws->main_ratio += 0.05f;
       if(ws->main_ratio > 0.9f) ws->main_ratio = 0.9f;
-      twm_reflow(&s->twm);
-      server_sync_windows(s);
+      server_reflow_with_morph(s);
       break;
     }
     case ACTION_SHRINK_MAIN: {
       Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
       ws->main_ratio -= 0.05f;
       if(ws->main_ratio < 0.1f) ws->main_ratio = 0.1f;
-      twm_reflow(&s->twm);
-      server_sync_windows(s);
+      server_reflow_with_morph(s);
       break;
     }
     case ACTION_SCRATCHPAD: server_scratch_toggle(s, a->name); break;
@@ -1315,11 +1416,13 @@ static PaneId pane_at_cursor(TrixieServer *s, double lx, double ly) {
   int        px = (int)lx, py = (int)ly;
   Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
   int        bw = s->twm.border_w;
+  /* Pass 1: floating panes (checked front-to-back). */
   for(int i = ws->pane_count - 1; i >= 0; i--) {
     Pane *p = twm_pane_by_id(&s->twm, ws->panes[i]);
     if(!p || !p->floating) continue;
     if(rect_contains(p->rect, px, py)) return p->id;
   }
+  /* Pass 2: tiled panes. */
   for(int i = ws->pane_count - 1; i >= 0; i--) {
     Pane *p = twm_pane_by_id(&s->twm, ws->panes[i]);
     if(!p || p->floating) continue;
@@ -1369,6 +1472,10 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
   struct wlr_pointer_motion_event *ev = data;
   wlr_cursor_move(s->cursor, &ev->pointer->base, ev->delta_x, ev->delta_y);
   server_reset_idle(s);
+  /* Track DnD drag icon with cursor position. */
+  if(g_drag_icon_tree)
+    wlr_scene_node_set_position(&g_drag_icon_tree->node,
+                                (int)s->cursor->x, (int)s->cursor->y);
   if(s->relative_pointer_mgr)
     wlr_relative_pointer_manager_v1_send_relative_motion(
         s->relative_pointer_mgr,
@@ -1388,6 +1495,9 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     Pane *p = twm_pane_by_id(&s->twm, s->drag_pane);
     if(p && p->floating) {
       twm_float_resize(&s->twm, s->drag_pane, (int)ev->delta_x, (int)ev->delta_y);
+      /* Send a configure so the client knows the new size. */
+      TrixieView *v = view_from_pane(s, s->drag_pane);
+      if(v) view_apply_geom(s, v, p);
     } else if(p && !p->floating) {
       Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
       float      delta =
@@ -1407,8 +1517,42 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
 static void handle_cursor_motion_abs(struct wl_listener *listener, void *data) {
   TrixieServer *s = CONTAINER_OF(listener, TrixieServer, cursor_motion_abs);
   struct wlr_pointer_motion_absolute_event *ev = data;
+
+  /* Compute delta from previous position before warping. */
+  double prev_x = s->cursor->x, prev_y = s->cursor->y;
   wlr_cursor_warp_absolute(s->cursor, &ev->pointer->base, ev->x, ev->y);
+  double dx = s->cursor->x - prev_x, dy = s->cursor->y - prev_y;
+
   server_reset_idle(s);
+  /* Track DnD drag icon with cursor position. */
+  if(g_drag_icon_tree)
+    wlr_scene_node_set_position(&g_drag_icon_tree->node,
+                                (int)s->cursor->x, (int)s->cursor->y);
+
+  if(s->drag_mode == DRAG_MOVE) {
+    twm_float_move(&s->twm, s->drag_pane, (int)dx, (int)dy);
+    server_sync_windows(s);
+    server_request_redraw(s);
+    return;
+  }
+  if(s->drag_mode == DRAG_RESIZE) {
+    Pane *p = twm_pane_by_id(&s->twm, s->drag_pane);
+    if(p && p->floating) {
+      twm_float_resize(&s->twm, s->drag_pane, (int)dx, (int)dy);
+      TrixieView *v = view_from_pane(s, s->drag_pane);
+      if(v) view_apply_geom(s, v, p);
+    } else if(p && !p->floating) {
+      Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
+      float      delta = (float)dx / (float)(s->twm.screen_w > 0 ? s->twm.screen_w : 1);
+      ws->main_ratio += delta;
+      if(ws->main_ratio < 0.1f) ws->main_ratio = 0.1f;
+      if(ws->main_ratio > 0.9f) ws->main_ratio = 0.9f;
+      twm_reflow(&s->twm);
+    }
+    server_sync_windows(s);
+    server_request_redraw(s);
+    return;
+  }
   update_cursor_focus(s, ev->time_msec);
 }
 
@@ -1432,11 +1576,16 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
     if(held && ev->button == BTN_LEFT) {
       s->drag_mode = is_float ? DRAG_MOVE : DRAG_RESIZE;
       s->drag_pane = pid;
+      /* Cancel any open/close animation so anim_get_rect stops overriding
+       * p->rect.  Without this the window ignores cursor movement for the
+       * duration of the animation (typically ~250ms after window open). */
+      anim_cancel(&s->anim, pid);
       return;
     }
     if(held && ev->button == BTN_RIGHT) {
       s->drag_mode = DRAG_RESIZE;
       s->drag_pane = pid;
+      anim_cancel(&s->anim, pid);
       return;
     }
   }
@@ -1525,6 +1674,8 @@ typedef struct {
 static void drag_icon_handle_destroy(struct wl_listener *listener, void *data) {
   (void)data;
   DragIconCtx *ctx = wl_container_of(listener, ctx, destroy);
+  /* Clear global so cursor_motion stops updating the dead node. */
+  g_drag_icon_tree = NULL;
   wl_list_remove(&ctx->destroy.link);
   free(ctx);
 }
@@ -1559,6 +1710,9 @@ static void handle_start_drag(struct wl_listener *listener, void *data) {
   wlr_scene_node_set_position(&icon_tree->node,
                               (int)s->cursor->x, (int)s->cursor->y);
 
+  /* Store globally so cursor_motion handlers can update position every event. */
+  g_drag_icon_tree = icon_tree;
+
   DragIconCtx *ctx = calloc(1, sizeof(*ctx));
   if(ctx) {
     ctx->destroy.notify = drag_icon_handle_destroy;
@@ -1580,6 +1734,10 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
 
     bool bar_dirty     = bar_update(o->bar, &s->twm, &s->cfg);
     bool overlay_dirty = overlay_update(o->overlay, &s->twm, &s->cfg, &s->bar_workers);
+    /* Bridge the TrixieOutput.deco_dirty flag (set by server_mark_deco_dirty)
+     * into the TrixieDeco dirty flag so deco_update skips the O(n×m)
+     * noborder scan on frames where nothing layout-relevant changed. */
+    if(o->deco_dirty) { deco_mark_dirty(o->deco); o->deco_dirty = false; }
     deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
 
     /* ── Render ──────────────────────────────────────────────────────────── *
@@ -1999,14 +2157,47 @@ static void view_handle_request_fullscreen(struct wl_listener *listener,
   server_dispatch_action(v->server, &a);
 }
 
+static void view_rescue_to_scratch(TrixieServer *s, TrixieView *v) {
+  /* Called after twm_try_assign_scratch succeeds post-map.
+   * The pane is already tiled — move its scene node to floating layer
+   * and hide it, matching the hidden scratchpad state. */
+  if(!v->mapped) return;
+  Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
+  if(!p) return;
+
+  /* twm_try_assign_scratch already removed it from the workspace pane list
+   * and set floating + rect, so just fix up the scene node. */
+  wlr_scene_node_reparent(&v->scene_tree->node, s->layer_floating);
+  wlr_scene_node_set_enabled(&v->scene_tree->node, false);
+  server_sync_focus(s);
+  server_sync_windows(s);
+  server_request_redraw(s);
+}
+
 static void view_handle_set_title(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, set_title);
   if(v->xdg_toplevel && v->xdg_toplevel->title) {
-    twm_set_title(&v->server->twm, v->pane_id, v->xdg_toplevel->title);
+    const char *new_title = v->xdg_toplevel->title;
+    Pane       *p         = twm_pane_by_id(&v->server->twm, v->pane_id);
+
+    /* Update pane title and check if this is the first real title. */
+    bool first_title = p && (p->title[0] == '\0' || strcmp(p->title, p->app_id) == 0);
+    twm_set_title(&v->server->twm, v->pane_id, new_title);
+
+    /* Re-apply title-based window rules now that we have a real title.
+     * At surface-create time only app_id rules run; title rules are deferred. */
+    if(first_title && p && v->mapped) {
+      const char *app_id = v->xdg_toplevel->app_id ? v->xdg_toplevel->app_id : "";
+      view_do_map(v->server, v, p, app_id, new_title);
+    }
+
+    bool claimed = twm_try_assign_scratch(&v->server->twm, v->pane_id, new_title);
+    if(claimed && v->mapped)
+      view_rescue_to_scratch(v->server, v);
+
     if(v->foreign_handle)
-      wlr_foreign_toplevel_handle_v1_set_title(v->foreign_handle,
-                                               v->xdg_toplevel->title);
+      wlr_foreign_toplevel_handle_v1_set_title(v->foreign_handle, new_title);
     ipc_push_title_changed(v->server, v->pane_id);
     lua_on_title_changed(v->server, v->pane_id);
     TrixieOutput *o;
@@ -2018,7 +2209,24 @@ static void view_handle_set_app_id(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, set_app_id);
   if(v->xdg_toplevel && v->xdg_toplevel->app_id) {
-    twm_try_assign_scratch(&v->server->twm, v->pane_id, v->xdg_toplevel->app_id);
+    Pane *p = twm_pane_by_id(&v->server->twm, v->pane_id);
+    if(p) {
+      const char *new_id = v->xdg_toplevel->app_id;
+      bool changed = strncmp(p->app_id, new_id, sizeof(p->app_id) - 1) != 0;
+      strncpy(p->app_id, new_id, sizeof(p->app_id) - 1);
+      p->app_id[sizeof(p->app_id) - 1] = '\0';
+
+      /* Re-apply window rules now that we have the real app_id.
+       * Many apps (Electron, browsers) set app_id late after map. */
+      if(changed && v->mapped) {
+        const char *title = v->xdg_toplevel->title ? v->xdg_toplevel->title : "";
+        view_do_map(v->server, v, p, new_id, title);
+      }
+    }
+    bool claimed = twm_try_assign_scratch(&v->server->twm, v->pane_id,
+                                          v->xdg_toplevel->app_id);
+    if(claimed && v->mapped)
+      view_rescue_to_scratch(v->server, v);
     if(v->foreign_handle)
       wlr_foreign_toplevel_handle_v1_set_app_id(v->foreign_handle,
                                                 v->xdg_toplevel->app_id);
@@ -2227,6 +2435,10 @@ static void xwayland_handle_set_title(struct wl_listener *listener, void *data) 
   twm_set_title(&s->twm, v->pane_id, t);
   if(v->foreign_handle)
     wlr_foreign_toplevel_handle_v1_set_title(v->foreign_handle, t);
+
+  /* Add this: retry scratch assignment on title change */
+  twm_try_assign_scratch(&s->twm, v->pane_id, t);
+
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) if(o->bar) bar_mark_dirty(o->bar);
 }
@@ -2422,7 +2634,7 @@ static int ipc_read_cb(int fd, uint32_t mask, void *data) {
       close(client);
       return 0;
     }
-    char reply[4096] = { 0 };
+    char reply[65536] = { 0 };
     ipc_dispatch(s, buf, reply, sizeof(reply));
     strncat(reply, "\n", sizeof(reply) - strlen(reply) - 1);
     write_all_fd(client, reply, strlen(reply));
@@ -2561,7 +2773,7 @@ int main(int argc, char *argv[]) {
   for(int i = 0; i < s->cfg.scratchpad_count; i++) {
     ScratchpadCfg *sp = &s->cfg.scratchpads[i];
     twm_register_scratch(
-        &s->twm, sp->name, sp->app_id, sp->width_pct, sp->height_pct);
+        &s->twm, sp->name, sp->app_id, sp->exec, sp->width_pct, sp->height_pct);
   }
   anim_set_resize(&s->anim, 1920, 1080);
 
@@ -2610,6 +2822,16 @@ int main(int argc, char *argv[]) {
   s->screencopy_mgr       = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
   wlr_gamma_control_manager_v1_create(s->display);
+
+  /* ── Idle-inhibit protocol (zwp_idle_inhibit_manager_v1) ──────────────── *
+   * Clients like video players call this to suppress DPMS blanking.         *
+   * We respect it by pausing/resuming the idle timer.                       */
+  s->idle_inhibit_mgr = wlr_idle_inhibit_v1_create(s->display);
+  if(s->idle_inhibit_mgr) {
+    s->idle_inhibit_new.notify = handle_new_idle_inhibitor;
+    wl_signal_add(&s->idle_inhibit_mgr->events.new_inhibitor,
+                  &s->idle_inhibit_new);
+  }
   wlr_content_type_manager_v1_create(s->display, 1);
   wlr_tearing_control_manager_v1_create(s->display, 1);
 

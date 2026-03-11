@@ -8,12 +8,16 @@
  *   twm_switch_ws / twm_move_to_ws        — workspace routing
  *   twm_swap / twm_swap_main               — pane reordering
  *   twm_register_scratch / twm_try_assign_scratch / twm_toggle_scratch
- *
+ *   twm_scratch_notify_title               — re-check title-matched scratchpads
  */
 #include "trixie.h"
+#include <ctype.h>
+#include <fnmatch.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <unistd.h>
 
 /* ── ID generator ───────────────────────────────────────────────────────────── */
 
@@ -24,7 +28,69 @@ PaneId          new_pane_id(void) {
 
 /* ── Helpers ────────────────────────────────────────────────────────────────── */
 
+/* ── O(1) pane lookup — flat open-addressing hash (power-of-2 slots) ─────── */
+/* Slot count must be >= MAX_PANES * 2 and a power of two.                    */
+#define PANE_HT_BITS 8 /* 256 slots, MAX_PANES <= 64    */
+#define PANE_HT_SIZE (1 << PANE_HT_BITS)
+#define PANE_HT_MASK (PANE_HT_SIZE - 1)
+
+static Pane  *s_ht_pane[PANE_HT_SIZE]; /* pointer into t->panes[]           */
+static PaneId s_ht_key[PANE_HT_SIZE];  /* stored id (0 = empty slot)        */
+static bool   s_ht_valid = false;
+
+static inline void pane_ht_clear(void) {
+  memset(s_ht_pane, 0, sizeof(s_ht_pane));
+  memset(s_ht_key, 0, sizeof(s_ht_key));
+  s_ht_valid = true;
+}
+
+static inline void pane_ht_insert(PaneId id, Pane *p) {
+  if(!s_ht_valid) return;
+  uint32_t slot = id & PANE_HT_MASK;
+  while(s_ht_key[slot] && s_ht_key[slot] != id)
+    slot = (slot + 1) & PANE_HT_MASK;
+  s_ht_key[slot]  = id;
+  s_ht_pane[slot] = p;
+}
+
+static inline void pane_ht_remove(PaneId id) {
+  if(!s_ht_valid) return;
+  uint32_t slot = id & PANE_HT_MASK;
+  while(s_ht_key[slot] && s_ht_key[slot] != id)
+    slot = (slot + 1) & PANE_HT_MASK;
+  if(!s_ht_key[slot]) return;
+  /* Tombstone removal: rehash the run. */
+  s_ht_key[slot]  = 0;
+  s_ht_pane[slot] = NULL;
+  slot            = (slot + 1) & PANE_HT_MASK;
+  while(s_ht_key[slot]) {
+    PaneId k        = s_ht_key[slot];
+    Pane  *v        = s_ht_pane[slot];
+    s_ht_key[slot]  = 0;
+    s_ht_pane[slot] = NULL;
+    pane_ht_insert(k, v);
+    slot = (slot + 1) & PANE_HT_MASK;
+  }
+}
+
+/* Rebuild the hash table from the current pane array (called after compaction). */
+static void pane_ht_rebuild(TwmState *t) {
+  pane_ht_clear();
+  for(int i = 0; i < t->pane_count; i++)
+    pane_ht_insert(t->panes[i].id, &t->panes[i]);
+}
+
 Pane *twm_pane_by_id(TwmState *t, PaneId id) {
+  if(!id) return NULL;
+  if(s_ht_valid) {
+    uint32_t slot = id & PANE_HT_MASK;
+    while(s_ht_key[slot]) {
+      if(s_ht_key[slot] == id) return s_ht_pane[slot];
+      slot = (slot + 1) & PANE_HT_MASK;
+    }
+    return NULL;
+  }
+  /* Fallback linear scan (hash not yet built). */
   for(int i = 0; i < t->pane_count; i++)
     if(t->panes[i].id == id) return &t->panes[i];
   return NULL;
@@ -65,6 +131,8 @@ static Rect compute_content_rect(
 
 /* ── Init ───────────────────────────────────────────────────────────────────── */
 
+/* ── Init ───────────────────────────────────────────────────────────────────── */
+
 void twm_init(TwmState *t,
               int       w,
               int       h,
@@ -76,6 +144,7 @@ void twm_init(TwmState *t,
               int       ws_count,
               bool      smart_gaps) {
   memset(t, 0, sizeof(*t));
+  pane_ht_clear();
   t->screen_w   = w;
   t->screen_h   = h;
   t->gap        = gap;
@@ -89,9 +158,11 @@ void twm_init(TwmState *t,
 
   for(int i = 0; i < ws_count; i++) {
     t->workspaces[i].index      = i;
-    t->workspaces[i].layout     = LAYOUT_BSP;
+    t->workspaces[i].layout     = LAYOUT_DWINDLE;
     t->workspaces[i].main_ratio = 0.55f;
     t->workspaces[i].gap        = gap;
+    /* DwindleTree.root must be DWINDLE_NULL (-1), not 0 from memset. */
+    dwindle_clear(&t->workspaces[i].dwindle);
   }
 
   t->content_rect = compute_content_rect(w, h, bar_h, bar_bottom, pad, &t->bar_rect);
@@ -120,6 +191,7 @@ static void reflow_workspace(TwmState *t, int ws_idx) {
   Workspace *ws = &t->workspaces[ws_idx];
   if(ws->pane_count == 0) return;
 
+  /* Build ordered list of tiled panes (floating / fullscreen excluded). */
   PaneId tiled[MAX_PANES];
   int    tiled_n = 0;
   for(int i = 0; i < ws->pane_count; i++) {
@@ -128,18 +200,34 @@ static void reflow_workspace(TwmState *t, int ws_idx) {
     if(p && !p->floating && !p->fullscreen) tiled[tiled_n++] = pid;
   }
 
-  int eff_gap = (t->smart_gaps && tiled_n <= 1) ? 0 : t->gap;
-
+  int  eff_gap = (t->smart_gaps && tiled_n <= 1) ? 0 : t->gap;
   Rect rects[MAX_PANES];
-  if(tiled_n > 0)
-    layout_compute(
-        ws->layout, t->content_rect, tiled_n, ws->main_ratio, eff_gap, rects);
 
-  for(int i = 0; i < tiled_n; i++) {
-    Pane *p = twm_pane_by_id(t, tiled[i]);
-    if(p) p->rect = rects[i];
+  if(tiled_n > 0) {
+    if(ws->layout == LAYOUT_DWINDLE) {
+      /* Synchronise the BSP tree to exactly match the live tiled[] list:
+       * prune stale leaves (floated / moved / closed panes) and insert any
+       * newly tiled panes.  This is the single authoritative reconciliation
+       * point — no other code needs to manually add or remove tree nodes.  */
+      dwindle_sync(&ws->dwindle, tiled, tiled_n, ws->has_focused ? ws->focused : 0);
+      dwindle_recompute(&ws->dwindle, t->content_rect, eff_gap);
+      for(int i = 0; i < tiled_n; i++) {
+        Pane *p = twm_pane_by_id(t, tiled[i]);
+        if(!p) continue;
+        if(!dwindle_get_rect(&ws->dwindle, tiled[i], &p->rect))
+          p->rect = t->content_rect; /* should never fire after sync */
+      }
+    } else {
+      layout_compute(
+          ws->layout, t->content_rect, tiled_n, ws->main_ratio, eff_gap, rects);
+      for(int i = 0; i < tiled_n; i++) {
+        Pane *p = twm_pane_by_id(t, tiled[i]);
+        if(p) p->rect = rects[i];
+      }
+    }
   }
 
+  /* Fullscreen and floating panes override whatever layout computed. */
   for(int i = 0; i < ws->pane_count; i++) {
     Pane *p = twm_pane_by_id(t, ws->panes[i]);
     if(!p) continue;
@@ -156,7 +244,8 @@ void twm_reflow(TwmState *t) {
 
 static void twm_reflow_all(TwmState *t) {
   for(int i = 0; i < t->ws_count; i++)
-    reflow_workspace(t, i);
+    if(t->workspaces[i].pane_count > 0) /* skip empty workspaces */
+      reflow_workspace(t, i);
 }
 
 /* ── Pane management ────────────────────────────────────────────────────────── */
@@ -175,20 +264,37 @@ PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating, bool fullscre
   p->fullscreen = fullscreen;
   strncpy(p->app_id, app_id, sizeof(p->app_id) - 1);
   strncpy(p->title, app_id, sizeof(p->title) - 1);
+  pane_ht_insert(p->id, p);
 
-  Workspace *ws               = &t->workspaces[t->active_ws];
+  Workspace *ws = &t->workspaces[t->active_ws];
+
+  /* Capture the previously focused tiled pane BEFORE updating focus.
+   * This is the leaf dwindle will split — must be read here, before
+   * ws->focused is overwritten to the new pane below.                    */
+  PaneId prev_focused = ws->has_focused ? ws->focused : 0;
+
   ws->panes[ws->pane_count++] = p->id;
   ws->focused                 = p->id;
   ws->has_focused             = true;
+
+  /* For tiled panes on a dwindle workspace: insert directly into the tree
+   * now, splitting prev_focused.  This must happen before twm_reflow so
+   * dwindle_sync sees the leaf already present and does NOT re-insert it
+   * using the (wrong) currently-focused id.                              */
+  if(!floating && !fullscreen && ws->layout == LAYOUT_DWINDLE)
+    dwindle_insert(&ws->dwindle, p->id, prev_focused, t->content_rect, t->gap);
 
   twm_reflow(t);
   return p->id;
 }
 
 void twm_close(TwmState *t, PaneId id) {
+  pane_ht_remove(id);
   for(int i = 0; i < t->pane_count; i++) {
     if(t->panes[i].id == id) {
       t->panes[i] = t->panes[--t->pane_count];
+      /* The swapped pane's pointer has moved — update hash entry. */
+      if(i < t->pane_count) pane_ht_insert(t->panes[i].id, &t->panes[i]);
       break;
     }
   }
@@ -216,21 +322,25 @@ void twm_close(TwmState *t, PaneId id) {
   twm_reflow_all(t);
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * twm_set_title — updates title and re-checks title-matched scratchpads.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
 void twm_set_title(TwmState *t, PaneId id, const char *title) {
   Pane *p = twm_pane_by_id(t, id);
-  if(p) strncpy(p->title, title, sizeof(p->title) - 1);
+  if(!p) return;
+  if(strncmp(p->title, title, sizeof(p->title) - 1) == 0) return;
+  strncpy(p->title, title, sizeof(p->title) - 1);
+  /* Re-attempt scratchpad assignment now that we have a real title. */
+  twm_scratch_notify_title(t, id);
 }
 
-/* FEATURE 4: clear the urgent bit for the active workspace when focus changes
- * into it.  This makes the bar dot disappear as soon as the user focuses the
- * workspace, which is the expected UX. */
 void twm_set_focused(TwmState *t, PaneId id) {
   Workspace *ws = &t->workspaces[t->active_ws];
   for(int i = 0; i < ws->pane_count; i++) {
     if(ws->panes[i] == id) {
       ws->focused     = id;
       ws->has_focused = true;
-      /* Clear urgency for this workspace now that the user has focused it. */
       t->ws_urgent_mask &= ~(1u << t->active_ws);
       return;
     }
@@ -244,6 +354,7 @@ void twm_toggle_float(TwmState *t) {
   if(!id) return;
   Pane *p = twm_pane_by_id(t, id);
   if(!p) return;
+
   p->floating = !p->floating;
   if(p->floating) {
     if(rect_empty(p->float_rect)) {
@@ -254,6 +365,8 @@ void twm_toggle_float(TwmState *t) {
     }
     p->rect = p->float_rect;
   }
+  /* dwindle_sync inside reflow_workspace will prune the now-floating pane's
+   * leaf from the tree (or insert the un-floated pane) automatically.      */
   twm_reflow(t);
 }
 
@@ -327,6 +440,13 @@ void twm_swap(TwmState *t, bool forward) {
   Workspace *ws = &t->workspaces[t->active_ws];
   if(ws->pane_count < 2 || !ws->has_focused) return;
 
+  if(ws->layout == LAYOUT_DWINDLE) {
+    dwindle_swap_cycle(&ws->dwindle, ws->focused, forward);
+    twm_reflow(t);
+    return;
+  }
+
+  /* Non-dwindle: cycle position in ws->panes[]. */
   int cur = -1;
   for(int i = 0; i < ws->pane_count; i++)
     if(ws->panes[i] == ws->focused) {
@@ -334,7 +454,6 @@ void twm_swap(TwmState *t, bool forward) {
       break;
     }
   if(cur < 0) return;
-
   int    n       = ws->pane_count;
   int    tgt     = forward ? (cur + 1) % n : (cur + n - 1) % n;
   PaneId tmp     = ws->panes[cur];
@@ -347,6 +466,13 @@ void twm_swap_main(TwmState *t) {
   Workspace *ws = &t->workspaces[t->active_ws];
   if(ws->pane_count < 2 || !ws->has_focused) return;
 
+  if(ws->layout == LAYOUT_DWINDLE) {
+    dwindle_swap_main(&ws->dwindle, ws->focused);
+    twm_reflow(t);
+    return;
+  }
+
+  /* Non-dwindle: move focused to index 0 in ws->panes[]. */
   int cur = -1;
   for(int i = 0; i < ws->pane_count; i++)
     if(ws->panes[i] == ws->focused) {
@@ -354,18 +480,33 @@ void twm_swap_main(TwmState *t) {
       break;
     }
   if(cur <= 0) return;
-
   PaneId tmp     = ws->panes[0];
   ws->panes[0]   = ws->panes[cur];
   ws->panes[cur] = tmp;
   twm_reflow(t);
 }
 
+/* twm_swap_dir — move the focused window toward dx,dy in the layout.
+ * For dwindle: swaps with the spatially nearest neighbour in that direction.
+ * For other layouts: falls back to twm_swap(forward/back) based on sign. */
+void twm_swap_dir(TwmState *t, int dx, int dy) {
+  Workspace *ws = &t->workspaces[t->active_ws];
+  if(ws->pane_count < 2 || !ws->has_focused) return;
+
+  if(ws->layout == LAYOUT_DWINDLE) {
+    dwindle_swap_dir(&ws->dwindle, ws->focused, dx, dy);
+    twm_reflow(t);
+    return;
+  }
+
+  /* Non-dwindle fallback: treat left/up as backward, right/down as forward. */
+  bool forward = (dx > 0 || dy > 0);
+  twm_swap(t, forward);
+}
+
+
 /* ── Workspace switching ────────────────────────────────────────────────────── */
 
-/* FEATURE 4: clear ws_urgent_mask bit when switching to a workspace so the
- * dot disappears as soon as the user arrives there, even without an explicit
- * focus event. */
 void twm_switch_ws(TwmState *t, int n) {
   for(int i = 0; i < t->scratch_count; i++) {
     Scratchpad *sp = &t->scratchpads[i];
@@ -381,7 +522,6 @@ void twm_switch_ws(TwmState *t, int n) {
   }
   n            = n < 0 ? 0 : (n >= t->ws_count ? t->ws_count - 1 : n);
   t->active_ws = n;
-  /* Clear urgency for the workspace we just switched to. */
   t->ws_urgent_mask &= ~(1u << n);
   twm_reflow(t);
 }
@@ -393,6 +533,7 @@ void twm_move_to_ws(TwmState *t, int n) {
   if(target == t->active_ws) return;
 
   Workspace *src = &t->workspaces[t->active_ws];
+
   for(int i = 0; i < src->pane_count; i++) {
     if(src->panes[i] == id) {
       src->panes[i] = src->panes[--src->pane_count];
@@ -408,67 +549,278 @@ void twm_move_to_ws(TwmState *t, int n) {
   dst->panes[dst->pane_count++] = id;
   dst->focused                  = id;
   dst->has_focused              = true;
+
+  /* dwindle_sync in reflow_workspace will prune the pane from src's tree
+   * and insert it into dst's tree on the next reflow of each workspace.   */
   twm_reflow_all(t);
 }
 
-/* ── Scratchpads ────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Scratchpads
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Pattern grammar (stored in Scratchpad.app_id, parsed into .pattern):
+ *
+ *   [field:]spec
+ *
+ *   field  : "class:"  | "app_id:"   → match pane->app_id   (default)
+ *            "title:"                → match pane->title
+ *
+ *   spec   : "~<sub>"   case-insensitive substring
+ *            "<glob>"   fnmatch() glob (* ? [...])
+ *            plain      exact, case-insensitive
+ *
+ * Examples:
+ *   app_id = kitty                  exact app_id match
+ *   app_id = title:~ncmpcpp         title contains "ncmpcpp"
+ *   app_id = class:fire*            app_id glob
+ *   app_id = title:*Music Player*   title glob
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-void twm_register_scratch(
-    TwmState *t, const char *name, const char *app_id, float wpct, float hpct) {
-  for(int i = 0; i < t->scratch_count; i++)
-    if(strcmp(t->scratchpads[i].name, name) == 0) return;
-  if(t->scratch_count >= MAX_SCRATCHPADS) return;
-  Scratchpad *sp = &t->scratchpads[t->scratch_count++];
-  memset(sp, 0, sizeof(*sp));
-  strncpy(sp->name, name, sizeof(sp->name) - 1);
-  strncpy(sp->app_id, app_id, sizeof(sp->app_id) - 1);
-  sp->width_pct  = wpct;
-  sp->height_pct = hpct;
+/* ── Pattern helpers ────────────────────────────────────────────────────────── */
+
+static ScratchPattern scratch_parse_pattern(const char *raw) {
+  ScratchPattern sp = { SCRATCH_FIELD_APP_ID, SCRATCH_SPEC_EXACT, "" };
+  if(!raw || !raw[0]) return sp;
+
+  const char *spec = raw;
+
+  if(!strncasecmp(raw, "title:", 6)) {
+    sp.field = SCRATCH_FIELD_TITLE;
+    spec     = raw + 6;
+  } else if(!strncasecmp(raw, "app_id:", 7)) {
+    sp.field = SCRATCH_FIELD_APP_ID;
+    spec     = raw + 7;
+  } else if(!strncasecmp(raw, "class:", 6)) {
+    sp.field = SCRATCH_FIELD_APP_ID;
+    spec     = raw + 6;
+  }
+
+  if(spec[0] == '~') {
+    sp.kind = SCRATCH_SPEC_SUBSTR;
+    strncpy(sp.pat, spec + 1, sizeof(sp.pat) - 1);
+  } else if(strchr(spec, '*') || strchr(spec, '?') || strchr(spec, '[')) {
+    sp.kind = SCRATCH_SPEC_GLOB;
+    strncpy(sp.pat, spec, sizeof(sp.pat) - 1);
+  } else {
+    sp.kind = SCRATCH_SPEC_EXACT;
+    strncpy(sp.pat, spec, sizeof(sp.pat) - 1);
+  }
+  return sp;
 }
+
+static bool scratch_pattern_matches(const ScratchPattern *sp, const Pane *p) {
+  const char *haystack = (sp->field == SCRATCH_FIELD_TITLE) ? p->title : p->app_id;
+  if(!haystack || !haystack[0]) return false;
+
+  switch(sp->kind) {
+    case SCRATCH_SPEC_EXACT: return strcasecmp(haystack, sp->pat) == 0;
+
+    case SCRATCH_SPEC_SUBSTR: {
+      /* Case-insensitive substring via lowered copies on the stack. */
+      char h[256], n[256];
+      strncpy(h, haystack, 255);
+      h[255] = '\0';
+      strncpy(n, sp->pat, 255);
+      n[255] = '\0';
+      for(int i = 0; h[i]; i++)
+        h[i] = (char)tolower((unsigned char)h[i]);
+      for(int i = 0; n[i]; i++)
+        n[i] = (char)tolower((unsigned char)n[i]);
+      return strstr(h, n) != NULL;
+    }
+
+    case SCRATCH_SPEC_GLOB:
+      /* FNM_CASEFOLD is a GNU extension; fall back gracefully if absent. */
+#ifdef FNM_CASEFOLD
+      return fnmatch(sp->pat, haystack, FNM_CASEFOLD) == 0;
+#else
+      return fnmatch(sp->pat, haystack, 0) == 0;
+#endif
+  }
+  return false;
+}
+
+/* ── scratch_rect — clamped to screen ──────────────────────────────────────── */
 
 static Rect scratch_rect(TwmState *t, Scratchpad *sp) {
   int w = (int)(t->screen_w * sp->width_pct);
   int h = (int)(t->screen_h * sp->height_pct);
-  int x = (t->screen_w - w) / 2;
-  int y = (t->screen_h - h) / 2;
-  return (Rect){ x, y, w, h };
+  if(w > t->screen_w) w = t->screen_w;
+  if(h > t->screen_h) h = t->screen_h;
+  if(w < 80) w = 80;
+  if(h < 60) h = 60;
+  return (Rect){ (t->screen_w - w) / 2, (t->screen_h - h) / 2, w, h };
 }
 
+/* ── Internal: claim a pane for a scratchpad slot ───────────────────────────── */
+
+static void scratch_claim(TwmState *t, Scratchpad *sp, PaneId id) {
+  sp->pane_id  = id;
+  sp->has_pane = true;
+
+  Rect  r = scratch_rect(t, sp);
+  Pane *p = twm_pane_by_id(t, id);
+  if(p) {
+    p->floating   = true;
+    p->rect       = r;
+    p->float_rect = r;
+  }
+
+  /* Remove from every workspace pane list.  Scratchpads live outside the
+   * tiling tree entirely.  We call twm_reflow_all below so dwindle_sync
+   * will prune the stale leaf from every workspace tree immediately,
+   * freeing the reserved space rather than leaving a gap until the next
+   * user action triggers a reflow.                                        */
+  for(int wi = 0; wi < t->ws_count; wi++) {
+    Workspace *ws = &t->workspaces[wi];
+    for(int j = 0; j < ws->pane_count; j++) {
+      if(ws->panes[j] == id) {
+        ws->panes[j] = ws->panes[--ws->pane_count];
+        if(ws->has_focused && ws->focused == id) {
+          ws->has_focused = ws->pane_count > 0;
+          if(ws->has_focused) ws->focused = ws->panes[ws->pane_count - 1];
+        }
+        break;
+      }
+    }
+  }
+
+  /* Reflow all workspaces so dwindle_sync prunes the stale leaf immediately
+   * and other tiled windows expand to fill the freed space right away.     */
+  twm_reflow_all(t);
+
+  wlr_log(WLR_INFO,
+          "twm: scratch '%s' claimed pane %u  rect=%dx%d+%d+%d",
+          sp->name,
+          id,
+          r.w,
+          r.h,
+          r.x,
+          r.y);
+}
+
+/* ── twm_register_scratch — upsert semantics ───────────────────────────────── */
+
+void twm_register_scratch(TwmState   *t,
+                          const char *name,
+                          const char *app_id,
+                          const char *exec_cmd,
+                          float       wpct,
+                          float       hpct) {
+  /* Upsert: update an existing slot so config reloads don't lose pane state. */
+  Scratchpad *sp = NULL;
+  for(int i = 0; i < t->scratch_count; i++) {
+    if(strcmp(t->scratchpads[i].name, name) == 0) {
+      sp = &t->scratchpads[i];
+      break;
+    }
+  }
+  if(!sp) {
+    if(t->scratch_count >= MAX_SCRATCHPADS) {
+      wlr_log(WLR_ERROR, "twm: MAX_SCRATCHPADS reached, cannot register '%s'", name);
+      return;
+    }
+    sp = &t->scratchpads[t->scratch_count++];
+    memset(sp, 0, sizeof(*sp));
+  }
+
+  strncpy(sp->name, name, sizeof(sp->name) - 1);
+  if(app_id && app_id[0]) strncpy(sp->app_id, app_id, sizeof(sp->app_id) - 1);
+  if(exec_cmd && exec_cmd[0]) strncpy(sp->exec, exec_cmd, sizeof(sp->exec) - 1);
+
+  sp->width_pct  = (wpct < 0.05f) ? 0.6f : (wpct > 1.0f) ? 1.0f : wpct;
+  sp->height_pct = (hpct < 0.05f) ? 0.6f : (hpct > 1.0f) ? 1.0f : hpct;
+
+  /* Pre-parse the pattern once so matching is cheap at runtime. */
+  sp->pattern = scratch_parse_pattern(sp->app_id);
+
+  wlr_log(WLR_DEBUG,
+          "twm: scratch '%s' registered  app_id='%s'  exec='%s'  %.0f%%x%.0f%%"
+          "  field=%s kind=%s pat='%s'",
+          sp->name,
+          sp->app_id,
+          sp->exec,
+          sp->width_pct * 100.f,
+          sp->height_pct * 100.f,
+          sp->pattern.field == SCRATCH_FIELD_TITLE ? "title" : "app_id",
+          sp->pattern.kind == SCRATCH_SPEC_SUBSTR ? "substr"
+          : sp->pattern.kind == SCRATCH_SPEC_GLOB ? "glob"
+                                                  : "exact",
+          sp->pattern.pat);
+}
+
+/* ── twm_try_assign_scratch ─────────────────────────────────────────────────── */
+
 bool twm_try_assign_scratch(TwmState *t, PaneId id, const char *app_id) {
-  if(!app_id || !app_id[0]) return false;
+  (void)app_id; /* kept for API compat; we always use the live pane fields */
+  Pane *p = twm_pane_by_id(t, id);
+  if(!p) return false;
 
   for(int i = 0; i < t->scratch_count; i++) {
     Scratchpad *sp = &t->scratchpads[i];
     if(sp->has_pane) continue;
-    if(strcmp(sp->app_id, app_id) != 0) continue;
 
-    sp->pane_id  = id;
-    sp->has_pane = true;
-    Rect  r      = scratch_rect(t, sp);
-    Pane *p      = twm_pane_by_id(t, id);
-    if(p) {
-      p->floating   = true;
-      p->rect       = r;
-      p->float_rect = r;
-    }
+    bool match = scratch_pattern_matches(&sp->pattern, p);
 
-    for(int wi = 0; wi < t->ws_count; wi++) {
-      Workspace *ws = &t->workspaces[wi];
-      for(int j = 0; j < ws->pane_count; j++) {
-        if(ws->panes[j] == id) {
-          ws->panes[j] = ws->panes[--ws->pane_count];
-          if(ws->has_focused && ws->focused == id) {
-            ws->has_focused = ws->pane_count > 0;
-            if(ws->has_focused) ws->focused = ws->panes[ws->pane_count - 1];
-          }
-          break;
-        }
-      }
-    }
+    wlr_log(WLR_DEBUG,
+            "try_assign_scratch: pane=%u app_id='%s' title='%s'"
+            "  sp[%d]='%s' field=%s kind=%s pat='%s'  → %s",
+            id,
+            p->app_id,
+            p->title,
+            i,
+            sp->name,
+            sp->pattern.field == SCRATCH_FIELD_TITLE ? "title" : "app_id",
+            sp->pattern.kind == SCRATCH_SPEC_SUBSTR ? "substr"
+            : sp->pattern.kind == SCRATCH_SPEC_GLOB ? "glob"
+                                                    : "exact",
+            sp->pattern.pat,
+            match ? "MATCH" : "no");
+
+    if(!match) continue;
+
+    scratch_claim(t, sp, id);
     return true;
   }
   return false;
 }
+
+/* ── twm_scratch_notify_title ───────────────────────────────────────────────── */
+
+void twm_scratch_notify_title(TwmState *t, PaneId id) {
+  Pane *p = twm_pane_by_id(t, id);
+  if(!p) return;
+
+  /* Already claimed by some scratchpad — nothing to do. */
+  for(int i = 0; i < t->scratch_count; i++)
+    if(t->scratchpads[i].has_pane && t->scratchpads[i].pane_id == id) return;
+
+  /* Only bother trying slots whose pattern targets the title field. */
+  for(int i = 0; i < t->scratch_count; i++) {
+    Scratchpad *sp = &t->scratchpads[i];
+    if(sp->has_pane) continue;
+    if(sp->pattern.field != SCRATCH_FIELD_TITLE) continue;
+
+    bool match = scratch_pattern_matches(&sp->pattern, p);
+
+    wlr_log(WLR_DEBUG,
+            "scratch_notify_title: pane=%u title='%s'"
+            "  sp[%d]='%s' pat='%s'  → %s",
+            id,
+            p->title,
+            i,
+            sp->name,
+            sp->pattern.pat,
+            match ? "MATCH" : "no");
+
+    if(!match) continue;
+    scratch_claim(t, sp, id);
+    return;
+  }
+}
+
+/* ── twm_toggle_scratch ─────────────────────────────────────────────────────── */
 
 void twm_toggle_scratch(TwmState *t, const char *name) {
   Scratchpad *sp = NULL;
@@ -478,10 +830,20 @@ void twm_toggle_scratch(TwmState *t, const char *name) {
       break;
     }
   }
-  if(!sp || !sp->has_pane) return;
+  if(!sp) {
+    wlr_log(WLR_DEBUG, "twm: toggle_scratch '%s': not registered", name);
+    return;
+  }
+  if(!sp->has_pane) {
+    /* Caller (server_scratch_toggle) handles spawning. */
+    wlr_log(WLR_DEBUG, "twm: toggle_scratch '%s': no pane yet, spawn pending", name);
+    return;
+  }
 
   Workspace *ws = &t->workspaces[t->active_ws];
+
   if(sp->visible) {
+    /* ── Hide ── */
     for(int i = 0; i < ws->pane_count; i++) {
       if(ws->panes[i] == sp->pane_id) {
         ws->panes[i] = ws->panes[--ws->pane_count];
@@ -493,10 +855,17 @@ void twm_toggle_scratch(TwmState *t, const char *name) {
       if(ws->has_focused) ws->focused = ws->panes[ws->pane_count - 1];
     }
     sp->visible = false;
+    wlr_log(WLR_DEBUG, "twm: scratch '%s' hidden", name);
   } else {
+    /* ── Show ── */
+    if(ws->pane_count >= MAX_PANES) {
+      wlr_log(WLR_ERROR, "twm: scratch show '%s': workspace full", name);
+      return;
+    }
     Rect  r = scratch_rect(t, sp);
     Pane *p = twm_pane_by_id(t, sp->pane_id);
     if(p) {
+      p->floating   = true;
       p->rect       = r;
       p->float_rect = r;
     }
@@ -504,6 +873,38 @@ void twm_toggle_scratch(TwmState *t, const char *name) {
     ws->focused                 = sp->pane_id;
     ws->has_focused             = true;
     sp->visible                 = true;
+    wlr_log(WLR_DEBUG,
+            "twm: scratch '%s' shown  rect=%dx%d+%d+%d",
+            name,
+            r.w,
+            r.h,
+            r.x,
+            r.y);
   }
   twm_reflow(t);
+}
+
+/* ── ipc_scratch_json ───────────────────────────────────────────────────────── */
+
+int ipc_scratch_json(TwmState *t, char *buf, size_t bufsz) {
+  int len = 0;
+  len += snprintf(buf + len, bufsz - len, ",\"scratchpads\":[");
+  for(int i = 0; i < t->scratch_count; i++) {
+    Scratchpad *sp = &t->scratchpads[i];
+    if(len >= (int)bufsz - 128) break;
+    len += snprintf(buf + len,
+                    bufsz - len,
+                    "%s{\"name\":\"%s\",\"app_id\":\"%s\","
+                    "\"has_pane\":%s,\"visible\":%s,\"pane_id\":%u,"
+                    "\"exec\":\"%s\"}",
+                    i > 0 ? "," : "",
+                    sp->name,
+                    sp->app_id,
+                    sp->has_pane ? "true" : "false",
+                    sp->visible ? "true" : "false",
+                    sp->pane_id,
+                    sp->exec);
+  }
+  len += snprintf(buf + len, bufsz - len, "]");
+  return len;
 }

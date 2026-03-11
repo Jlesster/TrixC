@@ -1,16 +1,5 @@
 /* trixie.h — Shared types, structs, and function declarations.
  *
- * Version history
- * ───────────────
- * 0.1.0  Initial
- * 0.2.0  Async bar workers, XWayland completion, TUI overlay, multi-monitor
- *        stubs, cursor-shape protocol, theme system, powerline separators.
- * 0.3.0  Dev suite: Search, Run, Deps panels; process sparklines+kill;
- *        log filter; git split-diff+stage/unstage; async ripgrep search;
- *        named run configs (Cargo/Go/Maven/Gradle); dep inspector with
- *        outdated checks; IPC overlay/build commands; full key routing.
- * 0.3.1  Nvim/IPC bridge: nvim_state, nvim_diag, nvim_buffers, quickfix_get,
- *        nvim_open commands; NvimState in TrixieServer; overlay receivers.
  */
 #pragma once
 
@@ -124,19 +113,96 @@ static inline float fclampf(float v, float lo, float hi) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef enum {
-  LAYOUT_BSP,
-  LAYOUT_SPIRAL,
-  LAYOUT_COLUMNS,
-  LAYOUT_ROWS,
-  LAYOUT_THREECOL,
-  LAYOUT_MONOCLE,
-  LAYOUT_COUNT,
+  LAYOUT_DWINDLE  = 0,
+  LAYOUT_COLUMNS  = 1,
+  LAYOUT_ROWS     = 2,
+  LAYOUT_THREECOL = 3,
+  LAYOUT_MONOCLE  = 4,
+  LAYOUT_COUNT    = 5,
 } Layout;
+
+/* ── BSP Dwindle types ────────────────────────────────────────────────────── */
+
+#define DWINDLE_MAX_NODES (MAX_PANES * 2)
+#define DWINDLE_NULL      (-1)
+
+typedef enum {
+  DNODE_LEAF      = 0,
+  DNODE_CONTAINER = 1,
+} DNodeKind;
+
+typedef enum {
+  DSPLIT_H = 0, /* left | right  (wide container)  */
+  DSPLIT_V = 1, /* top  | bottom (tall container)   */
+} DSplitDir;
+
+typedef struct {
+  DNodeKind kind;
+  bool      in_use;
+
+  /* LEAF only */
+  PaneId pane_id;
+
+  /* CONTAINER only */
+  int       child[2]; /* indices into DwindleTree.nodes[] */
+  float     ratio;    /* fraction of space given to child[0], default 0.5 */
+  DSplitDir split;    /* current split direction */
+
+  /* Both: bounding rect assigned during recompute */
+  Rect rect;
+} DwindleNode;
+
+typedef struct {
+  DwindleNode nodes[DWINDLE_MAX_NODES];
+  int         root;  /* index of root node, or DWINDLE_NULL */
+  int         count; /* number of nodes currently in use    */
+} DwindleTree;
+
+/* ── Layout API ───────────────────────────────────────────────────────────── */
 
 const char *layout_label(Layout l);
 Layout      layout_next(Layout l);
 Layout      layout_prev(Layout l);
+
+/* Non-dwindle stateless layout computation. */
 void layout_compute(Layout l, Rect area, int n, float ratio, int gap, Rect *out);
+
+/* ── BSP Dwindle API ──────────────────────────────────────────────────────── */
+
+/* Clear/reset a tree (call once on workspace init, or on layout switch). */
+void dwindle_clear(DwindleTree *tree);
+
+/* Insert a new pane by splitting the focused leaf.
+ * focused_id = 0 is safe (falls back to rightmost leaf). */
+void dwindle_insert(
+    DwindleTree *tree, PaneId new_id, PaneId focused_id, Rect area, int gap);
+
+/* Remove a closed pane and promote its sibling. */
+void dwindle_remove(DwindleTree *tree, PaneId closed_id);
+
+/* Recompute all rects from the root, applying current ratios and gaps.
+ * Call this on resize / reflow. */
+void dwindle_recompute(DwindleTree *tree, Rect area, int gap);
+void dwindle_recompute_subtree(DwindleTree *tree, int idx, Rect area, int gap);
+
+/* Read back the rect that was assigned to a pane. Returns false if not found. */
+bool dwindle_get_rect(DwindleTree *tree, PaneId id, Rect *out);
+/* Returns true if a leaf for `id` exists in the tree. */
+bool dwindle_has_leaf(DwindleTree *tree, PaneId id);
+/* Prune stale leaves and insert missing ones so the tree exactly mirrors
+ * the tiled[] list. Call before dwindle_recompute on every reflow.         */
+void dwindle_sync(DwindleTree *tree, const PaneId *tiled, int n, PaneId focused_id);
+
+/* Adjust the split ratio of the parent container of `id`.
+ * delta > 0 grows the pane, delta < 0 shrinks it. Returns false if no parent. */
+bool dwindle_adjust_split(DwindleTree *tree, PaneId id, float delta);
+
+/* Toggle H/V split on the parent container of `id` (like Hyprland togglesplit). */
+bool dwindle_toggle_split(DwindleTree *tree, PaneId id);
+bool dwindle_swap_cycle(DwindleTree *tree, PaneId focused_id, bool forward);
+bool dwindle_swap_main(DwindleTree *tree, PaneId focused_id);
+bool dwindle_swap_dir(DwindleTree *tree, PaneId focused_id, int dx, int dy);
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §4  Animation
@@ -178,6 +244,8 @@ typedef struct {
   int             duration_ms;
   int             screen_w;
   struct timespec start;
+  float           cached_e; /* eased progress cached by anim_tick() each frame;
+                               -1.0 means not yet computed this frame          */
 } WsAnim;
 
 typedef struct {
@@ -185,8 +253,14 @@ typedef struct {
   int       count;
   int       screen_w, screen_h;
   WsAnim    ws;
+  /* Sorted parallel arrays for O(log n) entry lookup.
+   * id_index[i] holds the sorted id; idx_map[i] holds the corresponding
+   * index into entries[].  Rebuilt by anim_tick() after compaction. */
+  uint32_t  id_index[MAX_PANES];
+  int       idx_map[MAX_PANES];
 } AnimSet;
 
+void  anim_cancel(AnimSet *a, uint32_t id);
 void  anim_set_resize(AnimSet *a, int w, int h);
 void  anim_open(AnimSet *a, uint32_t id, Rect r);
 void  anim_close(AnimSet *a, uint32_t id, Rect r);
@@ -481,26 +555,49 @@ struct Pane_s {
   bool     fullscreen;
   char     title[256];
   char     app_id[128];
+  /* Cached win-rule opacity: 0.0 = uncached, -1.0 = no rule, >0 = matched. */
+  float    rule_opacity;
 };
 
+typedef enum {
+  SCRATCH_FIELD_APP_ID, /* match against pane->app_id  (default) */
+  SCRATCH_FIELD_TITLE,  /* match against pane->title             */
+} ScratchField;
+
+typedef enum {
+  SCRATCH_SPEC_EXACT,  /* strcasecmp                            */
+  SCRATCH_SPEC_SUBSTR, /* case-insensitive strstr  (~ prefix)  */
+  SCRATCH_SPEC_GLOB,   /* fnmatch()  (* ? [ syntax)            */
+} ScratchSpec;
+
 typedef struct {
-  int    index;
-  Layout layout;
-  float  main_ratio;
-  int    gap;
-  PaneId panes[MAX_PANES];
-  int    pane_count;
-  PaneId focused;
-  bool   has_focused;
+  ScratchField field;
+  ScratchSpec  kind;
+  char         pat[256];
+} ScratchPattern;
+
+typedef struct {
+  int         index;
+  Layout      layout;
+  float       main_ratio;
+  int         gap;
+  PaneId      panes[MAX_PANES];
+  int         pane_count;
+  PaneId      focused;
+  bool        has_focused;
+  /* BSP tree for LAYOUT_DWINDLE — persists across reflows */
+  DwindleTree dwindle;
 } Workspace;
 
 typedef struct {
-  char   name[32];
-  char   app_id[64];
-  float  width_pct, height_pct;
-  PaneId pane_id;
-  bool   has_pane;
-  bool   visible;
+  char           name[32];
+  char           app_id[64];
+  char           exec[256]; /* ← add this */
+  float          width_pct, height_pct;
+  PaneId         pane_id;
+  bool           has_pane;
+  bool           visible;
+  ScratchPattern pattern; /* ← ADD THIS LINE */
 } Scratchpad;
 
 typedef struct {
@@ -541,6 +638,7 @@ static inline bool rule_matches(const WinRule *wr, const Pane *p) {
 
 PaneId new_pane_id(void);
 
+void twm_scratch_notify_title(TwmState *t, PaneId id);
 void twm_init(TwmState *t,
               int       w,
               int       h,
@@ -571,11 +669,16 @@ void twm_float_move(TwmState *t, PaneId id, int dx, int dy);
 void twm_float_resize(TwmState *t, PaneId id, int dw, int dh);
 void twm_swap(TwmState *t, bool forward);
 void twm_swap_main(TwmState *t);
+void twm_swap_dir(TwmState *t, int dx, int dy);
 void twm_switch_ws(TwmState *t, int n);
 void twm_move_to_ws(TwmState *t, int n);
 
-void twm_register_scratch(
-    TwmState *t, const char *name, const char *app_id, float wpct, float hpct);
+void twm_register_scratch(TwmState   *t,
+                          const char *name,
+                          const char *app_id,
+                          const char *exec_cmd,
+                          float       wpct,
+                          float       hpct);
 bool twm_try_assign_scratch(TwmState *t, PaneId id, const char *app_id);
 void twm_toggle_scratch(TwmState *t, const char *name);
 
@@ -583,6 +686,7 @@ static inline int deco_title_h(int border_w, bool notitle) {
   (void)notitle;
   return border_w > 0 ? border_w : 0;
 }
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §7  Bar worker
@@ -782,6 +886,11 @@ struct TrixieServer {
   struct wlr_allocator  *allocator;
   struct wlr_compositor *compositor;
 
+  /* Idle inhibit protocol */
+  struct wlr_idle_inhibit_manager_v1 *idle_inhibit_mgr;
+  struct wl_listener                  idle_inhibit_new;
+  int                                 idle_inhibit_count;
+
   struct wlr_screencopy_manager_v1 *screencopy_mgr;
 
   struct wlr_pointer_gestures_v1 *pointer_gestures;
@@ -897,6 +1006,7 @@ struct TrixieServer {
  * §12  Server API
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+void server_binary_reload(TrixieServer *s);
 void server_spawn(TrixieServer *s, const char *cmd);
 void server_focus_pane(TrixieServer *s, PaneId id);
 void server_sync_focus(TrixieServer *s);
@@ -918,6 +1028,7 @@ TrixieView *view_at(TrixieServer        *s,
                     double              *sx,
                     double              *sy);
 
+int  ipc_scratch_json(TwmState *t, char *buf, size_t bufsz);
 void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_sz);
 bool ipc_subscribe(TrixieServer *s, int client_fd);
 void ipc_push_focus_changed(TrixieServer *s);

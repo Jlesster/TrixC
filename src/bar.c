@@ -43,6 +43,81 @@ typedef struct {
 
 static BarFont g_font = { 0 };
 
+/* ── Glyph bitmap cache ─────────────────────────────────────────────────────
+ * FT_Load_Glyph with FT_LOAD_RENDER is expensive — it rasterises the glyph
+ * every call.  We cache the bitmap for each glyph index so each glyph is
+ * rendered exactly once per font/size configuration.
+ *
+ * Key: FT glyph index (not codepoint — avoids double lookup).
+ * Capacity: 1024 slots, open-addressing with linear probe.
+ * Cleared automatically on font_reload().
+ */
+#define BAR_GCACHE_SIZE 1024
+#define BAR_GCACHE_MASK (BAR_GCACHE_SIZE - 1)
+
+typedef struct {
+  uint32_t glyph_index; /* 0 = empty slot */
+  int      bearing_x;
+  int      bearing_y;
+  int      advance_x; /* pixels */
+  int      bm_w, bm_h, bm_pitch;
+  uint8_t *bm; /* heap-allocated bitmap, freed on cache_clear */
+} BarGlyphCache;
+
+static BarGlyphCache g_bar_gcache[BAR_GCACHE_SIZE];
+
+static void bar_gcache_clear(void) {
+  for(int i = 0; i < BAR_GCACHE_SIZE; i++) {
+    free(g_bar_gcache[i].bm);
+    g_bar_gcache[i] = (BarGlyphCache){ 0 };
+  }
+}
+
+/* Returns a pointer to the cached glyph, loading it if necessary.
+ * Returns NULL if the glyph cannot be loaded. */
+static const BarGlyphCache *bar_gcache_get(uint32_t glyph_index) {
+  if(!glyph_index) return NULL;
+  uint32_t slot = glyph_index & BAR_GCACHE_MASK;
+  for(int i = 0; i < BAR_GCACHE_SIZE; i++) {
+    uint32_t s = (slot + (uint32_t)i) & BAR_GCACHE_MASK;
+    if(g_bar_gcache[s].glyph_index == glyph_index) return &g_bar_gcache[s];
+    if(g_bar_gcache[s].glyph_index == 0) {
+      /* Empty slot — load and store. */
+      if(FT_Load_Glyph(
+             g_font.ft_face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL))
+        return NULL;
+      FT_GlyphSlot   sl = g_font.ft_face->glyph;
+      BarGlyphCache *cg = &g_bar_gcache[s];
+      cg->glyph_index   = glyph_index;
+      cg->bearing_x     = sl->bitmap_left;
+      cg->bearing_y     = sl->bitmap_top;
+      cg->advance_x     = (int)(sl->advance.x >> 6);
+      cg->bm_w          = (int)sl->bitmap.width;
+      cg->bm_h          = (int)sl->bitmap.rows;
+      cg->bm_pitch      = sl->bitmap.pitch;
+      int sz            = cg->bm_h * cg->bm_pitch;
+      cg->bm            = sz > 0 ? malloc(sz) : NULL;
+      if(cg->bm) memcpy(cg->bm, sl->bitmap.buffer, sz);
+      return cg;
+    }
+  }
+  /* Cache full — fall back to uncached render (shouldn't happen in practice). */
+  if(FT_Load_Glyph(
+         g_font.ft_face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL))
+    return NULL;
+  static BarGlyphCache s_tmp;
+  FT_GlyphSlot         sl = g_font.ft_face->glyph;
+  s_tmp.glyph_index       = glyph_index;
+  s_tmp.bearing_x         = sl->bitmap_left;
+  s_tmp.bearing_y         = sl->bitmap_top;
+  s_tmp.advance_x         = (int)(sl->advance.x >> 6);
+  s_tmp.bm_w              = (int)sl->bitmap.width;
+  s_tmp.bm_h              = (int)sl->bitmap.rows;
+  s_tmp.bm_pitch          = sl->bitmap.pitch;
+  s_tmp.bm = sl->bitmap.buffer; /* NOT owned — valid only during this call */
+  return &s_tmp;
+}
+
 static bool load_face(FT_Library  lib,
                       const char *path,
                       float       size_pt,
@@ -134,6 +209,7 @@ static void font_reload(const char *path,
   if(g_font.ft_face) FT_Done_Face(g_font.ft_face);
   if(g_font.ft_lib) FT_Done_FreeType(g_font.ft_lib);
   memset(&g_font, 0, sizeof(g_font));
+  bar_gcache_clear(); /* invalidate cached bitmaps — new face/size */
   font_init(path, path_bold, path_italic, size_pt);
 }
 
@@ -150,6 +226,9 @@ struct TrixieBar {
   char                     last_font[256];
   float                    last_size;
   BarWorkerPool           *pool;
+  /* Persistent upload buffer — allocated once, reused every frame.
+   * Eliminates the calloc+free that was happening on every dirty render. */
+  struct RawBuffer        *rb_cache;
   /* dirty-flag state */
   bool                     dirty;
   int64_t                  last_render_ms;
@@ -197,6 +276,31 @@ static const struct wlr_buffer_impl raw_buffer_impl = {
   .begin_data_ptr_access = raw_buffer_begin_data_ptr_access,
   .end_data_ptr_access   = raw_buffer_end_data_ptr_access,
 };
+
+/* Persistent variant — destroy frees the RawBuffer header but NOT rb->data,
+ * because the pixel data is owned by TrixieBar.pixels and lives for the bar's
+ * full lifetime.  This is used by rb_cache to avoid per-frame heap churn. */
+static void raw_buffer_destroy_persistent(struct wlr_buffer *buf) {
+  struct RawBuffer *rb = wl_container_of(buf, rb, base);
+  /* rb->data is owned by TrixieBar.pixels — do NOT free it here. */
+  free(rb);
+}
+static const struct wlr_buffer_impl raw_buffer_impl_persistent = {
+  .destroy               = raw_buffer_destroy_persistent,
+  .begin_data_ptr_access = raw_buffer_begin_data_ptr_access,
+  .end_data_ptr_access   = raw_buffer_end_data_ptr_access,
+};
+
+/* Create a persistent RawBuffer whose data pointer aliases an external slab.
+ * The caller owns the pixel memory; the buffer header is heap-allocated once. */
+static struct RawBuffer *
+raw_buffer_create_persistent(uint32_t *pixels, int w, int h) {
+  struct RawBuffer *rb = calloc(1, sizeof(*rb));
+  rb->stride           = w * 4;
+  rb->data             = pixels; /* alias — not owned */
+  wlr_buffer_init(&rb->base, &raw_buffer_impl_persistent, w, h);
+  return rb;
+}
 
 static struct RawBuffer *raw_buffer_create(int w, int h) {
   struct RawBuffer *rb = calloc(1, sizeof(*rb));
@@ -320,6 +424,17 @@ static void draw_sep_arrow(uint32_t *px,
  * §5  FreeType/HarfBuzz text
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ── Shared HarfBuzz buffer (avoids hb_buffer_create/destroy per draw call) ─ */
+static hb_buffer_t *s_hb_buf = NULL;
+static hb_buffer_t *hb_buf_get(void) {
+  if(!s_hb_buf) s_hb_buf = hb_buffer_create();
+  hb_buffer_clear_contents(s_hb_buf);
+  hb_buffer_set_direction(s_hb_buf, HB_DIRECTION_LTR);
+  hb_buffer_set_script(s_hb_buf, HB_SCRIPT_LATIN);
+  hb_buffer_set_language(s_hb_buf, hb_language_from_string("en", -1));
+  return s_hb_buf;
+}
+
 static int draw_text_ft(uint32_t   *px,
                         int         stride,
                         int         x,
@@ -330,10 +445,7 @@ static int draw_text_ft(uint32_t   *px,
                         int         clip_h) {
   if(!g_font.ft_face || !g_font.hb_font || !text || !text[0]) return 0;
 
-  hb_buffer_t *buf = hb_buffer_create();
-  hb_buffer_set_direction(buf, HB_DIRECTION_LTR);
-  hb_buffer_set_script(buf, HB_SCRIPT_LATIN);
-  hb_buffer_set_language(buf, hb_language_from_string("en", -1));
+  hb_buffer_t *buf = hb_buf_get();
   hb_buffer_add_utf8(buf, text, -1, 0, -1);
   hb_shape(g_font.hb_font, buf, NULL, 0);
 
@@ -343,22 +455,18 @@ static int draw_text_ft(uint32_t   *px,
 
   int pen_x = x;
   for(unsigned int i = 0; i < glyph_count; i++) {
-    if(FT_Load_Glyph(g_font.ft_face,
-                     ginfo[i].codepoint,
-                     FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL))
-      goto next;
+    const BarGlyphCache *cg = bar_gcache_get(ginfo[i].codepoint);
+    if(!cg || !cg->bm) goto next;
     {
-      FT_GlyphSlot slot   = g_font.ft_face->glyph;
-      FT_Bitmap   *bitmap = &slot->bitmap;
-      int          gx     = pen_x + slot->bitmap_left + (gpos[i].x_offset >> 6);
-      int          gy     = y - slot->bitmap_top + (gpos[i].y_offset >> 6);
-      for(int row = 0; row < (int)bitmap->rows; row++) {
+      int gx = pen_x + cg->bearing_x + (gpos[i].x_offset >> 6);
+      int gy = y - cg->bearing_y + (gpos[i].y_offset >> 6);
+      for(int row = 0; row < cg->bm_h; row++) {
         int py = gy + row;
         if(py < 0 || py >= clip_h) continue;
-        for(int col = 0; col < (int)bitmap->width; col++) {
+        for(int col = 0; col < cg->bm_w; col++) {
           int px_x = gx + col;
           if(px_x < 0 || px_x >= clip_w) continue;
-          uint8_t alpha = bitmap->buffer[row * bitmap->pitch + col];
+          uint8_t alpha = cg->bm[row * cg->bm_pitch + col];
           if(alpha) blend_pixel(&px[py * stride + px_x], alpha, fg.r, fg.g, fg.b);
         }
       }
@@ -366,16 +474,12 @@ static int draw_text_ft(uint32_t   *px,
   next:
     pen_x += gpos[i].x_advance >> 6;
   }
-  hb_buffer_destroy(buf);
   return pen_x - x;
 }
 
 static int measure_text_ft(const char *text) {
   if(!g_font.ft_face || !g_font.hb_font || !text || !text[0]) return 0;
-  hb_buffer_t *buf = hb_buffer_create();
-  hb_buffer_set_direction(buf, HB_DIRECTION_LTR);
-  hb_buffer_set_script(buf, HB_SCRIPT_LATIN);
-  hb_buffer_set_language(buf, hb_language_from_string("en", -1));
+  hb_buffer_t *buf = hb_buf_get();
   hb_buffer_add_utf8(buf, text, -1, 0, -1);
   hb_shape(g_font.hb_font, buf, NULL, 0);
   unsigned int         glyph_count;
@@ -383,7 +487,6 @@ static int measure_text_ft(const char *text) {
   int                  w    = 0;
   for(unsigned int i = 0; i < glyph_count; i++)
     w += gpos[i].x_advance >> 6;
-  hb_buffer_destroy(buf);
   return w;
 }
 
@@ -463,6 +566,7 @@ TrixieBar *bar_create(struct wlr_scene_tree *layer,
   strncpy(b->last_font, cfg->font_path, sizeof(b->last_font) - 1);
   b->last_size = cfg->bar.font_size > 0.f ? cfg->bar.font_size : cfg->font_size;
   b->pixels    = calloc((size_t)(w * b->bar_h), 4);
+  b->rb_cache  = raw_buffer_create_persistent(b->pixels, w, b->bar_h);
   b->scene_buf = wlr_scene_buffer_create(layer, NULL);
   wlr_scene_node_set_position(&b->scene_buf->node, 0, b->bar_y);
   b->dirty = true;
@@ -473,12 +577,16 @@ void bar_resize(TrixieBar *b, int w, int h) {
   b->width  = w;
   b->height = h;
   free(b->pixels);
-  b->pixels = calloc((size_t)(w * b->bar_h), 4);
-  b->dirty  = true;
+  /* Drop the old persistent header (destroy_persistent won't free pixels). */
+  if(b->rb_cache) wlr_buffer_drop(&b->rb_cache->base);
+  b->pixels   = calloc((size_t)(w * b->bar_h), 4);
+  b->rb_cache = raw_buffer_create_persistent(b->pixels, w, b->bar_h);
+  b->dirty    = true;
 }
 
 void bar_destroy(TrixieBar *b) {
   if(!b) return;
+  if(b->rb_cache) wlr_buffer_drop(&b->rb_cache->base);
   free(b->pixels);
   wlr_scene_node_destroy(&b->scene_buf->node);
   free(b);
@@ -706,10 +814,17 @@ bool bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
       cx += flush_item(px, stride, &center[i], cx, bh, bw, bh, 0) + sp;
   }
 
-  struct RawBuffer *rb = raw_buffer_create(bw, bh);
-  memcpy(rb->data, b->pixels, (size_t)(bw * bh * 4));
-  wlr_scene_buffer_set_buffer(b->scene_buf, &rb->base);
-  wlr_buffer_drop(&rb->base);
+  /* Upload pixels using the persistent buffer — zero allocations on the hot path.
+   * rb_cache->data already points at b->pixels, so no memcpy needed: we just
+   * re-init the wlr_buffer header (which resets its reference count to 1) and
+   * hand it to wlr_scene_buffer_set_buffer.  wlr_buffer_drop decrements to 0
+   * and calls raw_buffer_destroy_persistent, which frees only the header — the
+   * pixel slab stays alive because it is owned by b->pixels. */
+  wlr_buffer_init(&b->rb_cache->base, &raw_buffer_impl_persistent, bw, bh);
+  wlr_scene_buffer_set_buffer(b->scene_buf, &b->rb_cache->base);
+  wlr_buffer_drop(&b->rb_cache->base);
+  /* Recreate the header immediately so rb_cache is valid for next frame. */
+  b->rb_cache = raw_buffer_create_persistent(b->pixels, bw, bh);
 
   b->dirty            = false;
   b->last_render_ms   = now;

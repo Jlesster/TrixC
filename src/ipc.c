@@ -20,11 +20,14 @@
  *   fullscreen                 toggle fullscreen
  *   spawn <cmd>                exec a command through the compositor
  *   reload                     hot-reload config
+ *   binary_reload              rebuild binary and exec-replace (ninja)
  *   quit                       terminate compositor
  *   dpms <on|off>              enable or disable outputs (DPMS)
  *   idle_reset                 reset the idle timer and re-enable outputs
  *   status                     human-readable workspace / pane summary
- *   status_json                machine-readable JSON status (with pane detail)
+ *   status_json                machine-readable JSON status (with pane + scratchpad
+ * detail) clients [plain]            list all panes across all workspaces as JSON
+ *                              (pass "plain" for a human-readable table)
  *   set_layout <name>          set layout by name
  *   query_pane [id]            JSON details for a pane (default: focused)
  *   subscribe                  keep connection open; receive JSON events
@@ -126,6 +129,7 @@ void ipc_push_build_done(TrixieServer *s, int exit_code, int err_count) {
 /* ── Main dispatcher ────────────────────────────────────────────────────── */
 
 void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_sz) {
+  wlr_log(WLR_INFO, "ipc_dispatch: got '%s'", line);
   char buf[1024];
   strncpy(buf, line, sizeof(buf) - 1);
   buf[sizeof(buf) - 1] = '\0';
@@ -147,6 +151,13 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
   if(!strcmp(cmd, "reload")) {
     server_apply_config_reload(s);
     REPLY("ok: config reloaded");
+
+  } else if(!strcmp(cmd, "binary_reload")) {
+    /* Rebuild the binary via ninja and exec-replace the compositor.
+     * server_binary_reload() is responsible for running ninja in
+     * cfg.build_dir and calling execv() on success.                 */
+    server_binary_reload(s);
+    REPLY("ok: binary reload initiated");
 
   } else if(!strcmp(cmd, "quit")) {
     s->running = false;
@@ -404,6 +415,20 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         }
       }
     }
+    /* Append scratchpad summary to human-readable status */
+    if(s->twm.scratch_count > 0) {
+      len += snprintf(reply + len, reply_sz - len, "scratchpads:\n");
+      for(int i = 0; i < s->twm.scratch_count && len < (int)reply_sz - 80; i++) {
+        Scratchpad *sp = &s->twm.scratchpads[i];
+        len += snprintf(reply + len,
+                        reply_sz - len,
+                        "  %s: app_id='%s' has_pane=%s visible=%s\n",
+                        sp->name,
+                        sp->app_id,
+                        sp->has_pane ? "yes" : "no",
+                        sp->visible ? "yes" : "no");
+      }
+    }
 
   } else if(!strcmp(cmd, "status_json")) {
     int len = 0;
@@ -462,25 +487,96 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       }
       len += snprintf(reply + len, reply_sz - len, "}");
     }
-    len += snprintf(reply + len, reply_sz - len, "]}");
+    /* Close workspaces array, then append scratchpads block. */
+    len += snprintf(reply + len, reply_sz - len, "]");
+    len += ipc_scratch_json(&s->twm, reply + len, reply_sz - (size_t)len);
+    len += snprintf(reply + len, reply_sz - len, "}");
+
+    /* ── clients ────────────────────────────────────────────────────────── */
+
+  } else if(!strcmp(cmd, "clients")) {
+    bool   plain      = (rest && !strcmp(rest, "plain"));
+    int    len        = 0;
+    PaneId focused_id = twm_focused_id(&s->twm);
+
+    if(plain) {
+      len += snprintf(reply + len,
+                      reply_sz - len,
+                      "%-6s %-3s %-10s %-8s %-8s %s\n",
+                      "ID",
+                      "WS",
+                      "APP_ID",
+                      "FLOAT",
+                      "FOCUSED",
+                      "TITLE");
+      len += snprintf(reply + len,
+                      reply_sz - len,
+                      "%-6s %-3s %-10s %-8s %-8s %s\n",
+                      "------",
+                      "---",
+                      "----------",
+                      "--------",
+                      "--------",
+                      "-----");
+      for(int i = 0; i < s->twm.ws_count && len < (int)reply_sz - 128; i++) {
+        Workspace *ws = &s->twm.workspaces[i];
+        for(int j = 0; j < ws->pane_count && len < (int)reply_sz - 128; j++) {
+          Pane *p = twm_pane_by_id(&s->twm, ws->panes[j]);
+          if(!p) continue;
+          len += snprintf(reply + len,
+                          reply_sz - len,
+                          "%-6u %-3d %-10s %-8s %-8s %s\n",
+                          p->id,
+                          i + 1,
+                          p->app_id[0] ? p->app_id : "(none)",
+                          p->floating ? "yes" : "no",
+                          (p->id == focused_id) ? "yes" : "no",
+                          p->title);
+        }
+      }
+    } else {
+      len += snprintf(reply + len, reply_sz - len, "[");
+      bool first = true;
+      for(int i = 0; i < s->twm.ws_count && len < (int)reply_sz - 256; i++) {
+        Workspace *ws = &s->twm.workspaces[i];
+        for(int j = 0; j < ws->pane_count && len < (int)reply_sz - 256; j++) {
+          Pane *p = twm_pane_by_id(&s->twm, ws->panes[j]);
+          if(!p) continue;
+          bool is_focused = (p->id == focused_id);
+          len += snprintf(reply + len,
+                          reply_sz - len,
+                          "%s{\"id\":%u,\"app_id\":\"%s\",\"title\":\"%s\","
+                          "\"workspace\":%d,\"floating\":%s,"
+                          "\"fullscreen\":%s,\"focused\":%s}",
+                          first ? "" : ",",
+                          p->id,
+                          p->app_id,
+                          p->title,
+                          i + 1,
+                          p->floating ? "true" : "false",
+                          p->fullscreen ? "true" : "false",
+                          is_focused ? "true" : "false");
+          first = false;
+        }
+      }
+      len += snprintf(reply + len, reply_sz - len, "]");
+    }
 
     /* ── set_layout ─────────────────────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "set_layout")) {
     if(!rest || !rest[0]) {
-      REPLY("err: usage: set_layout <bsp|spiral|columns|rows|threecol|monocle>");
+      REPLY("err: usage: set_layout <dwindle|columns|rows|threecol|monocle>");
       return;
     }
     Layout lay = -1;
-    if(!strcasecmp(rest, "bsp"))
-      lay = LAYOUT_BSP;
-    else if(!strcasecmp(rest, "spiral"))
-      lay = LAYOUT_SPIRAL;
-    else if(!strcasecmp(rest, "columns"))
+    if(!strcasecmp(rest, "dwindle"))
+      lay = LAYOUT_DWINDLE;
+    else if(!strcasecmp(rest, "columns") || !strcasecmp(rest, "cols"))
       lay = LAYOUT_COLUMNS;
     else if(!strcasecmp(rest, "rows"))
       lay = LAYOUT_ROWS;
-    else if(!strcasecmp(rest, "threecol"))
+    else if(!strcasecmp(rest, "threecol") || !strcasecmp(rest, "three"))
       lay = LAYOUT_THREECOL;
     else if(!strcasecmp(rest, "monocle"))
       lay = LAYOUT_MONOCLE;
@@ -512,9 +608,20 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         }
         if(ws_idx >= 0) break;
       }
+      /* Also check scratchpads — a scratchpad pane has no workspace slot. */
+      const char *scratch_name = "";
+      bool        in_scratch   = false;
+      for(int i = 0; i < s->twm.scratch_count; i++) {
+        if(s->twm.scratchpads[i].has_pane && s->twm.scratchpads[i].pane_id == qid) {
+          scratch_name = s->twm.scratchpads[i].name;
+          in_scratch   = true;
+          break;
+        }
+      }
       Rect r = anim_get_rect(&s->anim, qid, p->rect);
       REPLY("{\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
             "\"workspace\":%d,"
+            "\"scratchpad\":\"%s\","
             "\"rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
             "\"anim_rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
             "\"floating\":%s,\"fullscreen\":%s,\"focused\":%s}",
@@ -522,6 +629,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
             p->title,
             p->app_id,
             ws_idx + 1,
+            in_scratch ? scratch_name : "",
             p->rect.x,
             p->rect.y,
             p->rect.w,
@@ -676,12 +784,10 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     s->nvim.col       = atoi(col_s);
     s->nvim.connected = file[0] != '\0';
 
-    /* Forward to overlay nvim panel */
     TrixieOutput *o;
     wl_list_for_each(o, &s->outputs, link) if(o->overlay)
         overlay_nvim_state(o->overlay, file, s->nvim.line, s->nvim.col, ft);
 
-    /* Broadcast to other subscribers */
     char ev[1280];
     snprintf(ev,
              sizeof(ev),
@@ -693,7 +799,6 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
              ft);
     ipc_push_event(s, ev, strlen(ev));
 
-    /* Auto-update overlay cwd to the file's directory */
     if(file[0]) {
       char dir[1024];
       strncpy(dir, file, sizeof(dir) - 1);
@@ -730,7 +835,6 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     /* ── Nvim bridge: quickfix_get ──────────────────────────────────────── */
 
   } else if(!strcmp(cmd, "quickfix_get")) {
-    /* overlay_quickfix_json writes into reply directly */
     overlay_quickfix_json(reply, reply_sz);
 
     /* ── Nvim bridge: nvim_open ─────────────────────────────────────────── */
@@ -754,12 +858,11 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
     } else {
       REPLY("err: nvim not connected");
     }
+
+    /* ── Saturation ─────────────────────────────────────────────────────── */
+
   } else if(!strcmp(cmd, "saturation")) {
-    /* saturation <value>          — set all outputs
-     * saturation <output> <value> — set one output by name
-     * saturation                  — query current value(s) */
     if(!rest || !rest[0]) {
-      /* Query */
       int           len = 0;
       char         *p   = reply;
       TrixieOutput *o;
@@ -773,7 +876,6 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       if(len == 0) snprintf(reply, reply_sz, "err: no outputs");
 
     } else {
-      /* Parse: optional output name then float value */
       char        arg1[64] = { 0 };
       char        arg2[32] = { 0 };
       int         nargs    = sscanf(rest, "%63s %31s", arg1, arg2);
@@ -781,11 +883,9 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       const char *target_name = NULL;
 
       if(nargs == 2) {
-        /* saturation <name> <value> */
         target_name = arg1;
         val         = (float)atof(arg2);
       } else {
-        /* saturation <value> */
         val = (float)atof(arg1);
       }
 
@@ -797,7 +897,6 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       wl_list_for_each(o, &s->outputs, link) {
         if(target_name && strcmp(o->wlr_output->name, target_name) != 0) continue;
         o->saturation = val;
-        /* Also update config so reload preserves the value */
         if(!target_name)
           s->cfg.saturation = val;
         else {
@@ -819,15 +918,14 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         REPLY("ok: saturation %.3f on %d output(s)", val, count);
     }
 
+    /* ── Shader ─────────────────────────────────────────────────────────── */
+
   } else if(!strcmp(cmd, "shader")) {
-    /* shader [on|off]              — toggle/set all outputs
-     * shader <output> [on|off]     — set one output by name */
     if(!rest || !rest[0]) {
-      /* Toggle all */
       TrixieOutput *o;
       wl_list_for_each(o, &s->outputs, link) {
         o->shader_enabled    = !o->shader_enabled;
-        o->shader_init_tried = !o->shader_enabled; /* disable retry when off */
+        o->shader_init_tried = !o->shader_enabled;
       }
       s->cfg.shader_enabled = !s->cfg.shader_enabled;
       server_request_redraw(s);
@@ -846,14 +944,12 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         set_val =
             (!strcmp(arg2, "on") || !strcmp(arg2, "1") || !strcmp(arg2, "true"));
       } else {
-        /* single arg: on/off or output name */
         if(!strcmp(arg1, "on") || !strcmp(arg1, "1") || !strcmp(arg1, "true")) {
           set_val = true;
         } else if(!strcmp(arg1, "off") || !strcmp(arg1, "0") ||
                   !strcmp(arg1, "false")) {
           set_val = false;
         } else {
-          /* treat as output name, toggle */
           target_name = arg1;
           TrixieOutput *o;
           wl_list_for_each(o, &s->outputs, link) {
@@ -871,7 +967,6 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
         if(target_name && strcmp(o->wlr_output->name, target_name) != 0) continue;
         o->shader_enabled    = set_val;
         o->shader_init_tried = !set_val;
-        /* Reset gl_init_done so it re-inits next frame when re-enabled */
         if(set_val && !o->shader.gl_init_done) o->shader_init_tried = false;
         count++;
         if(!target_name)
@@ -893,6 +988,7 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_s
       else
         REPLY("ok: shader %s on %d output(s)", set_val ? "on" : "off", count);
     }
+
   } else {
     REPLY("err: unknown command '%s'", cmd);
   }

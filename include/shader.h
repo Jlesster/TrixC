@@ -36,6 +36,8 @@ typedef struct TrixieShader {
   GLint  a_uv_ext;
 
   GLuint quad_vbo;
+  GLuint quad_vao; /* GLES3 VAO — caches vertex attrib state to avoid
+                      per-frame glVertexAttribPointer calls in run_quad() */
 
   /* Intermediate RGBA texture + FBO.
    * The scene buffer on nvidia is DMA-buf backed and exposed as

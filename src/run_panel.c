@@ -19,6 +19,7 @@
  *   a            add new config (name → Tab → cmd → Enter)
  *   d            delete selected config
  *   c            clear output of selected config
+ *   w / W        toggle watch mode (auto-restart on exit)
  *   Esc          cancel add-form
  */
 
@@ -86,6 +87,10 @@ typedef struct {
   int     exit_code;
   bool    exited;
 
+  /* Watch mode: auto-restart on exit */
+  bool    watch;
+  int64_t watch_restart_at; /* monotonic ms timestamp; 0 = not pending */
+
   /* Stdout/stderr capture */
   int       pipe_read_fd; /* -1 when not running */
   pthread_t reader_thread;
@@ -108,21 +113,20 @@ static void *reader_thread_fn(void *arg) {
   while(true) {
     char    c;
     ssize_t n = read(fd, &c, 1);
-    if(n <= 0) break; /* EOF or error — process exited, pipe closed */
+    if(n <= 0) break;
 
     if(c == '\n' || c == '\r') {
       if(pos > 0) {
         buf[pos] = '\0';
         pthread_mutex_lock(&rc->out_lock);
         out_ring_push(&rc->out, buf);
-        log_ring_push(buf); /* mirror to global log */
+        log_ring_push(buf);
         pthread_mutex_unlock(&rc->out_lock);
         pos = 0;
       }
     } else if(pos < OUT_LINE_MAX - 1) {
       buf[pos++] = c;
     } else {
-      /* Line too long — flush what we have */
       buf[pos] = '\0';
       pthread_mutex_lock(&rc->out_lock);
       out_ring_push(&rc->out, buf);
@@ -133,7 +137,6 @@ static void *reader_thread_fn(void *arg) {
     }
   }
 
-  /* Flush any trailing partial line */
   if(pos > 0) {
     buf[pos] = '\0';
     pthread_mutex_lock(&rc->out_lock);
@@ -164,7 +167,6 @@ static void add_preset(const char *name, const char *cmd) {
   strncpy(rc->cmd, cmd, RUN_CMD_MAX - 1);
 }
 
-/* ── Utility: find DevLangCfg by name ──────────────────────────────────── */
 static const DevLangCfg *find_lang(const OverlayCfg *ov, const char *name) {
   if(!ov) return NULL;
   for(int i = 0; i < ov->lang_count; i++)
@@ -180,7 +182,6 @@ static void add_lang_preset(const char *label, const char *cmd) {
 void run_configs_init(const OverlayCfg *ov_cfg) {
   if(g_run_count > 0) return;
 
-  /* Optionally switch to project root so stat() finds the right files */
   char old_cwd[1024] = { 0 };
   if(ov_cfg && ov_cfg->project_root[0]) {
     if(getcwd(old_cwd, sizeof(old_cwd)) == NULL) old_cwd[0] = '\0';
@@ -189,7 +190,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
 
   struct stat st;
 
-  /* ── Rust / Cargo ── */
   if(stat("Cargo.toml", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "rust");
     add_lang_preset("cargo build", lc ? lc->build : "cargo build 2>&1");
@@ -199,7 +199,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     if(lc && lc->lint[0]) add_lang_preset("cargo clippy", lc->lint);
   }
 
-  /* ── Go ── */
   if(stat("go.mod", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "go");
     add_lang_preset("go build", lc ? lc->build : "go build ./... 2>&1");
@@ -209,7 +208,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     if(lc && lc->lint[0]) add_lang_preset("golangci-lint", lc->lint);
   }
 
-  /* ── Java (Maven) ── */
   if(stat("pom.xml", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "java");
     add_lang_preset("mvn compile", lc ? lc->build : "mvn compile -q");
@@ -219,7 +217,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     if(lc && lc->lint[0]) add_lang_preset("checkstyle", lc->lint);
   }
 
-  /* ── Java (Gradle) ── */
   if(stat("build.gradle", &st) == 0 || stat("build.gradle.kts", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "java");
     add_lang_preset("gradle build", lc ? lc->build : "./gradlew build");
@@ -227,7 +224,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     add_lang_preset("gradle test", lc ? lc->test : "./gradlew test");
   }
 
-  /* ── Python ── */
   if(stat("pyproject.toml", &st) == 0 || stat("setup.py", &st) == 0 ||
      stat("requirements.txt", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "python");
@@ -238,7 +234,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     if(lc && lc->lint[0]) add_lang_preset("ruff", lc->lint);
   }
 
-  /* ── C / C++ (Meson) ── */
   if(stat("meson.build", &st) == 0 || stat("build.ninja", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "c");
     add_lang_preset("meson build",
@@ -249,7 +244,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     if(lc && lc->lint[0]) add_lang_preset("clang-tidy", lc->lint);
   }
 
-  /* ── C / C++ (CMake) ── */
   if(stat("CMakeLists.txt", &st) == 0) {
     const DevLangCfg *lc = find_lang(ov_cfg, "cpp");
     if(!lc) lc = find_lang(ov_cfg, "c");
@@ -259,7 +253,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
     if(lc && lc->fmt[0]) add_lang_preset("clang-format", lc->fmt);
   }
 
-  /* ── Makefile ── */
   if(stat("Makefile", &st) == 0 || stat("makefile", &st) == 0) {
     add_lang_preset("make", "make -j$(nproc)");
     add_lang_preset("make test", "make test");
@@ -268,7 +261,6 @@ void run_configs_init(const OverlayCfg *ov_cfg) {
 
   if(g_run_count == 0) add_lang_preset("run", "./run.sh");
 
-  /* Restore cwd */
   if(old_cwd[0]) chdir(old_cwd);
 }
 
@@ -277,13 +269,11 @@ void run_config_start(int idx) {
   RunConfig *rc = &g_run_configs[idx];
   if(rc->running) return;
 
-  /* Create pipe for stdout+stderr capture */
   int pipefd[2];
   if(pipe(pipefd) < 0) {
     log_ring_push("==> run: pipe() failed");
     return;
   }
-  /* Make read end non-blocking for clean teardown, write end blocking */
   fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
 
   pid_t pid = fork();
@@ -295,7 +285,6 @@ void run_config_start(int idx) {
   }
 
   if(pid == 0) {
-    /* Child: redirect stdout + stderr → write end of pipe */
     close(pipefd[0]);
     dup2(pipefd[1], STDOUT_FILENO);
     dup2(pipefd[1], STDERR_FILENO);
@@ -305,10 +294,8 @@ void run_config_start(int idx) {
     _exit(127);
   }
 
-  /* Parent */
-  close(pipefd[1]); /* we only read */
+  close(pipefd[1]);
 
-  /* Make read end blocking again for the reader thread */
   int flags = fcntl(pipefd[0], F_GETFL);
   fcntl(pipefd[0], F_SETFL, flags & ~O_NONBLOCK);
 
@@ -344,7 +331,7 @@ void run_config_stop(int idx) {
   if(idx < 0 || idx >= g_run_count) return;
   RunConfig *rc = &g_run_configs[idx];
   if(!rc->running || rc->pid <= 0) return;
-  kill(-rc->pid, SIGTERM); /* kill process group */
+  kill(-rc->pid, SIGTERM);
   char msg[128];
   snprintf(msg, sizeof(msg), "==> run [%s]: SIGTERM pid %d", rc->name, (int)rc->pid);
   log_ring_push(msg);
@@ -352,24 +339,39 @@ void run_config_stop(int idx) {
 
 /* Non-blocking reap — call each frame from the render loop */
 void run_configs_poll(void) {
+  int64_t now = ov_now_ms();
   for(int i = 0; i < g_run_count; i++) {
     RunConfig *rc = &g_run_configs[i];
-    if(!rc->running || rc->pid <= 0) continue;
-    int   status;
-    pid_t r = waitpid(rc->pid, &status, WNOHANG);
-    if(r == rc->pid) {
-      rc->running   = false;
-      rc->exited    = true;
-      rc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-      /* Reader thread will see EOF and exit naturally */
+
+    /* Reap exited processes */
+    if(rc->running && rc->pid > 0) {
+      int   status;
+      pid_t r = waitpid(rc->pid, &status, WNOHANG);
+      if(r == rc->pid) {
+        rc->running   = false;
+        rc->exited    = true;
+        rc->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        char msg[128];
+        snprintf(msg,
+                 sizeof(msg),
+                 "==> run [%s]: exit %d  (%.1fs)",
+                 rc->name,
+                 rc->exit_code,
+                 (double)(ov_now_ms() - rc->started_ms) / 1000.0);
+        log_ring_push(msg);
+        /* Schedule watch restart with 500ms cooldown */
+        if(rc->watch) rc->watch_restart_at = now + 500;
+      }
+    }
+
+    /* Watch mode: restart after cooldown */
+    if(rc->watch && !rc->running && rc->watch_restart_at > 0 &&
+       now >= rc->watch_restart_at) {
+      rc->watch_restart_at = 0;
       char msg[128];
-      snprintf(msg,
-               sizeof(msg),
-               "==> run [%s]: exit %d  (%.1fs)",
-               rc->name,
-               rc->exit_code,
-               (double)(ov_now_ms() - rc->started_ms) / 1000.0);
+      snprintf(msg, sizeof(msg), "==> run [%s]: watch restarting", rc->name);
       log_ring_push(msg);
+      run_config_start(i);
     }
   }
 }
@@ -394,7 +396,7 @@ static char g_run_edit_name[RUN_NAME_MAX];
 static int  g_run_edit_name_len = 0;
 static char g_run_edit_cmd[RUN_CMD_MAX];
 static int  g_run_edit_cmd_len = 0;
-static bool g_run_focus_output = false; /* Tab toggles focus to output pane */
+static bool g_run_focus_output = false;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §5  Key handler
@@ -474,6 +476,14 @@ bool run_panel_key(int *cursor, xkb_keysym_t sym) {
       }
       return true;
     }
+    if(sym == XKB_KEY_w || sym == XKB_KEY_W) {
+      if(*cursor >= 0 && *cursor < g_run_count) {
+        RunConfig *rc = &g_run_configs[*cursor];
+        rc->watch     = !rc->watch;
+        if(rc->watch && !rc->running) run_config_start(*cursor);
+      }
+      return true;
+    }
     return true;
   }
 
@@ -537,6 +547,17 @@ bool run_panel_key(int *cursor, xkb_keysym_t sym) {
     return true;
   }
 
+  if(sym == XKB_KEY_w || sym == XKB_KEY_W) {
+    if(*cursor >= 0 && *cursor < g_run_count) {
+      RunConfig *rc = &g_run_configs[*cursor];
+      rc->watch     = !rc->watch;
+      /* If enabling watch and not running, start immediately */
+      if(rc->watch && !rc->running) run_config_start(*cursor);
+      /* If disabling watch, just clear the flag; running process keeps going */
+    }
+    return true;
+  }
+
   return true;
 }
 
@@ -544,19 +565,6 @@ bool run_panel_key(int *cursor, xkb_keysym_t sym) {
  * §6  Draw
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/*
- * Layout split:
- *   - Config list  gets the top LIST_ROWS rows (or half the panel, whichever
- *     is smaller) with a minimum of 3 rows always visible.
- *   - Output pane  fills the remainder below a separator.
- *
- * Column layout within the config list (fixed pixel offsets based on PAD):
- *
- *   COL_STATUS  px0 + PAD
- *   COL_NAME    px0 + PAD + 28
- *   COL_CMD     px0 + PAD + 28 + NAME_COL_W   (NAME_COL_W = 200px)
- *   COL_TIME    px0 + pw  - PAD - 64
- */
 #define LIST_ROWS_MAX 6
 #define NAME_COL_W    200
 #define TIME_COL_W    72
@@ -576,12 +584,13 @@ void draw_panel_run(uint32_t     *px,
 
   /* ── Toolbar hint ── */
   {
-    const char *hint = g_run_focus_output
-                           ? "Tab=configs  j/k=scroll  c=clear output"
-                           : "Enter=start/stop  a=add  d=del  Tab=output  c=clear";
-    uint8_t     hr   = g_run_focus_output ? 0xf9 : ac.r;
-    uint8_t     hg   = g_run_focus_output ? 0xe2 : ac.g;
-    uint8_t     hb   = g_run_focus_output ? 0xaf : ac.b;
+    const char *hint =
+        g_run_focus_output
+            ? "Tab=configs  j/k=scroll  c=clear output"
+            : "Enter=start/stop  a=add  d=del  w=watch  Tab=output  c=clear";
+    uint8_t hr = g_run_focus_output ? 0xf9 : ac.r;
+    uint8_t hg = g_run_focus_output ? 0xe2 : ac.g;
+    uint8_t hb = g_run_focus_output ? 0xaf : ac.b;
     ov_draw_text(
         px, stride, px0 + PAD, y + g_ov_asc, stride, bot, hint, hr, hg, hb, 0xff);
     y += ROW_H;
@@ -649,7 +658,7 @@ void draw_panel_run(uint32_t     *px,
   int list_rows = g_run_count < LIST_ROWS_MAX ? g_run_count : LIST_ROWS_MAX;
   int list_h    = list_rows * ROW_H;
 
-  /* Edit form — takes the place of the bottom of the list */
+  /* Edit form */
   if(g_run_editing) {
     char namedisp[RUN_NAME_MAX + 20];
     char cmddisp[RUN_CMD_MAX + 20];
@@ -671,7 +680,6 @@ void draw_panel_run(uint32_t     *px,
     uint8_t ac_g = g_run_edit_field == 1 ? 0xe2 : 0x5b;
     uint8_t ac_b = g_run_edit_field == 1 ? 0xaf : 0x70;
 
-    /* Soft background for the form */
     ov_fill_rect(px,
                  stride,
                  px0 + PAD,
@@ -750,7 +758,6 @@ void draw_panel_run(uint32_t     *px,
     const char *dot;
     uint8_t     dr, dg, db;
     if(rc->running) {
-      /* Animated spinner — nf-md-loading */
       static const char *spin[] = { "󰪞", "󰪟", "󰪠", "󰪡",
                                     "󰪢", "󰪣", "󰪤", "󰪥" };
       dot                       = spin[(ov_now_ms() / 100) % 8];
@@ -761,17 +768,17 @@ void draw_panel_run(uint32_t     *px,
       dot = " ";
       dr  = 0xf3;
       dg  = 0x8b;
-      db  = 0xa8; /* nf-fa-times_circle */
+      db  = 0xa8;
     } else if(rc->exited) {
       dot = " ";
       dr  = 0x89;
       dg  = 0xdc;
-      db  = 0xeb; /* nf-fa-check_circle */
+      db  = 0xeb;
     } else {
       dot = " ";
       dr  = 0x45;
       dg  = 0x47;
-      db  = 0x5a; /* nf-fa-circle_o — idle */
+      db  = 0x5a;
     }
     ov_draw_text(px,
                  stride,
@@ -785,13 +792,30 @@ void draw_panel_run(uint32_t     *px,
                  db,
                  0xff);
 
-    /* Name column */
-    uint8_t nr = sel ? ac.r : 0xcd;
-    uint8_t ng = sel ? ac.g : 0xd6;
-    uint8_t nb = sel ? ac.b : 0xf4;
+    /* Watch badge */
+    if(rc->watch) {
+      int wx = px0 + PAD + 20;
+      ov_draw_text(px,
+                   stride,
+                   wx,
+                   ry + g_ov_asc + 2,
+                   stride,
+                   bot,
+                   "[W]",
+                   0xcb,
+                   0xa6,
+                   0xf7,
+                   0xff);
+    }
+
+    /* Name column — shift right when watch badge is shown */
+    int     name_x = px0 + PAD + 28 + (rc->watch ? ov_measure("[W]") + 2 : 0);
+    uint8_t nr     = sel ? ac.r : 0xcd;
+    uint8_t ng     = sel ? ac.g : 0xd6;
+    uint8_t nb     = sel ? ac.b : 0xf4;
     ov_draw_text(px,
                  stride,
-                 px0 + PAD + 28,
+                 name_x,
                  ry + g_ov_asc + 2,
                  stride,
                  bot,
@@ -801,7 +825,7 @@ void draw_panel_run(uint32_t     *px,
                  nb,
                  0xff);
 
-    /* Command column — truncate to available width */
+    /* Command column */
     {
       int col_cmd   = px0 + PAD + 28 + NAME_COL_W + COL_GAP;
       int col_time  = px0 + pw - PAD - TIME_COL_W;
@@ -825,7 +849,7 @@ void draw_panel_run(uint32_t     *px,
       }
     }
 
-    /* Time / exit status column */
+    /* Time / exit-status column */
     {
       int     col_time = px0 + pw - PAD - TIME_COL_W;
       char    ts[32]   = "";
@@ -890,9 +914,9 @@ void draw_panel_run(uint32_t     *px,
     ov_draw_text(
         px, stride, px0 + PAD, y + g_ov_asc, stride, bot, hdr, hr, hg, hb, 0xff);
 
-    /* "LIVE" badge if running — nf-fa-circle pulse */
+    /* "LIVE" badge if running */
     if(sel_idx >= 0 && g_run_configs[sel_idx].running) {
-      static const char *pulse[] = { " ", " " }; /* nf-fa-circle / nf-fa-circle_o */
+      static const char *pulse[] = { " ", " " };
       const char        *dot_    = pulse[(ov_now_ms() / 500) % 2];
       int px_ = px0 + pw - PAD - ov_measure(" ") - ov_measure("LIVE") - 4;
       ov_draw_text(
@@ -923,7 +947,6 @@ void draw_panel_run(uint32_t     *px,
 
     RunConfig *rc = &g_run_configs[sel_idx];
 
-    /* Soft tinted background for the output area */
     ov_fill_rect(px,
                  stride,
                  px0 + PAD,
@@ -939,16 +962,14 @@ void draw_panel_run(uint32_t     *px,
 
     pthread_mutex_lock(&rc->out_lock);
     int count      = rc->out.count;
-    int scroll     = rc->out.scroll;
-    /* Clamp scroll so we never go past available lines */
+    int out_scroll = rc->out.scroll;
     int max_scroll = count - visible_rows;
     if(max_scroll < 0) max_scroll = 0;
-    if(scroll > max_scroll) {
-      rc->out.scroll = scroll = max_scroll;
+    if(out_scroll > max_scroll) {
+      rc->out.scroll = out_scroll = max_scroll;
     }
 
-    /* Draw from tail minus scroll */
-    int start = count - visible_rows - scroll;
+    int start = count - visible_rows - out_scroll;
     if(start < 0) start = 0;
 
     for(int i = 0; i < visible_rows; i++) {
@@ -957,7 +978,6 @@ void draw_panel_run(uint32_t     *px,
       const char *line = out_ring_get(&rc->out, li);
       int         ry   = y + i * ROW_H;
 
-      /* Colour-code by content */
       uint8_t lr = 0xa6, lg = 0xad, lb = 0xc8;
       if(strstr(line, "error") || strstr(line, "ERROR") || strstr(line, "FAILED")) {
         lr = 0xf3;
@@ -974,7 +994,6 @@ void draw_panel_run(uint32_t     *px,
         lb = ac.b;
       }
 
-      /* Truncate to panel width */
       char trunc[OUT_LINE_MAX];
       strncpy(trunc, line, sizeof(trunc) - 1);
       int avail = pw - PAD * 2 - 8;
@@ -995,10 +1014,9 @@ void draw_panel_run(uint32_t     *px,
     }
     pthread_mutex_unlock(&rc->out_lock);
 
-    /* Scroll indicator */
-    if(scroll > 0) {
+    if(out_scroll > 0) {
       char si[24];
-      snprintf(si, sizeof(si), "↑ %d", scroll);
+      snprintf(si, sizeof(si), "↑ %d", out_scroll);
       ov_draw_text(px,
                    stride,
                    px0 + pw - PAD - ov_measure(si),

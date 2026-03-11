@@ -89,6 +89,7 @@ static int mp_input_box(uint32_t   *px,
  * ipc.c has no ipc_send_raw symbol; we implement a thin client here that
  * connects to the compositor's own socket and sends the message.
  * Returns true if the write succeeded.                                     */
+static bool g_mv_tasks_output_expanded = false; /* 'o' toggles inline preview */
 static bool ipc_send_raw(const char *msg) {
   const char *sock = getenv("TRIXIE_IPC_SOCK");
   if(!sock || !sock[0]) return false;
@@ -1796,6 +1797,10 @@ bool marvin_panel_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods) {
         g_mv_args_editing = true;
       return true;
     }
+    if(sym == XKB_KEY_o) {
+      g_mv_tasks_output_expanded = !g_mv_tasks_output_expanded;
+      return true;
+    }
   }
 
   /* ── WIZARD tab ──────────────────────────────────────────────────────── */
@@ -2345,22 +2350,35 @@ void draw_panel_marvin(uint32_t      *px,
   if(g_marvin_tab == MARVIN_TAB_TASKS) {
     const MarvinAction *acts  = marvin_actions();
     int                 total = marvin_total_items();
-    int                 skip  = *scroll;
+
+    /* Reserve bottom rows for output preview */
+    int preview_lines = 0;
+    if(g_marvin_console_len > 0) {
+      preview_lines = g_mv_tasks_output_expanded ? 8 : 3;
+    }
+    int preview_h    = preview_lines > 0 ? (preview_lines * ROW_H + ROW_H + 4) : 0;
+    int list_bot     = by + bh - BDR - 4 - preview_h;
+    int list_visible = (list_bot - content_y) / ROW_H;
+    if(list_visible < 1) list_visible = 1;
+
+    int skip = *scroll;
     if(g_marvin_cursor < skip) skip = g_marvin_cursor;
-    if(g_marvin_cursor >= skip + visible_rows)
-      skip = g_marvin_cursor - visible_rows + 1;
+    if(g_marvin_cursor >= skip + list_visible)
+      skip = g_marvin_cursor - list_visible + 1;
     if(skip < 0) skip = 0;
-    if(skip > total - visible_rows) {
-      skip = total - visible_rows;
+    if(skip > total - list_visible) {
+      skip = total - list_visible;
       if(skip < 0) skip = 0;
     }
     *scroll = skip;
+
     int row = 0;
-    for(int i = 0; acts[i].label && row < visible_rows; i++) {
+    for(int i = 0; acts[i].label && row < list_visible; i++) {
       if(i < skip) continue;
       int  ry     = content_y + row * ROW_H;
-      bool is_sep = !strcmp(acts[i].label, "---"),
-           sel    = (i == g_marvin_cursor && !is_sep);
+      bool is_sep = !strcmp(acts[i].label, "---");
+      bool sel    = (i == g_marvin_cursor && !is_sep);
+
       if(is_sep) {
         ov_fill_rect(px,
                      stride,
@@ -2401,9 +2419,32 @@ void draw_panel_marvin(uint32_t      *px,
                        stride,
                        by + bh);
         }
+
+        /* Running indicator for the selected action */
+        bool is_running = sel && g_marvin_proj.valid &&
+                          !strcmp(g_marvin_proj.last_status, "running") &&
+                          acts[i].nvim_cmd &&
+                          !strcmp(g_marvin_proj.last_action, acts[i].nvim_cmd);
+        if(is_running) {
+          static const char *spin[] = { "󰪞", "󰪟", "󰪠", "󰪡",
+                                        "󰪢", "󰪣", "󰪤", "󰪥" };
+          const char        *sp     = spin[(ov_now_ms() / 100) % 8];
+          ov_draw_text(px,
+                       stride,
+                       ix + 4,
+                       ROW_TY(ry),
+                       stride,
+                       by + bh,
+                       sp,
+                       0xa6,
+                       0xe3,
+                       0xa1,
+                       0xff);
+        }
+        int label_x = ix + (is_running ? ov_measure("󰪞 ") : 4);
         ov_draw_text(px,
                      stride,
-                     ix + 4,
+                     label_x,
                      ROW_TY(ry),
                      stride,
                      by + bh,
@@ -2412,9 +2453,38 @@ void draw_panel_marvin(uint32_t      *px,
                      sel ? ac.g : 0xea,
                      sel ? ac.b : 0xed,
                      0xff);
+
+        /* Last status badge on selected row */
+        if(sel && g_marvin_proj.last_action[0] && acts[i].nvim_cmd &&
+           !strcmp(g_marvin_proj.last_action, acts[i].nvim_cmd)) {
+          const char *ls = g_marvin_proj.last_status;
+          uint8_t     sr = 0x58, sg = 0x5b, sb = 0x70;
+          if(!strcmp(ls, "ok")) {
+            sr = 0xa6;
+            sg = 0xe3;
+            sb = 0xa1;
+          } else if(!strcmp(ls, "error")) {
+            sr = 0xf3;
+            sg = 0x8b;
+            sb = 0xa8;
+          } else if(!strcmp(ls, "running")) {
+            sr = 0xf9;
+            sg = 0xe2;
+            sb = 0xaf;
+          }
+          int sw = ov_measure(ls);
+          int sx = bx + bw - BDR - PAD - sw;
+          if(sx > label_x + ov_measure(acts[i].label) + PAD)
+            ov_draw_text(
+                px, stride, sx, ROW_TY(ry), stride, by + bh, ls, sr, sg, sb, 0xff);
+        }
+
         if(acts[i].hint) {
-          int hx = bx + bw - BDR - PAD - ov_measure(acts[i].hint);
-          if(hx > ix + ov_measure(acts[i].label) + 16)
+          int  hx           = bx + bw - BDR - PAD - ov_measure(acts[i].hint);
+          bool status_shown = sel && g_marvin_proj.last_action[0] &&
+                              acts[i].nvim_cmd &&
+                              !strcmp(g_marvin_proj.last_action, acts[i].nvim_cmd);
+          if(!status_shown && hx > ix + ov_measure(acts[i].label) + 16)
             ov_draw_text(px,
                          stride,
                          hx,
@@ -2427,9 +2497,10 @@ void draw_panel_marvin(uint32_t      *px,
                          0x5a,
                          0xff);
         }
+
         if(g_mv_args_editing && i == g_marvin_cursor) {
-          int ax = ix + ov_measure(acts[i].label) + PAD * 2,
-              aw = bx + bw - BDR - PAD - ax;
+          int ax = ix + ov_measure(acts[i].label) + PAD * 2;
+          int aw = bx + bw - BDR - PAD - ax;
           if(aw > 80)
             mp_input_box(px,
                          stride,
@@ -2447,8 +2518,133 @@ void draw_panel_marvin(uint32_t      *px,
       }
       row++;
     }
+
     tui_scrollbar(
-        px, stride, bx, by, bw, bh, skip, total, visible_rows, ac, stride, by + bh);
+        px, stride, bx, by, bw, bh, skip, total, list_visible, ac, stride, by + bh);
+
+    /* ── Inline output preview ── */
+    if(preview_h > 0) {
+      int oy = list_bot;
+
+      /* Separator + header */
+      ov_fill_rect(px,
+                   stride,
+                   bx + BDR,
+                   oy,
+                   bw - BDR * 2,
+                   1,
+                   ac.r,
+                   ac.g,
+                   ac.b,
+                   0x30,
+                   stride,
+                   by + bh);
+      oy += 2;
+
+      char        phdr[128];
+      const char *toggle_hint =
+          g_mv_tasks_output_expanded ? "o=collapse" : "o=expand";
+      snprintf(phdr,
+               sizeof(phdr),
+               "output › %s  %s",
+               g_marvin_proj.last_action[0] ? g_marvin_proj.last_action : "last run",
+               toggle_hint);
+      uint8_t hr = 0x58, hg = 0x5b, hb = 0x70;
+      if(!strcmp(g_marvin_proj.last_status, "ok")) {
+        hr = 0xa6;
+        hg = 0xe3;
+        hb = 0xa1;
+      } else if(!strcmp(g_marvin_proj.last_status, "error")) {
+        hr = 0xf3;
+        hg = 0x8b;
+        hb = 0xa8;
+      } else if(!strcmp(g_marvin_proj.last_status, "running")) {
+        hr = 0xf9;
+        hg = 0xe2;
+        hb = 0xaf;
+      }
+      ov_draw_text(
+          px, stride, ix, ROW_TY(oy), stride, by + bh, phdr, hr, hg, hb, 0xff);
+      oy += ROW_H + 2;
+
+      /* Dark background for the output lines */
+      ov_fill_rect(px,
+                   stride,
+                   bx + BDR,
+                   oy,
+                   bw - BDR * 2,
+                   by + bh - oy - BDR,
+                   0x10,
+                   0x10,
+                   0x1c,
+                   0x80,
+                   stride,
+                   by + bh);
+
+      pthread_mutex_lock(&g_marvin_con_lock);
+
+      /* Count total lines */
+      int total_lines = 1;
+      for(int ci = 0; ci < g_marvin_console_len; ci++)
+        if(g_marvin_console[ci] == '\n') total_lines++;
+
+      int start_line = total_lines - preview_lines;
+      if(start_line < 0) start_line = 0;
+
+      int  line_idx = 0, prow = 0;
+      char lbuf[512];
+      int  bi = 0;
+      for(int ci = 0; ci <= g_marvin_console_len && prow < preview_lines; ci++) {
+        char c = (ci < g_marvin_console_len) ? g_marvin_console[ci] : '\0';
+        if(c == '\n' || c == '\0') {
+          lbuf[bi] = '\0';
+          if(line_idx >= start_line && bi > 0) {
+            int     ry2 = oy + prow * ROW_H;
+            uint8_t lr = 0xa6, lg_ = 0xad, lb = 0xc8;
+            if(strstr(lbuf, "error:") || strstr(lbuf, "ERROR")) {
+              lr  = 0xf3;
+              lg_ = 0x8b;
+              lb  = 0xa8;
+            } else if(strstr(lbuf, "warning:")) {
+              lr  = 0xf9;
+              lg_ = 0xe2;
+              lb  = 0xaf;
+            } else if(lbuf[0] == '$' || lbuf[0] == '>') {
+              lr  = 0x74;
+              lg_ = 0x78;
+              lb  = 0x92;
+            } else if(strstr(lbuf, "Finished") || strstr(lbuf, "ok")) {
+              lr  = 0xa6;
+              lg_ = 0xe3;
+              lb  = 0xa1;
+            }
+            char trunc[512];
+            strncpy(trunc, lbuf, sizeof(trunc) - 1);
+            int avail = iw - 8;
+            while(ov_measure(trunc) > avail && strlen(trunc) > 3)
+              trunc[strlen(trunc) - 1] = '\0';
+            ov_draw_text(px,
+                         stride,
+                         ix + 4,
+                         ROW_TY(ry2),
+                         stride,
+                         by + bh,
+                         trunc,
+                         lr,
+                         lg_,
+                         lb,
+                         0xff);
+            prow++;
+          }
+          line_idx++;
+          bi = 0;
+        } else if(bi < 511) {
+          lbuf[bi++] = c;
+        }
+      }
+      pthread_mutex_unlock(&g_marvin_con_lock);
+    }
+
     goto draw_wizard_overlay;
   }
 

@@ -1,39 +1,42 @@
-/* trixie-ctl — command-line client for the Trixie compositor IPC socket.
+/* trixiectl — command-line client for the Trixie compositor IPC socket.
  *
  * Usage
  * ─────
- *   trixie-ctl <command> [args...]
- *   trixie-ctl subscribe          # stream JSON events until Ctrl-C
+ *   trixiectl <command> [args...]
+ *   trixiectl subscribe          # stream JSON events until Ctrl-C
  *
  * Examples
- *   trixie-ctl workspace 3
- *   trixie-ctl overlay toggle
- *   trixie-ctl overlay cd ~/projects/myapp
- *   trixie-ctl overlay notify build "cargo build finished"
- *   trixie-ctl overlay git-refresh
- *   trixie-ctl overlay panel git
- *   trixie-ctl status_json
- *   trixie-ctl spawn kitty
+ *   trixiectl workspace 3
+ *   trixiectl overlay toggle
+ *   trixiectl overlay cd ~/projects/myapp
+ *   trixiectl overlay notify build "cargo build finished"
+ *   trixiectl overlay git-refresh
+ *   trixiectl overlay panel git
+ *   trixiectl status_json
+ *   trixiectl spawn kitty
+ *   trixiectl clients
+ *   trixiectl clients --plain
  *
  * Shell integration (add to ~/.zshrc or ~/.bashrc)
  * ─────────────────────────────────────────────────
  *   # Sync overlay cwd on every cd
- *   function cd() { builtin cd "$@" && trixie-ctl overlay cd "$PWD" 2>/dev/null; }
+ *   function cd() { builtin cd "$@" && trixiectl overlay cd "$PWD" 2>/dev/null; }
  *
  *   # zsh precmd hook (runs before every prompt)
- *   precmd() { trixie-ctl overlay cd "$PWD" 2>/dev/null; }
+ *   precmd() { trixiectl overlay cd "$PWD" 2>/dev/null; }
  *
  *   # Optional: alias trixie-run to pipe output into overlay log
  *   function trixie-run() {
- *     trixie-ctl overlay notify run "started: $*" 2>/dev/null
+ *     trixiectl overlay notify run "started: $*" 2>/dev/null
  *     "$@"
- *     trixie-ctl overlay notify run "exit $?: $*" 2>/dev/null
+ *     trixiectl overlay notify run "exit $?: $*" 2>/dev/null
  *   }
  */
 
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +62,7 @@ static const char *socket_path(void) {
 static int connect_sock(void) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if(fd < 0) {
-    perror("trixie-ctl: socket");
+    perror("trixiectl: socket");
     return -1;
   }
   struct sockaddr_un addr = { 0 };
@@ -67,7 +70,7 @@ static int connect_sock(void) {
   strncpy(addr.sun_path, socket_path(), sizeof(addr.sun_path) - 1);
   if(connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     fprintf(stderr,
-            "trixie-ctl: cannot connect to %s: %s\n"
+            "trixiectl: cannot connect to %s: %s\n"
             "  Is Trixie running?\n",
             socket_path(),
             strerror(errno));
@@ -98,16 +101,14 @@ static int send_command(const char *cmd) {
   int fd = connect_sock();
   if(fd < 0) return 1;
 
-  /* Send command + newline */
   char buf[2048];
   snprintf(buf, sizeof(buf), "%s\n", cmd);
   if(write_all(fd, buf, strlen(buf)) < 0) {
-    perror("trixie-ctl: write");
+    perror("trixiectl: write");
     close(fd);
     return 1;
   }
 
-  /* Read reply */
   char    reply[8192] = { 0 };
   ssize_t total       = 0;
   for(;;) {
@@ -120,11 +121,9 @@ static int send_command(const char *cmd) {
 
   if(total > 0) {
     reply[total] = '\0';
-    /* Trim trailing newline */
     while(total > 0 && (reply[total - 1] == '\n' || reply[total - 1] == '\r'))
       reply[--total] = '\0';
     puts(reply);
-    /* Exit code: 0 for ok, 1 for err */
     return strncmp(reply, "err:", 4) == 0 ? 1 : 0;
   }
   return 0;
@@ -138,12 +137,11 @@ static int subscribe_mode(void) {
 
   const char *cmd = "subscribe\n";
   if(write_all(fd, cmd, strlen(cmd)) < 0) {
-    perror("trixie-ctl: write");
+    perror("trixiectl: write");
     close(fd);
     return 1;
   }
 
-  /* Stream events line by line until EOF or signal */
   char buf[4096];
   for(;;) {
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
@@ -159,9 +157,9 @@ static int subscribe_mode(void) {
 /* ── Help ────────────────────────────────────────────────────────────────── */
 
 static void usage(void) {
-  puts("trixie-ctl — Trixie compositor IPC client\n"
+  puts("trixiectl — Trixie compositor IPC client\n"
        "\n"
-       "Usage: trixie-ctl <command> [args...]\n"
+       "Usage: trixiectl <command> [args...]\n"
        "\n"
        "Compositor control\n"
        "  workspace <n>              switch to workspace n\n"
@@ -172,6 +170,7 @@ static void usage(void) {
        "  layout [next|prev]         cycle layout\n"
        "  set_layout <name>          bsp|spiral|columns|rows|threecol|monocle\n"
        "  grow_main / shrink_main    adjust main ratio\n"
+       "  inc_master / dec_master    add/remove a pane from the master column\n"
        "  ratio <0.1..0.9>           set exact main ratio\n"
        "  float                      toggle float on focused window\n"
        "  float_move <dx> <dy>       move floating window\n"
@@ -184,12 +183,17 @@ static void usage(void) {
        "  spawn <cmd>                execute command\n"
        "  dpms <on|off>              display power\n"
        "  idle_reset                 reset idle timer\n"
-       "  reload                     hot-reload: rebuild binary and exec-replace\n"
+       "  reload                     hot-reload config only\n"
+       "  binary_reload              rebuild binary + exec-replace (ninja)\n"
        "  quit                       exit compositor\n"
        "\n"
        "Introspection\n"
-       "  status                     human-readable workspace summary\n"
-       "  status_json                machine-readable JSON status\n"
+       "  clients                    list all open windows (JSON)\n"
+       "  clients --json             same as above (explicit)\n"
+       "  clients --plain            human-readable table\n"
+       "  status                     human-readable workspace + scratchpad summary\n"
+       "  status_json                machine-readable JSON (workspaces + "
+       "scratchpads)\n"
        "  query_pane [id]            pane details (default: focused)\n"
        "  subscribe                  stream JSON events until Ctrl-C\n"
        "\n"
@@ -197,7 +201,7 @@ static void usage(void) {
        "  overlay toggle             show/hide overlay\n"
        "  overlay show / hide        explicit show or hide\n"
        "  overlay panel <name>       switch to panel (run|build|git|lsp|nvim|...)\n"
-       "  overlay cd <path>          set project cwd (git, run detection, files)\n"
+       "  overlay cd <path>          set project cwd\n"
        "  overlay notify <title> <msg>  push message to overlay log\n"
        "  overlay run <cmd>          run command, show log panel\n"
        "  overlay git-refresh        force git panel to re-query\n"
@@ -205,11 +209,185 @@ static void usage(void) {
        "Build\n"
        "  build                      trigger build on build panel\n"
        "\n"
+       "Scratchpad pattern syntax (in trixie.conf)\n"
+       "  app_id = kitty             exact app_id match (default)\n"
+       "  app_id = title:~ncmpcpp    title contains 'ncmpcpp'\n"
+       "  app_id = class:fire*       app_id glob\n"
+       "  app_id = title:*Player*    title glob\n"
+       "  title  = ~Music            shorthand for title:~Music\n"
+       "\n"
        "Shell integration (add to ~/.zshrc)\n"
-       "  # Sync overlay cwd on every directory change\n"
-       "  precmd() { trixie-ctl overlay cd \"$PWD\" 2>/dev/null; }\n"
-       "  # bash: PROMPT_COMMAND\n"
-       "  PROMPT_COMMAND='trixie-ctl overlay cd \"$PWD\" 2>/dev/null'\n");
+       "  precmd() { trixiectl overlay cd \"$PWD\" 2>/dev/null; }\n"
+       "  PROMPT_COMMAND='trixiectl overlay cd \"$PWD\" 2>/dev/null'  # bash\n"
+       "\n"
+       "Examples\n"
+       "  trixiectl clients                     # JSON list of all windows\n"
+       "  trixiectl clients --plain             # human-readable table\n"
+       "  trixiectl status_json | jq .scratchpads\n");
+}
+
+/* ── clients subcommand — fetch status_json, reformat ───────────────────── */
+
+static int cmd_clients(int argc, char **argv) {
+  bool plain =
+      (argc >= 3 && (!strcmp(argv[2], "--plain") || !strcmp(argv[2], "-p")));
+
+  int fd = connect_sock();
+  if(fd < 0) return 1;
+  const char *req = "status_json\n";
+  if(write_all(fd, req, strlen(req)) < 0) {
+    perror("trixiectl: write");
+    close(fd);
+    return 1;
+  }
+  char    raw[65536] = { 0 };
+  ssize_t total      = 0;
+  for(;;) {
+    ssize_t n = read(fd, raw + total, sizeof(raw) - 1 - total);
+    if(n <= 0) break;
+    total += n;
+    if(total >= (ssize_t)(sizeof(raw) - 1)) break;
+  }
+  close(fd);
+  if(total <= 0) {
+    fputs("err: no response\n", stderr);
+    return 1;
+  }
+  raw[total] = '\0';
+
+  if(!plain) {
+    /* JSON output — flatten pane_list from every workspace into one array */
+    printf("[");
+    bool  first_out = true;
+    char *ws_arr    = strstr(raw, "\"workspaces\":[");
+    if(ws_arr) ws_arr += strlen("\"workspaces\":[");
+    while(ws_arr && *ws_arr && *ws_arr != ']') {
+      char *pl      = strstr(ws_arr, "\"pane_list\":[");
+      char *idx_p   = strstr(ws_arr, "\"index\":");
+      int   ws_idx  = idx_p ? atoi(idx_p + 8) : -1;
+      char *next_ws = strchr(ws_arr, '}');
+      if(next_ws)
+        ws_arr = next_ws + 1;
+      else
+        break;
+      if(!pl || pl > ws_arr) continue;
+      pl += strlen("\"pane_list\":[");
+      while(*pl && *pl != ']') {
+        if(*pl != '{') {
+          pl++;
+          continue;
+        }
+        char *end = strchr(pl, '}');
+        if(!end) break;
+        char *f          = strstr(pl, "\"id\":");
+        int   id         = f ? atoi(f + 5) : -1;
+        char  title[256] = "";
+        f                = strstr(pl, "\"title\":\"");
+        if(f) {
+          f += 9;
+          int i = 0;
+          while(*f && *f != '"' && i < 255)
+            title[i++] = *f++;
+        }
+        char app_id[128] = "";
+        f                = strstr(pl, "\"app_id\":\"");
+        if(f) {
+          f += 10;
+          int i = 0;
+          while(*f && *f != '"' && i < 127)
+            app_id[i++] = *f++;
+        }
+        bool focused =
+            strstr(pl, "\"focused\":true") && strstr(pl, "\"focused\":true") < end;
+        bool floating =
+            strstr(pl, "\"floating\":true") && strstr(pl, "\"floating\":true") < end;
+        bool fullscreen = strstr(pl, "\"fullscreen\":true") &&
+                          strstr(pl, "\"fullscreen\":true") < end;
+        printf("%s{\"id\":%d,\"app_id\":\"%s\",\"title\":\"%s\","
+               "\"workspace\":%d,\"floating\":%s,\"fullscreen\":%s,\"focused\":%s}",
+               first_out ? "" : ",",
+               id,
+               app_id,
+               title,
+               ws_idx,
+               floating ? "true" : "false",
+               fullscreen ? "true" : "false",
+               focused ? "true" : "false");
+        first_out = false;
+        pl        = end + 1;
+      }
+    }
+    printf("]\n");
+  } else {
+    /* Plain table output */
+    printf("%-6s %-3s %-20s %-8s %-8s %s\n",
+           "ID",
+           "WS",
+           "APP_ID",
+           "FLOAT",
+           "FOCUSED",
+           "TITLE");
+    printf("%-6s %-3s %-20s %-8s %-8s %s\n",
+           "------",
+           "---",
+           "--------------------",
+           "--------",
+           "--------",
+           "-----");
+    char *ws_arr = strstr(raw, "\"workspaces\":[");
+    if(ws_arr) ws_arr += strlen("\"workspaces\":[");
+    while(ws_arr && *ws_arr && *ws_arr != ']') {
+      char *pl      = strstr(ws_arr, "\"pane_list\":[");
+      char *idx_p   = strstr(ws_arr, "\"index\":");
+      int   ws_idx  = idx_p ? atoi(idx_p + 8) : -1;
+      char *next_ws = strchr(ws_arr, '}');
+      if(next_ws)
+        ws_arr = next_ws + 1;
+      else
+        break;
+      if(!pl || pl > ws_arr) continue;
+      pl += strlen("\"pane_list\":[");
+      while(*pl && *pl != ']') {
+        if(*pl != '{') {
+          pl++;
+          continue;
+        }
+        char *end = strchr(pl, '}');
+        if(!end) break;
+        char *f          = strstr(pl, "\"id\":");
+        int   id         = f ? atoi(f + 5) : -1;
+        char  title[256] = "";
+        f                = strstr(pl, "\"title\":\"");
+        if(f) {
+          f += 9;
+          int i = 0;
+          while(*f && *f != '"' && i < 255)
+            title[i++] = *f++;
+        }
+        char app_id[128] = "";
+        f                = strstr(pl, "\"app_id\":\"");
+        if(f) {
+          f += 10;
+          int i = 0;
+          while(*f && *f != '"' && i < 127)
+            app_id[i++] = *f++;
+        }
+        bool focused =
+            strstr(pl, "\"focused\":true") && strstr(pl, "\"focused\":true") < end;
+        bool floating =
+            strstr(pl, "\"floating\":true") && strstr(pl, "\"floating\":true") < end;
+        printf("%-6d %-3d %-20s %-8s %-8s %s\n",
+               id,
+               ws_idx,
+               app_id[0] ? app_id : "(none)",
+               floating ? "yes" : "no",
+               focused ? "yes" : "no",
+               title);
+        pl = end + 1;
+      }
+    }
+  }
+  return 0;
 }
 
 /* ── main ────────────────────────────────────────────────────────────────── */
@@ -229,11 +407,14 @@ int main(int argc, char **argv) {
     return subscribe_mode();
   }
 
-  /* Map user-facing "reload" to the IPC command "binary_reload" which triggers
-   * a ninja rebuild + exec-replace.  The compositor's existing "reload" IPC
-   * command does a config-only reload and is intentionally kept separate.   */
+  /* "reload" → config-only reload (fast).
+   * "binary_reload" → ninja rebuild + exec-replace (passed through as-is). */
   if(!strcmp(argv[1], "reload")) {
-    return send_command("binary_reload");
+    return send_command("reload");
+  }
+
+  if(!strcmp(argv[1], "clients")) {
+    return cmd_clients(argc, argv);
   }
 
   /* Reconstruct the command string from argv */

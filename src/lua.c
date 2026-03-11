@@ -275,8 +275,7 @@ static int pane_workspace(TrixieServer *s, PaneId id) {
 
 /* Translate a layout name string to Layout enum (-1 on failure). */
 static int layout_from_name(const char *name) {
-  if(!strcasecmp(name, "bsp")) return LAYOUT_BSP;
-  if(!strcasecmp(name, "spiral")) return LAYOUT_SPIRAL;
+  if(!strcasecmp(name, "dwindle")) return LAYOUT_DWINDLE;
   if(!strcasecmp(name, "columns")) return LAYOUT_COLUMNS;
   if(!strcasecmp(name, "rows")) return LAYOUT_ROWS;
   if(!strcasecmp(name, "threecol")) return LAYOUT_THREECOL;

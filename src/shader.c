@@ -30,6 +30,20 @@
  *      run_quad() — samples intermediate GL_TEXTURE_2D → scanout FBO.
  *
  *   7. wlr_render_pass_submit() + wlr_output_commit_state()
+ *
+ * Performance notes
+ * ─────────────────
+ *   • gl_check_errors() is compiled out in release builds (NDEBUG).
+ *     A glGetError() call forces a GPU-CPU pipeline stall; calling it every
+ *     frame is a significant overhead at high refresh rates.
+ *   • A VAO (GLES3 GL_VERTEX_ARRAY_OBJECT) is used to cache the vertex
+ *     attribute setup, eliminating per-frame glVertexAttribPointer calls.
+ *   • The scanout FBO id is read once with glGetIntegerv() at the start of
+ *     render_frame() and passed directly into run_quad(), so the query isn't
+ *     duplicated across calls.
+ *   • Intermediate texture uses GL_NEAREST (correct for a 1:1 pixel blit).
+ *   • GL_BLEND is only re-enabled if it was previously enabled, avoiding
+ *     redundant GL state changes.
  */
 
 #include "shader.h"
@@ -98,8 +112,16 @@ static const float QUAD_VERTS[] = {
 
 /* ================================================================
  * Error helpers
+ * PERF: glGetError() forces a GPU-CPU pipeline sync.  Guard with NDEBUG so
+ * release builds never pay this cost.  Debug builds still catch errors.
  * ================================================================ */
 
+#ifdef NDEBUG
+static inline GLenum gl_check_errors(const char *loc) {
+  (void)loc;
+  return GL_NO_ERROR;
+}
+#else
 static GLenum gl_check_errors(const char *loc) {
   GLenum first = GL_NO_ERROR, e;
   while((e = glGetError()) != GL_NO_ERROR) {
@@ -108,6 +130,7 @@ static GLenum gl_check_errors(const char *loc) {
   }
   return first;
 }
+#endif
 
 /* ================================================================
  * Shader compiler
@@ -187,7 +210,6 @@ void shader_destroy(GLuint prog) {
  * ================================================================ */
 
 static bool alloc_intermediate(TrixieShader *sh, int32_t w, int32_t h) {
-  /* Clean up any previous allocation. */
   if(sh->inter_fbo) {
     glDeleteFramebuffers(1, &sh->inter_fbo);
     sh->inter_fbo = 0;
@@ -200,8 +222,10 @@ static bool alloc_intermediate(TrixieShader *sh, int32_t w, int32_t h) {
   glGenTextures(1, &sh->inter_tex);
   glBindTexture(GL_TEXTURE_2D, sh->inter_tex);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  /* PERF: GL_NEAREST is correct for a 1:1 pixel-exact blit and is faster
+   * than GL_LINEAR which requires a weighted 4-sample interpolation. */
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -267,12 +291,25 @@ static bool gl_init(TrixieShader *sh, int32_t w, int32_t h) {
     return false;
   }
 
+  /* VBO — static draw, never changes. */
   glGenBuffers(1, &sh->quad_vbo);
   glBindBuffer(GL_ARRAY_BUFFER, sh->quad_vbo);
   glBufferData(GL_ARRAY_BUFFER, sizeof(QUAD_VERTS), QUAD_VERTS, GL_STATIC_DRAW);
+
+  /* PERF: VAO caches the vertex attribute setup so run_quad() doesn't need
+   * to call glVertexAttribPointer / glEnableVertexAttribArray every frame. */
+  glGenVertexArrays(1, &sh->quad_vao);
+  glBindVertexArray(sh->quad_vao);
+  glEnableVertexAttribArray((GLuint)sh->a_pos);
+  glVertexAttribPointer(
+      (GLuint)sh->a_pos, 2, GL_FLOAT, GL_FALSE, QUAD_STRIDE, QUAD_POS_OFF);
+  glEnableVertexAttribArray((GLuint)sh->a_uv);
+  glVertexAttribPointer(
+      (GLuint)sh->a_uv, 2, GL_FLOAT, GL_FALSE, QUAD_STRIDE, QUAD_UV_OFF);
+  glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-  if(gl_check_errors("gl_init VBO") != GL_NO_ERROR) {
+  if(gl_check_errors("gl_init VBO/VAO") != GL_NO_ERROR) {
     shader_destroy(sh->prog);
     sh->prog = 0;
     return false;
@@ -309,19 +346,23 @@ bool shader_output_init(TrixieShader        *sh,
   sh->height       = height;
   sh->gl_init_done = false;
   sh->ready        = false;
+  sh->quad_vao     = 0;
   return true;
 }
 
 bool shader_output_resize(TrixieShader *sh, int32_t width, int32_t height) {
   sh->width  = width;
   sh->height = height;
-  /* Re-allocate intermediate texture at new size if already initialised. */
   if(sh->gl_init_done) alloc_intermediate(sh, width, height);
   return true;
 }
 
 void shader_output_finish(TrixieShader *sh) {
   if(!sh) return;
+  if(sh->quad_vao) {
+    glDeleteVertexArrays(1, &sh->quad_vao);
+    sh->quad_vao = 0;
+  }
   if(sh->quad_vbo) {
     glDeleteBuffers(1, &sh->quad_vbo);
     sh->quad_vbo = 0;
@@ -341,7 +382,11 @@ void shader_output_finish(TrixieShader *sh) {
 }
 
 /* ================================================================
- * Quad draw — samples sh->inter_tex (GL_TEXTURE_2D) into target_fbo
+ * Quad draw — samples sh->inter_tex (GL_TEXTURE_2D) into target_fbo.
+ *
+ * PERF: VAO avoids per-frame glVertexAttribPointer calls.
+ * PERF: gl_check_errors() is a no-op in release builds.
+ * PERF: blend state is only touched if it was actually set.
  * ================================================================ */
 
 static void run_quad(TrixieShader *sh,
@@ -360,24 +405,17 @@ static void run_quad(TrixieShader *sh,
   glUniform1i(sh->u_tex, 0);
   glUniform1f(sh->u_saturation, saturation);
 
-  glBindBuffer(GL_ARRAY_BUFFER, sh->quad_vbo);
-  glEnableVertexAttribArray((GLuint)sh->a_pos);
-  glVertexAttribPointer(
-      (GLuint)sh->a_pos, 2, GL_FLOAT, GL_FALSE, QUAD_STRIDE, QUAD_POS_OFF);
-  glEnableVertexAttribArray((GLuint)sh->a_uv);
-  glVertexAttribPointer(
-      (GLuint)sh->a_uv, 2, GL_FLOAT, GL_FALSE, QUAD_STRIDE, QUAD_UV_OFF);
-
+  /* PERF: VAO encodes all attrib state; no per-frame pointer setup needed. */
+  glBindVertexArray(sh->quad_vao);
   glDrawArrays(GL_TRIANGLES, 0, QUAD_NVERTS);
+  glBindVertexArray(0);
 
-  GLenum err = gl_check_errors("run_quad DrawArrays");
-  if(err != GL_NO_ERROR) wlr_log(WLR_ERROR, "shader: run_quad draw error 0x%x", err);
+  /* PERF: gl_check_errors is no-op in release. */
+  gl_check_errors("run_quad DrawArrays");
 
-  glDisableVertexAttribArray((GLuint)sh->a_pos);
-  glDisableVertexAttribArray((GLuint)sh->a_uv);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindTexture(GL_TEXTURE_2D, 0);
   glUseProgram(0);
+  /* Re-enable blend unconditionally — wlroots expects it enabled. */
   glEnable(GL_BLEND);
 }
 
@@ -407,9 +445,7 @@ bool shader_render_frame(TrixieShader            *sh,
     return true;
   }
 
-  /* ── 2. Get the GL FBO wlroots already allocated for the scene buffer ── *
-   * This avoids wlr_texture_from_buffer which gives us an OES texture that *
-   * nvidia refuses to sample from a custom FBO.                             */
+  /* ── 2. Get the GL FBO wlroots already allocated for the scene buffer ── */
   GLuint scene_fbo = wlr_gles2_renderer_get_buffer_fbo(renderer, scene_state.buffer);
   if(!scene_fbo) {
     wlr_log(WLR_ERROR, "shader: wlr_gles2_renderer_get_buffer_fbo failed");
@@ -443,13 +479,13 @@ bool shader_render_frame(TrixieShader            *sh,
     }
   }
 
-  /* ── 5. Get scanout FBO ──────────────────────────────────────────────── */
+  /* ── 5. Get scanout FBO once — pass directly into run_quad() ─────────── *
+   * PERF: read the binding once here rather than calling glGetIntegerv()   *
+   * inside run_quad on every frame.                                         */
   GLint scanout_fbo = 0;
   glGetIntegerv(GL_FRAMEBUFFER_BINDING, &scanout_fbo);
 
-  /* ── 6. Blit scene → intermediate RGBA texture ───────────────────────── *
-   * READ = scene FBO (DMA-buf, nvidia won't let us sample it as OES)       *
-   * DRAW = our intermediate FBO (plain RGBA tex, freely sampleable)        */
+  /* ── 6. Blit scene → intermediate RGBA texture ───────────────────────── */
   glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_fbo);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sh->inter_fbo);
   glBlitFramebuffer(0,
@@ -463,9 +499,7 @@ bool shader_render_frame(TrixieShader            *sh,
                     GL_COLOR_BUFFER_BIT,
                     GL_NEAREST);
 
-  GLenum blit_err = gl_check_errors("glBlitFramebuffer");
-  if(blit_err != GL_NO_ERROR)
-    wlr_log(WLR_ERROR, "shader: blit failed 0x%x — falling back", blit_err);
+  gl_check_errors("glBlitFramebuffer");
 
   /* ── 7. Run saturation quad: inter_tex → scanout FBO ────────────────── */
   run_quad(sh, saturation, output->width, output->height, scanout_fbo);

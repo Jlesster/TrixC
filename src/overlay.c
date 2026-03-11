@@ -111,7 +111,7 @@ static void refresh_procs(void) {
       if(fscanf(f,"cpu  %lld %lld %lld %lld %lld %lld %lld %lld",&u,&n,&s,&i,&w,&r,&si,&st)==8)
         cpu_total=u+n+s+i+w+r+si+st;
       fclose(f); } }
-  ProcEntry old[PROC_MAX]; int old_count=g_proc_count;
+  static ProcEntry old[PROC_MAX]; int old_count=g_proc_count;
   memcpy(old,g_procs,sizeof(ProcEntry)*(size_t)old_count);
   g_proc_count=0;
   DIR *d=opendir("/proc"); if(!d) return;
@@ -174,6 +174,9 @@ typedef struct {
 } GitState;
 static GitState g_git;
 static char     g_git_cwd[1024]={0};
+static char  g_git_commit_msg[256] = { 0 };
+static int   g_git_commit_len      = 0;
+static bool  g_git_commit_editing  = false;
 
 static int run_capture(const char *cmd, char out[][GIT_LINE_MAX], int max_lines) {
   FILE *f=popen(cmd,"r"); if(!f) return 0; int n=0;
@@ -564,6 +567,84 @@ FT_Face    g_ov_icon_face=NULL;
 int        g_ov_asc=0;
 int        g_ov_th=0;
 
+/* ── Overlay glyph bitmap cache ─────────────────────────────────────────────
+ * ov_draw_text is called for every text row on every dirty overlay paint.
+ * Caching the rendered bitmaps reduces FT_Load_Glyph(FT_LOAD_RENDER) from
+ * O(chars × frames) to O(unique chars) — essentially a one-time cost.
+ *
+ * Key: codepoint (uint32_t).  Open-addressing, power-of-2 slots.
+ * We store which FT_Face rendered it so we can detect face changes.
+ * Cleared on ov_font_init() (font or size change).
+ */
+#define OV_GCACHE_SIZE 1024
+#define OV_GCACHE_MASK (OV_GCACHE_SIZE - 1)
+
+typedef struct {
+  uint32_t   cp;         /* codepoint — 0 means empty */
+  FT_Face    face;       /* which face rendered this (for invalidation) */
+  int        bearing_x;
+  int        bearing_y;
+  int        advance_x;  /* pixels */
+  int        bm_w, bm_h, bm_pitch;
+  uint8_t   *bm;         /* heap-allocated copy of the bitmap */
+} OvGlyphCache;
+
+static OvGlyphCache g_ov_gcache[OV_GCACHE_SIZE];
+
+static void ov_gcache_clear(void) {
+  for(int i = 0; i < OV_GCACHE_SIZE; i++) {
+    free(g_ov_gcache[i].bm);
+    g_ov_gcache[i] = (OvGlyphCache){ 0 };
+  }
+}
+
+/* Looks up cp in the cache, rendering it if necessary.
+ * Returns NULL if the glyph cannot be loaded or has no bitmap. */
+static const OvGlyphCache *ov_gcache_get(uint32_t cp) {
+  if(!cp) return NULL;
+  uint32_t slot = cp & OV_GCACHE_MASK;
+  for(int i = 0; i < OV_GCACHE_SIZE; i++) {
+    uint32_t s = (slot + (uint32_t)i) & OV_GCACHE_MASK;
+    OvGlyphCache *cg = &g_ov_gcache[s];
+    if(cg->cp == cp) return cg;
+    if(cg->cp == 0) {
+      /* Empty slot — load and fill. */
+      bool is_icon = (cp >= 0xE000 && cp <= 0xF8FF) ||
+                     (cp >= 0x1F300) || (cp >= 0xF0000);
+      FT_Face face = NULL;
+      if(!is_icon && g_ov_face) {
+        FT_UInt idx = FT_Get_Char_Index(g_ov_face, cp);
+        if(idx && FT_Load_Glyph(g_ov_face, idx, FT_LOAD_RENDER) == 0)
+          face = g_ov_face;
+      }
+      if(!face && g_ov_icon_face) {
+        FT_UInt idx = FT_Get_Char_Index(g_ov_icon_face, cp);
+        if(idx && FT_Load_Glyph(g_ov_icon_face, idx, FT_LOAD_RENDER) == 0)
+          face = g_ov_icon_face;
+      }
+      if(!face && g_ov_face) {
+        if(FT_Load_Char(g_ov_face, cp, FT_LOAD_RENDER) == 0)
+          face = g_ov_face;
+      }
+      if(!face) return NULL;
+      FT_GlyphSlot sl = face->glyph;
+      cg->cp        = cp;
+      cg->face      = face;
+      cg->bearing_x = sl->bitmap_left;
+      cg->bearing_y = sl->bitmap_top;
+      cg->advance_x = (int)(sl->advance.x >> 6);
+      cg->bm_w      = (int)sl->bitmap.width;
+      cg->bm_h      = (int)sl->bitmap.rows;
+      cg->bm_pitch  = sl->bitmap.pitch;
+      int sz = cg->bm_h * cg->bm_pitch;
+      cg->bm = sz > 0 ? malloc(sz) : NULL;
+      if(cg->bm) memcpy(cg->bm, sl->bitmap.buffer, sz);
+      return cg;
+    }
+  }
+  return NULL; /* cache full — glyph missed, skip drawing */
+}
+
 static uint32_t utf8_next(const char **pp){
   const unsigned char *p=(const unsigned char *)*pp;
   uint32_t cp; int extra;
@@ -602,6 +683,7 @@ static void ov_font_init(const char *path,float size_pt){
   g_ov_asc=(int)ceilf((float)g_ov_face->size->metrics.ascender/64.f);
   int desc=(int)floorf((float)g_ov_face->size->metrics.descender/64.f);
   g_ov_th=g_ov_asc-desc;
+  ov_gcache_clear(); /* new face/size — all cached bitmaps are stale */
   ov_load_icon_face(size_pt);
 }
 static FT_Face ov_load_glyph(uint32_t cp,int load_flags){
@@ -616,42 +698,69 @@ static FT_Face ov_load_glyph(uint32_t cp,int load_flags){
 int ov_measure(const char *text){
   if(!g_ov_face||!text) return 0;
   int w=0; const char *p=text;
-  while(*p){ uint32_t cp=utf8_next(&p); FT_Face face=ov_load_glyph(cp,FT_LOAD_ADVANCE_ONLY);
-    if(face) w+=(int)(face->glyph->advance.x>>6); }
+  while(*p){
+    uint32_t cp=utf8_next(&p);
+    const OvGlyphCache *cg=ov_gcache_get(cp);
+    if(cg) w+=cg->advance_x;
+  }
   return w;
 }
 void ov_draw_text(uint32_t *px,int stride,int x,int y,int clip_w,int clip_h,
                   const char *text,uint8_t r,uint8_t g,uint8_t b,uint8_t a){
   if(!g_ov_face||!text) return;
   int pen=x; const char *p=text;
-  while(*p){ uint32_t cp=utf8_next(&p); FT_Face face=ov_load_glyph(cp,FT_LOAD_RENDER);
-    if(!face) continue; FT_GlyphSlot slot=face->glyph;
-    int gx=pen+slot->bitmap_left, gy=y-slot->bitmap_top;
-    for(int row=0;row<(int)slot->bitmap.rows;row++){ int py=gy+row;
+  while(*p){
+    uint32_t cp=utf8_next(&p);
+    const OvGlyphCache *cg=ov_gcache_get(cp);
+    if(!cg||!cg->bm){ if(cg) pen+=cg->advance_x; continue; }
+    int gx=pen+cg->bearing_x, gy=y-cg->bearing_y;
+    for(int row=0;row<cg->bm_h;row++){ int py=gy+row;
       if(py<0||py>=clip_h) continue;
-      for(int col=0;col<(int)slot->bitmap.width;col++){ int px_x=gx+col;
+      for(int col=0;col<cg->bm_w;col++){ int px_x=gx+col;
         if(px_x<0||px_x>=clip_w) continue;
-        uint8_t ga=slot->bitmap.buffer[row*slot->bitmap.pitch+col]; if(!ga) continue;
+        uint8_t ga=cg->bm[row*cg->bm_pitch+col]; if(!ga) continue;
         uint8_t ba=(uint8_t)((uint32_t)ga*a/255); uint32_t *d=&px[py*stride+px_x];
         uint32_t inv=255-ba;
         uint8_t or_=(uint8_t)((r*ba+((*d>>16)&0xff)*inv)/255);
         uint8_t og =(uint8_t)((g*ba+((*d>>8 )&0xff)*inv)/255);
         uint8_t ob =(uint8_t)((b*ba+(*d      &0xff)*inv)/255);
         *d=(0xffu<<24)|((uint32_t)or_<<16)|((uint32_t)og<<8)|ob; } }
-    pen+=(int)(slot->advance.x>>6); }
+    pen+=cg->advance_x;
+  }
 }
 void ov_fill_rect(uint32_t *px,int stride,int x,int y,int w,int h,
                   uint8_t r,uint8_t g,uint8_t b,uint8_t a,int cw,int ch){
+  /* Clamp to canvas bounds once — avoid per-pixel branch inside hot loops. */
+  int x0 = x < 0 ? 0 : x;
+  int y0 = y < 0 ? 0 : y;
+  int x1 = (x + w) > cw ? cw : (x + w);
+  int y1 = (y + h) > ch ? ch : (y + h);
+  if(x0 >= x1 || y0 >= y1) return;
+
   uint32_t c=((uint32_t)a<<24)|((uint32_t)r<<16)|((uint32_t)g<<8)|b;
-  for(int row=y;row<y+h&&row<ch;row++){ if(row<0) continue;
-    for(int col=x;col<x+w&&col<cw;col++){ if(col<0) continue;
-      if(a==255){ px[row*stride+col]=c; }
-      else{ uint32_t *d=&px[row*stride+col]; uint32_t inv=255-a;
+  if(a==255){
+    /* Opaque: fill each row with a single loop — no blending needed. */
+    for(int row=y0;row<y1;row++){
+      uint32_t *dst=&px[row*stride+x0];
+      int       len=x1-x0;
+      for(int i=0;i<len;i++) dst[i]=c;
+    }
+  } else {
+    uint32_t inv=255-a;
+    for(int row=y0;row<y1;row++){
+      uint32_t *dst=&px[row*stride+x0];
+      int       len=x1-x0;
+      for(int i=0;i<len;i++){
+        uint32_t *d=&dst[i];
         uint8_t or_=(uint8_t)((r*a+((*d>>16)&0xff)*inv)/255);
         uint8_t og =(uint8_t)((g*a+((*d>>8 )&0xff)*inv)/255);
         uint8_t ob =(uint8_t)((b*a+(*d      &0xff)*inv)/255);
-        *d=(0xffu<<24)|((uint32_t)or_<<16)|((uint32_t)og<<8)|ob; } } }
+        *d=(0xffu<<24)|((uint32_t)or_<<16)|((uint32_t)og<<8)|ob;
+      }
+    }
+  }
 }
+
 void ov_fill_border(uint32_t *px,int stride,int x,int y,int w,int h,
                     uint8_t r,uint8_t g,uint8_t b,uint8_t a,int cw,int ch){
   ov_fill_rect(px,stride,x,    y,    w,1,r,g,b,a,cw,ch);
@@ -673,10 +782,51 @@ static bool ovb_begin(struct wlr_buffer *b,uint32_t flags,void **data,uint32_t *
 static void ovb_end(struct wlr_buffer *b){(void)b;}
 static const struct wlr_buffer_impl ovb_impl={
   .destroy=ovb_destroy,.begin_data_ptr_access=ovb_begin,.end_data_ptr_access=ovb_end };
+
+/* ── Persistent pixel scratch buffer + persistent header ──────────────────────
+ * Both the pixel slab and the OvRawBuf header are kept alive for the lifetime
+ * of the overlay.  ovb_create re-inits the wlr_buffer (resetting its refcount)
+ * and zeroes the pixel data — no allocator calls on the hot paint path.       */
+static uint32_t    *s_ov_pixels   = NULL;
+static int          s_ov_px_w     = 0;
+static int          s_ov_px_h     = 0;
+static struct OvRawBuf *s_ov_rb   = NULL;  /* persistent header */
+
+/* Destroy for the persistent header — frees the struct but NOT the pixel slab. */
+static void ovb_destroy_shared(struct wlr_buffer *b) {
+  struct OvRawBuf *rb = wl_container_of(b, rb, base);
+  /* rb->data is the persistent slab — leave it alone. */
+  free(rb);
+}
+static const struct wlr_buffer_impl ovb_impl_shared = {
+  .destroy              = ovb_destroy_shared,
+  .begin_data_ptr_access = ovb_begin,
+  .end_data_ptr_access   = ovb_end,
+};
+
 static struct OvRawBuf *ovb_create(int w,int h){
-  struct OvRawBuf *rb=calloc(1,sizeof(*rb));
-  rb->stride=w*4; rb->data=calloc((size_t)(w*h),4);
-  wlr_buffer_init(&rb->base,&ovb_impl,w,h); return rb; }
+  /* (Re)allocate the persistent pixel buffer only when dimensions change. */
+  if(w != s_ov_px_w || h != s_ov_px_h || !s_ov_pixels) {
+    free(s_ov_pixels);
+    s_ov_pixels = malloc((size_t)(w * h) * 4);
+    s_ov_px_w   = w;
+    s_ov_px_h   = h;
+    /* Pixel slab changed — the header's data pointer must be updated too. */
+    free(s_ov_rb);
+    s_ov_rb = NULL;
+  }
+  /* Allocate the header once; re-use it every subsequent frame. */
+  if(!s_ov_rb) {
+    s_ov_rb         = calloc(1, sizeof(*s_ov_rb));
+    s_ov_rb->data   = s_ov_pixels;
+    s_ov_rb->stride = w * 4;
+  }
+  /* Zero the pixel data without touching the allocator. */
+  memset(s_ov_pixels, 0, (size_t)(w * h) * 4);
+  /* Re-init the wlr_buffer header so its refcount is 1 for this frame. */
+  wlr_buffer_init(&s_ov_rb->base, &ovb_impl_shared, w, h);
+  return s_ov_rb;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §10  Layout constants
@@ -1055,8 +1205,54 @@ bool overlay_key(TrixieOverlay *o,xkb_keysym_t sym,uint32_t mods){
     if(sym==XKB_KEY_BackSpace){ if(l>0) o->build_cmd[l-1]='\0'; return true;}
     if(sym>=0x20&&sym<0x7f&&l<BUILD_CMD_MAX-1){
       o->build_cmd[l]=(char)sym; o->build_cmd[l+1]='\0';}
-    return true;}
-
+    return true;
+  }
+  if(o->panel == PANEL_GIT && g_git_commit_editing) {
+    if(sym == XKB_KEY_Escape) {
+      g_git_commit_editing = false;
+      return true;
+    }
+    if(sym == XKB_KEY_Return) {
+      g_git_commit_editing = false;
+      if(g_git_commit_msg[0]) {
+        /* Escape single-quotes in the message to avoid shell injection */
+        char safe[512] = { 0 };
+        int  si        = 0;
+        for(int i = 0; g_git_commit_msg[i] && si < 500; i++) {
+          if(g_git_commit_msg[i] == '\'') {
+            if(si + 4 < 500) {
+              safe[si++] = '\''; safe[si++] = '"';
+              safe[si++] = '\''; safe[si++] = '"';
+              safe[si++] = '\'';
+            }
+          } else {
+            safe[si++] = g_git_commit_msg[i];
+          }
+        }
+        safe[si] = '\0';
+        char cmd[640];
+        snprintf(cmd, sizeof(cmd),
+                 "cd '%s' && git commit -m '%s' 2>&1 | head -20",
+                 g_git.root[0] ? g_git.root : ".",
+                 safe);
+        git_run_async(cmd);
+        g_git.valid              = false;
+        g_git_commit_msg[0]      = '\0';
+        g_git_commit_len         = 0;
+        log_ring_push("==> git: committing…");
+      }
+      return true;
+    }
+    if(sym == XKB_KEY_BackSpace) {
+      if(g_git_commit_len > 0) g_git_commit_msg[--g_git_commit_len] = '\0';
+      return true;
+    }
+    if(sym >= 0x20 && sym < 0x7f && g_git_commit_len < 254) {
+      g_git_commit_msg[g_git_commit_len++] = (char)sym;
+      g_git_commit_msg[g_git_commit_len]   = '\0';
+    }
+    return true;
+  }
   if(o->panel==PANEL_LOG && g_log_filter_mode){
     if(sym==XKB_KEY_Escape||sym==XKB_KEY_Return){ g_log_filter_mode=false; return true;}
     if(sym==XKB_KEY_BackSpace){
@@ -1157,6 +1353,28 @@ bool overlay_key(TrixieOverlay *o,xkb_keysym_t sym,uint32_t mods){
           char cmd[512]; snprintf(cmd,sizeof(cmd),"git restore --staged -- '%s' 2>/dev/null",g_git.files[o->cursor].path);
           system(cmd); g_git.valid=false;}
         return true;}
+      if(sym == XKB_KEY_c) {
+        g_git_commit_editing = true;
+        return true;
+      }
+      if(sym == XKB_KEY_A) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "cd '%s' && git add -A 2>/dev/null",
+                 g_git.root[0] ? g_git.root : ".");
+        git_run_async(cmd);
+        g_git.valid = false;
+        log_ring_push("==> git: staged all");
+        return true;
+      }
+      if(sym == XKB_KEY_p) {
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd),
+                 "cd '%s' && git push 2>&1 | tail -5",
+                 g_git.root[0] ? g_git.root : ".");
+        git_run_async(cmd);
+        log_ring_push("==> git: pushing…");
+        return true;
+      }
       return true;
 
     case PANEL_COMMANDS:
@@ -1471,11 +1689,34 @@ static void draw_panel_git(uint32_t *px,int stride,
   int ix=IX(bx), iy=IY(by), iw=IW(bw);
   char blabel[GIT_LINE_MAX+8]; snprintf(blabel,sizeof(blabel),"  %s",g_git.branch);
   ov_draw_text(px,stride,ix,ROW_TY(iy),stride,by+bh,blabel,ac.r,ac.g,ac.b,0xff);
-  const char *hint="r refresh  s stage  u unstage  d diff";
+
+  const char *hint =
+      g_git_commit_editing
+          ? "Enter=confirm  Esc=cancel"
+          : "r=refresh  s=stage  u=unstage  A=stage-all  d=diff  c=commit  p=push";
   ov_draw_text(px,stride,bx+bw-BDR-PAD-ov_measure(hint),ROW_TY(iy),stride,by+bh,hint,0x58,0x5b,0x70,0xff);
+
   int sep_y=iy+ROW_H;
   tui_hsep(px,stride,bx,sep_y,bw,NULL,ac,bg,stride,by+bh);
+
+  /* ── Commit input box (shown when editing or when a staged message exists) ── */
   int y=sep_y+ROW_H;
+  if(g_git_commit_editing || g_git_commit_msg[0]) {
+    int ciy = sep_y + ROW_H;
+    ov_fill_rect(px, stride, bx+BDR, ciy, bw-BDR*2, ROW_H+8,
+                 0x18, 0x18, 0x28, 0xa0, stride, by+bh);
+    char disp[280];
+    snprintf(disp, sizeof(disp), "commit › %s%s",
+             g_git_commit_msg,
+             g_git_commit_editing ? "▌" : "");
+    uint8_t cr = g_git_commit_editing ? ac.r : 0x74;
+    uint8_t cg = g_git_commit_editing ? ac.g : 0x78;
+    uint8_t cb = g_git_commit_editing ? ac.b : 0x92;
+    ov_draw_text(px, stride, ix, ROW_TY(ciy+4), stride, by+bh,
+                 disp, cr, cg, cb, 0xff);
+    y = sep_y + ROW_H + ROW_H + 8 + 2;
+  }
+
   int avail_h=bh-(y-by)-BDR-4;
   int visible_rows=avail_h/ROW_H;
   if(g_git.show_diff&&g_git.diff_count>0){
@@ -1687,19 +1928,30 @@ bool overlay_update(TrixieOverlay *o,TwmState *twm,const Config *cfg,BarWorkerPo
   if(!o||!overlay_visible(o)) return false; (void)pool;
   int w=o->w,h=o->h; if(w<=0||h<=0) return false;
 
-  static int64_t g_paint_next=0;
   int64_t now_ms=ov_now_ms();
+
+  /* Determine if this is a "live" panel that needs periodic auto-refresh. */
+  bool live = (o->panel==PANEL_LOG || o->panel==PANEL_PROCESSES ||
+               o->panel==PANEL_BUILD || o->panel==PANEL_GIT ||
+               o->panel==PANEL_MARVIN || o->panel==PANEL_RUN);
+
+  /* Mark dirty for the periodic live-panel tick (250ms). */
+  if(!o->dirty && live) {
+    static int64_t g_live_tick=0;
+    if((now_ms-g_live_tick)>=250){ g_live_tick=now_ms; o->dirty=true; }
+  }
+
+  /* Nothing to paint and nothing pending — let the compositor sleep.
+   * Return false so output_handle_frame does NOT call schedule_frame again.
+   * The next surface commit or input event will wake us up naturally. */
+  if(!o->dirty) return false;
+
+  /* Throttle repaints to ~30fps max (33ms).  If we're within the throttle
+   * window, return true to request ONE more frame (to paint when ready). */
+  static int64_t g_paint_next=0;
   if(now_ms < g_paint_next) return true;
   g_paint_next = now_ms + 33;
 
-  if(!o->dirty) {
-    bool live = (o->panel==PANEL_LOG || o->panel==PANEL_PROCESSES ||
-                 o->panel==PANEL_BUILD || o->panel==PANEL_GIT ||
-                 o->panel==PANEL_MARVIN || o->panel==PANEL_RUN);
-    static int64_t g_live_tick=0;
-    if(live && (now_ms-g_live_tick)>=250){ g_live_tick=now_ms; o->dirty=true; }
-  }
-  if(!o->dirty) return true;
   o->dirty=false;
 
   if(o->pending_ws_switch>=0&&twm){
@@ -1927,7 +2179,13 @@ bool overlay_update(TrixieOverlay *o,TwmState *twm,const Config *cfg,BarWorkerPo
       }
     }
   }
-  wlr_scene_buffer_set_buffer(o->scene_buf,&rb->base);
-  wlr_buffer_drop(&rb->base);
+  /* Upload the rendered frame.  ovb_create already set up ovb_impl_shared on
+   * the header so wlr_buffer_drop will free only the struct, not the pixel slab. */
+  wlr_scene_buffer_set_buffer(o->scene_buf,&s_ov_rb->base);
+  wlr_buffer_drop(&s_ov_rb->base);
+  /* Immediately re-create the header so s_ov_rb is valid for next frame. */
+  s_ov_rb         = calloc(1, sizeof(*s_ov_rb));
+  s_ov_rb->data   = s_ov_pixels;
+  s_ov_rb->stride = s_ov_px_w * 4;
   return true;
 }

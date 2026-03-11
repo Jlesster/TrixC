@@ -1,36 +1,14 @@
 /* lsp_panel.c — Aggregated LSP diagnostics panel for the Trixie overlay.
  *
- *
- *   ┌─ filter ──┬─ diagnostics ──────────────────────────┬─ detail ───────┐
- *   │ [E] Error │  main.c:42   undefined reference to … │  main.c        │
- *   │ [W] Warn  │  lib.rs:18   cannot borrow `x` as …   │  line 42       │
- *   │ [I] Info  │  App.java:7  method not found: foo()  │  clangd        │
- *   │ [H] Hint  │                                        │                │
- *   └───────────┴────────────────────────────────────────┴────────────────┘
- *
- * Features
- * ────────
- *   • Severity filter toggles (E/W/I/H keys)
- *   • Sort by severity (default) or by file (f key)
- *   • Grouping by file: press g to toggle
- *   • Enter → jump in nvim to diagnostic location
- *   • Diagnostic count badge shown in overlay tab bar
- *
- * Keys
- * ────
- *   j / k          navigate
- *   Enter          jump to location in nvim
- *   e              toggle error filter
- *   w              toggle warning filter
- *   i              toggle info filter
- *   h              toggle hint filter (h also navigates; use H to toggle hint)
- *   f              toggle sort: severity vs file
- *   g              toggle group-by-file
- *   r              force refresh from nvim
- *   Esc            reset filters / deselect
+ * Changes from original:
+ *   - Removed duplicate #include "nvim_panel.h"
+ *   - Added lsp_background_tick() for always-on snapshot refresh (2s interval)
+ *   - Added source/language-server filter (S key enters filter, Esc clears)
+ *   - Source badges shown in toolbar
+ *   - lsp_panel_tick no longer calls nvim_panel_poll (no-op in bridge mode,
+ *     and the poll interval is managed by nvim_panel itself)
  */
 
-#include "nvim_panel.h"
 #define _POSIX_C_SOURCE 200809L
 #include "nvim_panel.h"
 #include "overlay_internal.h"
@@ -42,20 +20,38 @@
 #include <string.h>
 #include <xkbcommon/xkbcommon.h>
 
-/* Forward-declare the nvim side types we depend on */
-void nvim_panel_poll(const OverlayCfg *);
-bool nvim_panel_key(int *, xkb_keysym_t, const OverlayCfg *);
-void nvim_open_file(const char *, int);
+void        nvim_panel_poll(const OverlayCfg *);
+bool        nvim_panel_key(int *, xkb_keysym_t, const OverlayCfg *);
+void        nvim_open_file(const char *, int);
+extern void nvim_get_diag_snapshot(LspDiagSnapshot *out, int max, int *count);
 
-/* Filled by lsp_snapshot_copy() which locks g_nv.lock briefly */
+/* ── Snapshot store ──────────────────────────────────────────────────────── */
 #define LSP_SNAP_MAX 256
 static LspDiagSnapshot g_snap[LSP_SNAP_MAX];
-static int             g_snap_count = 0;
-static pthread_mutex_t g_snap_lock  = PTHREAD_MUTEX_INITIALIZER;
+static int             g_snap_count    = 0;
+static pthread_mutex_t g_snap_lock     = PTHREAD_MUTEX_INITIALIZER;
+static int64_t         g_lsp_tick_next = 0; /* background refresh timer */
 
-/* ── Pull a snapshot from nvim_panel's live state ──────────────────────── */
-/* Declared extern — nvim_panel.c fills this in via its locking accessor.   */
-extern void nvim_get_diag_snapshot(LspDiagSnapshot *out, int max, int *count);
+/* ── Source list (unique sources seen in current snapshot) ───────────────── */
+#define LSP_SRC_MAX 16
+#define LSP_SRC_LEN 64
+static char g_lsp_sources[LSP_SRC_MAX][LSP_SRC_LEN];
+static int  g_lsp_src_count = 0;
+
+static void lsp_rebuild_sources(void) {
+  g_lsp_src_count = 0;
+  for(int i = 0; i < g_snap_count; i++) {
+    if(!g_snap[i].source[0]) continue;
+    bool found = false;
+    for(int j = 0; j < g_lsp_src_count; j++)
+      if(!strcmp(g_lsp_sources[j], g_snap[i].source)) {
+        found = true;
+        break;
+      }
+    if(!found && g_lsp_src_count < LSP_SRC_MAX)
+      strncpy(g_lsp_sources[g_lsp_src_count++], g_snap[i].source, LSP_SRC_LEN - 1);
+  }
+}
 
 /* ── Filter state ────────────────────────────────────────────────────────── */
 typedef struct {
@@ -63,20 +59,20 @@ typedef struct {
   bool show_warn;
   bool show_info;
   bool show_hint;
-  bool sort_by_file; /* false = sort by severity */
+  bool sort_by_file;
   bool group_by_file;
+  char source_filter[LSP_SRC_LEN]; /* empty = show all sources */
+  bool source_filter_editing;
 } LspFilter;
 
 static LspFilter g_lsp_filter = {
-  .show_error    = true,
-  .show_warn     = true,
-  .show_info     = true,
-  .show_hint     = false,
-  .sort_by_file  = false,
-  .group_by_file = false,
+  .show_error = true,
+  .show_warn  = true,
+  .show_info  = true,
+  .show_hint  = false,
 };
 
-/* Filtered + sorted view (indices into g_snap) */
+/* ── Filtered + sorted view ──────────────────────────────────────────────── */
 static int g_view[LSP_SNAP_MAX];
 static int g_view_count = 0;
 
@@ -89,12 +85,14 @@ static void lsp_rebuild_view(void) {
     if(sev == 2 && !g_lsp_filter.show_warn) continue;
     if(sev == 3 && !g_lsp_filter.show_info) continue;
     if(sev == 4 && !g_lsp_filter.show_hint) continue;
+    if(g_lsp_filter.source_filter[0] &&
+       strcmp(g_snap[i].source, g_lsp_filter.source_filter) != 0)
+      continue;
     g_view[g_view_count++] = i;
   }
-  /* Sort */
+  /* Insertion sort */
   for(int i = 1; i < g_view_count; i++) {
-    int key = g_view[i];
-    int j   = i - 1;
+    int key = g_view[i], j = i - 1;
     while(j >= 0) {
       bool before;
       if(g_lsp_filter.sort_by_file) {
@@ -116,7 +114,17 @@ static void lsp_refresh(void) {
   pthread_mutex_lock(&g_snap_lock);
   nvim_get_diag_snapshot(g_snap, LSP_SNAP_MAX, &g_snap_count);
   pthread_mutex_unlock(&g_snap_lock);
+  lsp_rebuild_sources();
   lsp_rebuild_view();
+}
+
+/* Called from overlay_update() unconditionally — keeps g_snap populated
+ * even when the LSP panel is not the active one (fixes empty-on-first-open). */
+void lsp_background_tick(void) {
+  int64_t now = ov_now_ms();
+  if(now < g_lsp_tick_next) return;
+  g_lsp_tick_next = now + 2000;
+  lsp_refresh();
 }
 
 /* ── Severity helpers ────────────────────────────────────────────────────── */
@@ -158,15 +166,6 @@ static const char *sev_label(int sev) {
     default: return "?";
   }
 }
-static const char *sev_name(int sev) {
-  switch(sev) {
-    case 1: return "error";
-    case 2: return "warning";
-    case 3: return "info";
-    case 4: return "hint";
-    default: return "?";
-  }
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Draw
@@ -187,10 +186,9 @@ void draw_panel_lsp(uint32_t         *px,
   int   y   = py0 + HEADER_H + PAD;
   int   bot = py0 + ph - PAD;
 
-  /* ── Toolbar ── */
+  /* ── Toolbar: counts + sort/group hints ── */
   {
-    char toolbar[256];
-    int  ec = 0, wc = 0;
+    int ec = 0, wc = 0;
     pthread_mutex_lock(&g_snap_lock);
     for(int i = 0; i < g_snap_count; i++) {
       if(g_snap[i].sev == 1)
@@ -200,14 +198,14 @@ void draw_panel_lsp(uint32_t         *px,
     }
     pthread_mutex_unlock(&g_snap_lock);
 
-    snprintf(
-        toolbar,
-        sizeof(toolbar),
-        " %d   %d  — e/w/i/H=filter  f=sort:%s  g=group:%s  r=refresh  Enter=jump",
-        ec,
-        wc,
-        g_lsp_filter.sort_by_file ? "file" : "sev",
-        g_lsp_filter.group_by_file ? "on" : "off");
+    char toolbar[320];
+    snprintf(toolbar,
+             sizeof(toolbar),
+             " %d   %d  e/w/i/H=filter  f=sort:%s  g=group:%s  S=source  r=refresh",
+             ec,
+             wc,
+             g_lsp_filter.sort_by_file ? "file" : "sev",
+             g_lsp_filter.group_by_file ? "on" : "off");
 
     uint8_t tr = ec > 0 ? 0xf3 : ac.r;
     uint8_t tg = ec > 0 ? 0x8b : ac.g;
@@ -217,7 +215,7 @@ void draw_panel_lsp(uint32_t         *px,
     y += ROW_H;
   }
 
-  /* ── Filter badges ── */
+  /* ── Severity filter badges ── */
   {
     struct {
       const char *label;
@@ -249,6 +247,144 @@ void draw_panel_lsp(uint32_t         *px,
     y += ROW_H;
   }
 
+  /* ── Source filter row (always visible; shows active filter or available sources)
+   * ── */
+  {
+    int bx = px0 + PAD;
+    if(g_lsp_filter.source_filter_editing) {
+      /* Input box for source filter */
+      char disp[LSP_SRC_LEN + 8];
+      snprintf(disp, sizeof(disp), "src › %s▌", g_lsp_filter.source_filter);
+      ov_fill_rect(px,
+                   stride,
+                   bx,
+                   y,
+                   pw - PAD * 2,
+                   ROW_H,
+                   0x18,
+                   0x18,
+                   0x28,
+                   0xa0,
+                   stride,
+                   bot);
+      ov_draw_text(px,
+                   stride,
+                   bx + 4,
+                   y + g_ov_asc,
+                   stride,
+                   bot,
+                   disp,
+                   ac.r,
+                   ac.g,
+                   ac.b,
+                   0xff);
+      /* Hint: list known sources */
+      if(g_lsp_src_count > 0) {
+        int sx = bx + ov_measure(disp) + PAD * 2;
+        for(int i = 0; i < g_lsp_src_count && sx < px0 + pw - PAD; i++) {
+          int sw = ov_measure(g_lsp_sources[i]);
+          ov_fill_rect(px,
+                       stride,
+                       sx - 2,
+                       y + 2,
+                       sw + 4,
+                       ROW_H - 4,
+                       ac.r,
+                       ac.g,
+                       ac.b,
+                       0x18,
+                       stride,
+                       bot);
+          ov_draw_text(px,
+                       stride,
+                       sx,
+                       y + g_ov_asc,
+                       stride,
+                       bot,
+                       g_lsp_sources[i],
+                       0x74,
+                       0x78,
+                       0x92,
+                       0xff);
+          sx += sw + 8;
+        }
+      }
+    } else if(g_lsp_filter.source_filter[0]) {
+      /* Active filter badge */
+      char badge[LSP_SRC_LEN + 16];
+      snprintf(badge,
+               sizeof(badge),
+               "src: %s  [S=edit  Esc=clear]",
+               g_lsp_filter.source_filter);
+      ov_fill_rect(px,
+                   stride,
+                   bx,
+                   y,
+                   ov_measure(badge) + PAD,
+                   ROW_H,
+                   ac.r,
+                   ac.g,
+                   ac.b,
+                   0x18,
+                   stride,
+                   bot);
+      ov_fill_rect(px, stride, bx, y, 2, ROW_H, ac.r, ac.g, ac.b, 0xff, stride, bot);
+      ov_draw_text(px,
+                   stride,
+                   bx + 6,
+                   y + g_ov_asc,
+                   stride,
+                   bot,
+                   badge,
+                   ac.r,
+                   ac.g,
+                   ac.b,
+                   0xff);
+    } else {
+      /* Available sources — dim, clickable hint */
+      ov_draw_text(px,
+                   stride,
+                   bx,
+                   y + g_ov_asc,
+                   stride,
+                   bot,
+                   "S=filter by source:",
+                   0x45,
+                   0x47,
+                   0x5a,
+                   0xff);
+      int sx = bx + ov_measure("S=filter by source:") + 8;
+      for(int i = 0; i < g_lsp_src_count && sx < px0 + pw - PAD; i++) {
+        int sw = ov_measure(g_lsp_sources[i]);
+        ov_draw_text(px,
+                     stride,
+                     sx,
+                     y + g_ov_asc,
+                     stride,
+                     bot,
+                     g_lsp_sources[i],
+                     0x74,
+                     0x78,
+                     0x92,
+                     0xff);
+        sx += sw + COL_GAP;
+      }
+      if(g_lsp_src_count == 0)
+        ov_draw_text(px,
+                     stride,
+                     sx,
+                     y + g_ov_asc,
+                     stride,
+                     bot,
+                     "(none detected)",
+                     0x31,
+                     0x32,
+                     0x44,
+                     0xff);
+    }
+    y += ROW_H;
+  }
+
   /* Separator */
   ov_fill_rect(px,
                stride,
@@ -266,8 +402,10 @@ void draw_panel_lsp(uint32_t         *px,
 
   /* ── Diagnostic list ── */
   if(g_view_count == 0) {
-    const char *empty = g_snap_count == 0 ? "no diagnostics — press r to refresh"
-                                          : "all diagnostics filtered";
+    const char *empty = g_snap_count == 0 ? "no diagnostics — nvim bridge connected?"
+                        : g_lsp_filter.source_filter[0]
+                            ? "no diagnostics match source filter (Esc to clear)"
+                            : "all diagnostics filtered";
     ov_draw_text(px,
                  stride,
                  px0 + PAD,
@@ -288,7 +426,6 @@ void draw_panel_lsp(uint32_t         *px,
 
     if(*cursor < 0) *cursor = 0;
     if(*cursor >= g_view_count) *cursor = g_view_count - 1;
-
     int scroll = *cursor - visible + 1;
     if(scroll < 0) scroll = 0;
 
@@ -304,12 +441,13 @@ void draw_panel_lsp(uint32_t         *px,
 
       if(sel) draw_cursor_line(px, stride, px0, ry, pw, ac, bg, stride, bot);
 
-      /* Group header */
       const char *base = strrchr(d->file, '/');
       base             = base ? base + 1 : d->file;
+
+      /* Group header */
       if(g_lsp_filter.group_by_file && base != last_file) {
         last_file = base;
-        if(i > 0) {
+        if(i > 0)
           ov_fill_rect(px,
                        stride,
                        px0 + PAD,
@@ -322,7 +460,6 @@ void draw_panel_lsp(uint32_t         *px,
                        0x20,
                        stride,
                        bot);
-        }
         ov_draw_text(px,
                      stride,
                      px0 + PAD,
@@ -370,36 +507,37 @@ void draw_panel_lsp(uint32_t         *px,
                    sel ? ac.b : 0xeb,
                    0xff);
 
-      /* source */
+      /* source tag — always shown so you can see which LSP is firing */
+      int msg_x = loc_x + ov_measure(loc) + COL_GAP;
       if(d->source[0]) {
-        int  src_x = loc_x + ov_measure(loc) + COL_GAP;
         char srcbuf[72];
         snprintf(srcbuf, sizeof(srcbuf), "[%s]", d->source);
+        /* Highlight if this matches the active source filter */
+        bool active_src = g_lsp_filter.source_filter[0] &&
+                          !strcmp(d->source, g_lsp_filter.source_filter);
         ov_draw_text(px,
                      stride,
-                     src_x,
+                     msg_x,
                      ry + g_ov_asc + 2,
                      stride,
                      bot,
                      srcbuf,
-                     0x45,
-                     0x47,
-                     0x5a,
+                     active_src ? ac.r : 0x45,
+                     active_src ? ac.g : 0x47,
+                     active_src ? ac.b : 0x5a,
                      0xff);
-        loc_x = src_x + ov_measure(srcbuf) + COL_GAP;
-      } else {
-        loc_x += ov_measure(loc) + COL_GAP;
+        msg_x += ov_measure(srcbuf) + COL_GAP;
       }
 
       /* message */
       char trunc[256];
       strncpy(trunc, d->msg, sizeof(trunc) - 1);
-      int avail = pw - PAD * 2 - (loc_x - px0);
+      int avail = pw - PAD * 2 - (msg_x - px0);
       while(ov_measure(trunc) > avail && strlen(trunc) > 3)
         trunc[strlen(trunc) - 1] = '\0';
       ov_draw_text(px,
                    stride,
-                   loc_x,
+                   msg_x,
                    ry + g_ov_asc + 2,
                    stride,
                    bot,
@@ -435,6 +573,40 @@ done:
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 bool lsp_panel_key(int *cursor, xkb_keysym_t sym, const OverlayCfg *ov_cfg) {
+  /* Source filter input mode */
+  if(g_lsp_filter.source_filter_editing) {
+    if(sym == XKB_KEY_Escape || sym == XKB_KEY_Return) {
+      g_lsp_filter.source_filter_editing = false;
+      lsp_rebuild_view();
+      return true;
+    }
+    if(sym == XKB_KEY_BackSpace) {
+      int l = (int)strlen(g_lsp_filter.source_filter);
+      if(l > 0) g_lsp_filter.source_filter[l - 1] = '\0';
+      return true;
+    }
+    /* Tab cycles through known sources */
+    if(sym == XKB_KEY_Tab && g_lsp_src_count > 0) {
+      int cur = -1;
+      for(int i = 0; i < g_lsp_src_count; i++)
+        if(!strcmp(g_lsp_sources[i], g_lsp_filter.source_filter)) {
+          cur = i;
+          break;
+        }
+      int next = (cur + 1) % g_lsp_src_count;
+      strncpy(g_lsp_filter.source_filter, g_lsp_sources[next], LSP_SRC_LEN - 1);
+      return true;
+    }
+    if(sym >= 0x20 && sym < 0x7f) {
+      int l = (int)strlen(g_lsp_filter.source_filter);
+      if(l < LSP_SRC_LEN - 1) {
+        g_lsp_filter.source_filter[l]     = (char)sym;
+        g_lsp_filter.source_filter[l + 1] = '\0';
+      }
+    }
+    return true;
+  }
+
   if(sym == XKB_KEY_j || sym == XKB_KEY_Down) {
     (*cursor)++;
     return true;
@@ -471,7 +643,7 @@ bool lsp_panel_key(int *cursor, xkb_keysym_t sym, const OverlayCfg *ov_cfg) {
     lsp_rebuild_view();
     return true;
   }
-  if(sym == XKB_KEY_H) { /* capital H to avoid nav conflict */
+  if(sym == XKB_KEY_H) {
     g_lsp_filter.show_hint = !g_lsp_filter.show_hint;
     lsp_rebuild_view();
     return true;
@@ -485,31 +657,47 @@ bool lsp_panel_key(int *cursor, xkb_keysym_t sym, const OverlayCfg *ov_cfg) {
     g_lsp_filter.group_by_file = !g_lsp_filter.group_by_file;
     return true;
   }
-  if(sym == XKB_KEY_r) {
-    lsp_refresh();
-    nvim_panel_poll(ov_cfg);
+
+  if(sym == XKB_KEY_S) {
+    g_lsp_filter.source_filter_editing = true;
+    /* Don't clear existing filter — allow editing it */
     return true;
   }
+
+  if(sym == XKB_KEY_r) {
+    lsp_refresh();
+    return true;
+  }
+
   if(sym == XKB_KEY_Escape) {
-    *cursor                 = 0;
-    g_lsp_filter.show_error = true;
-    g_lsp_filter.show_warn  = true;
-    g_lsp_filter.show_info  = true;
-    g_lsp_filter.show_hint  = false;
-    lsp_rebuild_view();
+    *cursor = 0;
+    if(g_lsp_filter.source_filter[0]) {
+      /* First Esc clears source filter */
+      g_lsp_filter.source_filter[0] = '\0';
+      lsp_rebuild_view();
+    } else {
+      /* Second Esc resets all filters */
+      g_lsp_filter.show_error = true;
+      g_lsp_filter.show_warn  = true;
+      g_lsp_filter.show_info  = true;
+      g_lsp_filter.show_hint  = false;
+      lsp_rebuild_view();
+    }
     return true;
   }
 
   return true;
 }
 
-/* Called from overlay_update() each frame */
+/* Called from overlay_update() each frame when panel is active */
 void lsp_panel_tick(const OverlayCfg *ov_cfg) {
-  nvim_panel_poll(ov_cfg);
+  /* Don't call nvim_panel_poll here — in bridge mode it's a no-op,
+   * and in poll mode nvim_panel.c manages its own interval.
+   * Just ensure the view is up to date. */
+  (void)ov_cfg;
   lsp_refresh();
 }
 
-/* Badge string for the tab bar — declared in lsp_panel.h */
 const char *lsp_tab_badge(void) {
   static char badge[16];
   int         ec = nvim_error_count();

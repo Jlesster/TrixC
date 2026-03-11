@@ -1,4 +1,4 @@
-Build started at 2026-03-10T03:24:10.430038
+Build started at 2026-03-11T20:01:52.068107
 Main binary: /usr/bin/python
 Build Options: 
 Python system: Linux
@@ -69,11 +69,11 @@ Build targets in project: 21
 
 Found ninja-1.13.2 at /usr/sbin/ninja
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgbttcdgc
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpjt2bq8j1
 Code:
 
 -----------
-Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgbttcdgc/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpgbttcdgc/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
+Command line: `cc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpjt2bq8j1/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpjt2bq8j1/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
 stdout:
 install: /usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/
 programs: =/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/x86_64-pc-linux-gnu/15.2.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/15.2.1/../../../../x86_64-pc-linux-gnu/bin/

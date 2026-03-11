@@ -11,7 +11,7 @@
  *   exec-once = dunst
  *   exec      = nm-applet
  *
- * Keybinds (Hypr
+ * Keybinds (Hyprland syntax):
  *   bind = SUPER, t, exec, kitty
  *   bind = SUPER SHIFT, f, togglefloating
  *   bind = , xf86audioraisevolume, exec, wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+
@@ -30,7 +30,10 @@
  *   }
  *
  *   scratchpad music {
- *       app_id = pear-desktop
+ *       app_id = pear-desktop          # exact app_id match (default)
+ *       app_id = title:~ncmpcpp        # title contains "ncmpcpp"
+ *       app_id = class:fire*           # app_id glob
+ *       app_id = title:*Music Player*  # title glob
  *       size   = 80%, 75%
  *   }
  *
@@ -395,7 +398,8 @@ static Token lex_raw(Lexer *l) {
 
   /* bare word — alnum plus chars that appear in paths, keysyms, colors */
   if(isalnum((unsigned char)c) || c == '-' || c == '_' || c == '#' || c == '@' ||
-     c == '~' || c == '.' || c == '/' || c == '%' || c == ':' || c == '+') {
+     c == '~' || c == '.' || c == '/' || c == '%' || c == ':' || c == '+' ||
+     c == '*' || c == '?') {
     int i = 0;
     while(l->src[l->pos] && l->src[l->pos] != '=' && l->src[l->pos] != ',' &&
           l->src[l->pos] != '{' && l->src[l->pos] != '}' && l->src[l->pos] != '\n' &&
@@ -483,18 +487,6 @@ static void strtrim(char *s) {
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §5  collect_vals
- *
- * Reads ALL remaining T_WORD tokens on the current logical line into cv.s[].
- * Commas are eaten as separators; spaces already split words in the lexer.
- * Stops at T_NEWLINE, T_EOF, T_RBRACE.
- * `first` (already consumed by the caller) goes into cv.s[0].
- *
- * This single mechanism handles:
- *   "a, b, c"         → [a][b][c]
- *   "a b c"           → [a][b][c]
- *   "size 900 550"    → [size][900][550]
- *   "80%, 75%"        → [80%][75%]
- *   "[workspaces]"    → [workspaces]   (brackets stripped by lexer)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 #define CV_MAX 32
@@ -700,7 +692,6 @@ static void parse_bind(Config *c, Lexer *l, const char *eq_val) {
   } else if(!strcasecmp(act_str, "emergency_quit") ||
             !strcasecmp(act_str, "emergencyquit")) {
     act.kind = ACTION_EMERGENCY_QUIT;
-    /* FIX/FEATURE: resize_ratio action (Feature 3) */
   } else if(!strcasecmp(act_str, "resize_ratio")) {
     act.kind        = ACTION_RESIZE_RATIO;
     act.ratio_delta = *a0 ? (float)atof(a0) : 0.05f;
@@ -1029,7 +1020,6 @@ static void parse_block(Lexer      *l,
           OPEN_BAR_MODULE(lbl);
         } else if(!strcmp(key, "dev_lang")) {
           OPEN_DEV_LANG(lbl);
-          /* FEATURE 1: "workspace N { layout = ... ratio = ... }" */
         } else if(!strcmp(key, "workspace") && !block[0]) {
           int ws_idx = atoi(lbl) - 1;
           if(ws_idx >= 0 && ws_idx < MAX_WORKSPACES) {
@@ -1048,9 +1038,9 @@ static void parse_block(Lexer      *l,
               }
               Token vv = lex_next(l);
               if(!strcmp(kk.s, "layout")) {
-                Layout lv = LAYOUT_BSP;
-                if(!strcasecmp(vv.s, "spiral"))
-                  lv = LAYOUT_SPIRAL;
+                Layout lv = LAYOUT_DWINDLE;
+                if(!strcasecmp(vv.s, "dwindle"))
+                  lv = LAYOUT_DWINDLE;
                 else if(!strcasecmp(vv.s, "columns"))
                   lv = LAYOUT_COLUMNS;
                 else if(!strcasecmp(vv.s, "rows"))
@@ -1175,8 +1165,6 @@ static void parse_block(Lexer      *l,
       continue;
     }
     if(!strcmp(key, "build_dir") && !block[0]) {
-      /* Path to the build directory for hot-reload (ninja is run here).
-       * Tilde expansion is handled: ~/foo -> /home/user/foo            */
       char expanded[512] = { 0 };
       if(val[0] == '~' && (val[1] == '/' || val[1] == '\0')) {
         const char *home = getenv("HOME");
@@ -1396,10 +1384,9 @@ static void parse_block(Lexer      *l,
           b->sep_style = SEP_NONE;
       } else if(!strcmp(bk, "powerline")) {
         b->sep_style = str_to_bool(val) ? SEP_ARROW : SEP_NONE;
-        /* FIX 3: modules_* reset-in-loop bug — reset once, before the copy loop */
       } else if(!strcmp(bk, "modules_left") || !strcmp(bk, "modules-left")) {
         CVals cv          = collect_vals(l, val);
-        b->modules_left_n = 0; /* reset once */
+        b->modules_left_n = 0;
         for(int i = 0; i < cv.n && b->modules_left_n < MAX_BAR_MODS; i++)
           if(cv.s[i][0]) strncpy(b->modules_left[b->modules_left_n++], cv.s[i], 63);
       } else if(!strcmp(bk, "modules_center") || !strcmp(bk, "modules-center")) {
@@ -1455,13 +1442,24 @@ static void parse_block(Lexer      *l,
     /* ── scratchpad block form ── */
     else if(!strcmp(block, "scratchpad") && c->scratchpad_count > 0) {
       ScratchpadCfg *sp = &c->scratchpads[c->scratchpad_count - 1];
-      if(!strcmp(bk, "app_id") || !strcmp(bk, "class"))
+      if(!strcmp(bk, "app_id") || !strcmp(bk, "class")) {
+        /* Store the raw pattern string as-is; twm_register_scratch will parse
+         * it into a ScratchPattern via scratch_parse_pattern().
+         * Supported forms:
+         *   app_id = kitty                  exact app_id (default)
+         *   app_id = title:~ncmpcpp         title contains
+         *   app_id = class:fire*            app_id glob
+         *   app_id = title:*Music Player*   title glob              */
         strncpy(sp->app_id, val, sizeof(sp->app_id) - 1);
-      else if(!strcmp(bk, "exec"))
+      } else if(!strcmp(bk, "title")) {
+        /* Convenience: title = foo  →  app_id = title:foo
+         * Respects ~ (substr) and glob syntax in the value. */
+        snprintf(sp->app_id, sizeof(sp->app_id), "title:%s", val);
+      } else if(!strcmp(bk, "exec")) {
         strncpy(sp->exec, val, sizeof(sp->exec) - 1);
-      else if(!strcmp(bk, "name"))
+      } else if(!strcmp(bk, "name")) {
         strncpy(sp->name, val, sizeof(sp->name) - 1);
-      else if(!strcmp(bk, "width")) {
+      } else if(!strcmp(bk, "width")) {
         float v       = parse_pct_or_float(val);
         sp->width_pct = (v > 1.f) ? v / 100.f : v;
         if(sp->width_pct < 0.05f) sp->width_pct = 0.6f;
@@ -1476,13 +1474,18 @@ static void parse_block(Lexer      *l,
         if(sv.n >= 1) {
           float w       = parse_pct_or_float(sv.s[0]);
           sp->width_pct = (w > 1.f) ? w / 100.f : w;
+          if(sp->width_pct < 0.05f) sp->width_pct = 0.6f;
+          if(sp->width_pct > 1.0f) sp->width_pct = 1.0f;
         }
         if(sv.n >= 2) {
           float h        = parse_pct_or_float(sv.s[1]);
           sp->height_pct = (h > 1.f) ? h / 100.f : h;
+          if(sp->height_pct < 0.05f) sp->height_pct = 0.6f;
+          if(sp->height_pct > 1.0f) sp->height_pct = 1.0f;
         }
-      } else
+      } else {
         wlr_log(WLR_DEBUG, "config: unknown key '%s' in scratchpad", key);
+      }
     }
 
     /* ── bar_module block form ── */
@@ -1517,7 +1520,6 @@ static void parse_block(Lexer      *l,
       else if(!strcmp(bk, "nvim_listen_addr") || !strcmp(bk, "nvim_listen"))
         strncpy(ov->nvim_listen_addr, val, sizeof(ov->nvim_listen_addr) - 1);
       else if(!strcmp(bk, "project_root") || !strcmp(bk, "root")) {
-        /* Expand ~/  */
         if(!strncmp(val, "~/", 2)) {
           const char *home = getenv("HOME");
           if(!home) home = "/root";
@@ -1537,7 +1539,6 @@ static void parse_block(Lexer      *l,
 
     /* ── dev_lang block ── */
     else if(!strcmp(block, "dev_lang")) {
-      /* label holds the language name; find the matching DevLangCfg entry */
       DevLangCfg *lc = NULL;
       for(int _i = 0; _i < c->overlay.lang_count; _i++) {
         if(!strcasecmp(c->overlay.langs[_i].name, label)) {
@@ -1779,7 +1780,6 @@ static void overlay_cfg_defaults(OverlayCfg *ov) {
   ov->lsp_diagnostics = true;
   ov->lsp_poll_ms     = 2000;
 
-  /* Built-in per-language presets — overridable via dev_lang blocks */
   static const struct {
     const char *name, *build, *run, *test, *fmt, *lint, *lsp;
   } presets[] = {
@@ -1840,7 +1840,7 @@ void config_defaults(Config *c) {
   c->idle_timeout = 0;
   c->xwayland     = false;
 
-  c->saturation     = 1.0f; /* neutral — no colour change */
+  c->saturation     = 1.0f;
   c->shader_enabled = true;
 
   c->colors.active_border   = color_hex(0x94e2d5);
