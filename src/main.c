@@ -386,22 +386,10 @@ static void view_apply_geom(TrixieServer *s, TrixieView *v, Pane *p) {
                                    (int16_t)(p->rect.y + bw + th),
                                    (uint16_t)cw,
                                    (uint16_t)ch);
-    /*
-     * Do NOT call wlr_scene_node_set_position or set_enabled here.
-     * server_sync_windows owns the scene node position and visibility for
-     * every mapped view — it will place the node at the correct animated
-     * position (off-screen at t=0) on the very next frame.  Enabling the
-     * node here at p->rect caused the one-frame chrome pop.
-     */
     return;
   }
 #endif
-  wlr_xdg_toplevel_set_activated(v->xdg_toplevel, true);
   wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
-  /*
-   * Same as above — do not set position or enable here.
-   * server_sync_windows will position and enable on the next animating frame.
-   */
 }
 
 /* ── Spawn ────────────────────────────────────────────────────────────────── */
@@ -467,6 +455,9 @@ void server_focus_pane(TrixieServer *s, PaneId id) {
     if(fv->is_xwayland && fv->xwayland_surface && fv != v)
       wlr_xwayland_surface_activate(fv->xwayland_surface, false);
 #endif
+    /* Broadcast activation to every XDG toplevel so toolkits repaint. */
+    if(!fv->is_xwayland && fv->xdg_toplevel && fv->mapped)
+      wlr_xdg_toplevel_set_activated(fv->xdg_toplevel, fv == v);
   }
 }
 
@@ -499,10 +490,7 @@ void server_sync_windows(TrixieServer *s) {
 
     bool on_ws = false;
     for(int i = 0; i < ws->pane_count; i++)
-      if(ws->panes[i] == v->pane_id) {
-        on_ws = true;
-        break;
-      }
+      if(ws->panes[i] == v->pane_id) { on_ws = true; break; }
 
     bool is_closing = anim_is_closing(&s->anim, v->pane_id);
 
@@ -530,11 +518,17 @@ void server_sync_windows(TrixieServer *s) {
     wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
 
     bool  is_focused = (v->pane_id == focused_id);
-    /* Use the cached rule opacity (set at map time / rule reload).
-     * Fall back to scanning only when not cached (opacity == 0.0 sentinel). */
-    float opacity = p->rule_opacity > 0.0f ? p->rule_opacity : 1.0f;
-    if(p->rule_opacity == 0.0f) {
-      /* Cache miss — scan once and store. */
+
+    /* ── Opacity resolution (fixed sentinel ordering) ─────────────────── */
+    float opacity;
+    if(p->rule_opacity > 0.0f) {
+      /* Cached rule matched. */
+      opacity = p->rule_opacity;
+    } else if(p->rule_opacity < 0.0f) {
+      /* Previously scanned, no rule matched. */
+      opacity = 1.0f;
+    } else {
+      /* Cache miss (== 0.0f sentinel) — scan once and store. */
       opacity = 1.0f;
       for(int ri = 0; ri < s->cfg.win_rule_count; ri++) {
         WinRule *wr = &s->cfg.win_rules[ri];
@@ -543,12 +537,12 @@ void server_sync_windows(TrixieServer *s) {
           break;
         }
       }
-      p->rule_opacity = opacity > 0.0f ? opacity : -1.0f; /* -1 = scanned, no rule */
-    } else if(p->rule_opacity < 0.0f) {
-      opacity = 1.0f; /* scanned previously, no rule matched */
+      p->rule_opacity = opacity > 0.0f ? opacity : -1.0f;
     }
+    /* Dim unfocused tiled windows only — floating/fullscreen always full. */
     if(opacity >= 1.0f && !is_focused && !p->floating && !p->fullscreen)
       opacity = 0.88f;
+
     /* For floating panes mid-open/close animation, blend in the fade opacity. */
     if(p->floating || is_closing) {
       float fade_op = anim_get_opacity(&s->anim, v->pane_id, -1.0f);
@@ -559,20 +553,14 @@ void server_sync_windows(TrixieServer *s) {
 #else
     (void)opacity;
 #endif
+
     if(!is_closing) {
       int cfg_w = p->rect.w - bw * 2;
       int cfg_h = p->rect.h - bw * 2 - th;
       if(cfg_w < 1) cfg_w = 1;
       if(cfg_h < 1) cfg_h = 1;
 
-      /* BUGFIX: skip configure at animation frame 0 (rect not yet on-screen).
-       * anim_progress == 0 means we just started; send the real size only once
-       * the pane is actually visible to avoid a 1×1 configure race. */
-      AnimEntry *ae        = NULL;
-      /* peek at the anim set without exposing internals — check if the pane
-       * has an active OPEN animation at t==0 by testing anim_get_rect
-       * returning the off-screen start rect exactly. */
-      bool       at_frame0 = false;
+      bool at_frame0 = false;
       {
         Rect got = anim_get_rect(&s->anim, v->pane_id, p->rect);
         if(got.x + got.w <= 0 || got.y + got.h <= 0 || got.x >= s->twm.screen_w ||
@@ -962,8 +950,22 @@ void server_apply_config_reload(TrixieServer *s) {
   }
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) {
-    if(o->bar) bar_mark_dirty(o->bar);
-    if(o->overlay) overlay_resize(o->overlay, o->logical_w, o->logical_h);
+      /* re-resolve saturation + shader_enabled per output */
+      float sat   = s->cfg.saturation;
+      bool  sh_on = s->cfg.shader_enabled;
+      for(int i = 0; i < s->cfg.monitor_count; i++) {
+          MonitorCfg *mcfg = &s->cfg.monitors[i];
+          if(!strcmp(mcfg->name, o->wlr_output->name) && mcfg->shader_set) {
+              if(mcfg->saturation > 0.0f) sat = mcfg->saturation;
+              sh_on = mcfg->shader_enabled;
+              break;
+          }
+      }
+      o->saturation     = sat;
+      o->shader_enabled = sh_on;
+
+      if(o->bar) bar_mark_dirty(o->bar);
+      if(o->overlay) overlay_resize(o->overlay, o->logical_w, o->logical_h);
   }
   twm_reflow(&s->twm);
   server_sync_windows(s);
@@ -1437,8 +1439,33 @@ static void update_cursor_focus(TrixieServer *s, uint32_t time) {
   struct wlr_surface *surface = NULL;
   double              sx = 0, sy = 0;
 
+#ifdef HAS_XWAYLAND
+  /* Check unmanaged (override_redirect) XWayland surfaces first — they sit
+   * above managed windows and must receive pointer events for menus/tooltips. */
+  {
+    TrixieView *uv;
+    wl_list_for_each(uv, &s->views, link) {
+      if(!uv->is_xwayland || !uv->xwayland_surface) continue;
+      if(!uv->xwayland_surface->override_redirect) continue;
+      if(!uv->mapped) continue;
+      struct wlr_xwayland_surface *xs = uv->xwayland_surface;
+      int x = xs->x, y = xs->y, w = xs->width, h = xs->height;
+      if((int)cx >= x && (int)cx < x + w && (int)cy >= y && (int)cy < y + h) {
+        struct wlr_scene_node *node =
+            wlr_scene_node_at(&s->scene->tree.node, cx, cy, &sx, &sy);
+        if(node && node->type == WLR_SCENE_NODE_BUFFER) {
+          struct wlr_scene_buffer  *sb = wlr_scene_buffer_from_node(node);
+          struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(sb);
+          if(ss) surface = ss->surface;
+        }
+        if(surface) break;
+      }
+    }
+  }
+#endif
+
   PaneId pid = pane_at_cursor(s, cx, cy);
-  if(pid) {
+  if(!surface && pid) {
     TrixieView *v = view_from_pane(s, pid);
     if(v && v->mapped) {
       struct wlr_scene_node *node =
@@ -1634,14 +1661,6 @@ static void handle_request_set_primary_selection(struct wl_listener *listener,
 /* ── XDG Popups (context menus, tooltips, dropdowns) ─────────────────────── */
 
 static void handle_new_xdg_popup(struct wl_listener *listener, void *data) {
-  /* Fired for every xdg_popup the shell creates — context menus, dropdowns,
-   * autocomplete, tooltips.  We must attach it to its parent's scene tree so
-   * wlroots can render it and apply the XDG positioner geometry correctly.
-   *
-   * The parent is almost always an xdg_toplevel whose scene_tree was stored
-   * in xdg_surface->data by wlr_scene_xdg_surface_create.  If for some reason
-   * the parent chain isn't an xdg_surface (e.g. a layer-shell surface spawning
-   * a popup) we fall back to layer_floating so the popup is still visible. */
   TrixieServer         *s     = CONTAINER_OF(listener, TrixieServer, new_xdg_popup);
   struct wlr_xdg_popup *popup = data;
 
@@ -1660,7 +1679,17 @@ static void handle_new_xdg_popup(struct wl_listener *listener, void *data) {
   if(!scene_tree) return;
 
   popup->base->data = scene_tree;
-  /* Raise above all siblings so the popup is never obscured. */
+
+  /* Constrain popup to output geometry so the XDG positioner repositions it
+   * if it would clip a screen edge, rather than rendering off-screen. */
+  struct wlr_output *output =
+      wlr_output_layout_output_at(s->output_layout, s->cursor->x, s->cursor->y);
+  if(output) {
+    struct wlr_box output_box;
+    wlr_output_layout_get_box(s->output_layout, output, &output_box);
+    wlr_xdg_popup_unconstrain_from_box(popup, &output_box);
+  }
+
   wlr_scene_node_raise_to_top(&scene_tree->node);
 }
 
@@ -1977,11 +2006,9 @@ static void handle_new_layer_surface(struct wl_listener *listener, void *data) {
 
 /* ── XDG shell — shared view map/unmap helpers ───────────────────────────── */
 
-/* Apply window rules and open animations for a newly mapped view.
- * Works for both XDG and XWayland views; caller provides app_id and title. */
-static void view_do_map(
-    TrixieServer *s, TrixieView *v, Pane *p, const char *app_id, const char *title) {
-  /* Apply window rules */
+static void view_apply_rules(TrixieServer *s, TrixieView *v, Pane *p,
+                              const char *app_id, const char *title) {
+  (void)v;
   for(int i = 0; i < s->cfg.win_rule_count; i++) {
     WinRule    *r     = &s->cfg.win_rules[i];
     bool        match = false;
@@ -2012,6 +2039,13 @@ static void view_do_map(
       p->float_rect.y = r->forced_y;
     }
   }
+}
+
+/* Apply window rules and open animations for a newly mapped view.
+ * Works for both XDG and XWayland views; caller provides app_id and title. */
+static void view_do_map(
+    TrixieServer *s, TrixieView *v, Pane *p, const char *app_id, const char *title) {
+  view_apply_rules(s, v, p, app_id, title);
   twm_reflow(&s->twm);
 
   struct wlr_scene_tree *tgt =
@@ -2019,20 +2053,6 @@ static void view_do_map(
   wlr_scene_node_reparent(&v->scene_tree->node, tgt);
   wlr_scene_node_raise_to_top(&v->scene_tree->node);
 
-  /*
-   * Register the open animation BEFORE view_apply_geom.
-   *
-   * Previously the order was: reflow → apply_geom → anim_open.
-   * apply_geom placed the window scene node at its final on-screen position.
-   * The animation entry didn't exist yet, so on that first rendered frame
-   * deco_update saw the pane in ws->panes[] with no active animation and
-   * placed borders at p->rect — one frame of chrome at the final position
-   * before server_sync_windows could move everything off-screen on the next
-   * frame.  By registering the anim first, server_sync_windows (which runs
-   * before deco_update on every animating frame) moves the scene node to the
-   * off-screen start position on the very same frame, and anim_is_opening
-   * suppresses borders from frame 0 with no visible pop.
-   */
   bool is_scratch = false;
   for(int i = 0; i < s->twm.scratch_count; i++)
     if(s->twm.scratchpads[i].has_pane &&
@@ -2050,7 +2070,6 @@ static void view_do_map(
 
   view_apply_geom(s, v, p);
 
-  /* Register foreign toplevel */
   if(s->foreign_toplevel_mgr) {
     v->foreign_handle =
         wlr_foreign_toplevel_handle_v1_create(s->foreign_toplevel_mgr);
@@ -2181,15 +2200,22 @@ static void view_handle_set_title(struct wl_listener *listener, void *data) {
     const char *new_title = v->xdg_toplevel->title;
     Pane       *p         = twm_pane_by_id(&v->server->twm, v->pane_id);
 
-    /* Update pane title and check if this is the first real title. */
     bool first_title = p && (p->title[0] == '\0' || strcmp(p->title, p->app_id) == 0);
     twm_set_title(&v->server->twm, v->pane_id, new_title);
 
-    /* Re-apply title-based window rules now that we have a real title.
-     * At surface-create time only app_id rules run; title rules are deferred. */
     if(first_title && p && v->mapped) {
       const char *app_id = v->xdg_toplevel->app_id ? v->xdg_toplevel->app_id : "";
-      view_do_map(v->server, v, p, app_id, new_title);
+      bool was_float = p->floating;
+      view_apply_rules(v->server, v, p, app_id, new_title);
+      if(p->floating != was_float) {
+        struct wlr_scene_tree *tgt =
+            p->floating ? v->server->layer_floating : v->server->layer_windows;
+        wlr_scene_node_reparent(&v->scene_tree->node, tgt);
+        wlr_scene_node_raise_to_top(&v->scene_tree->node);
+        view_apply_geom(v->server, v, p);
+        server_reflow_with_morph(v->server);
+      }
+      lua_apply_window_rules(v->server, p, app_id, new_title);
     }
 
     bool claimed = twm_try_assign_scratch(&v->server->twm, v->pane_id, new_title);
@@ -2211,16 +2237,24 @@ static void view_handle_set_app_id(struct wl_listener *listener, void *data) {
   if(v->xdg_toplevel && v->xdg_toplevel->app_id) {
     Pane *p = twm_pane_by_id(&v->server->twm, v->pane_id);
     if(p) {
-      const char *new_id = v->xdg_toplevel->app_id;
-      bool changed = strncmp(p->app_id, new_id, sizeof(p->app_id) - 1) != 0;
+      const char *new_id  = v->xdg_toplevel->app_id;
+      bool        changed = strncmp(p->app_id, new_id, sizeof(p->app_id) - 1) != 0;
       strncpy(p->app_id, new_id, sizeof(p->app_id) - 1);
       p->app_id[sizeof(p->app_id) - 1] = '\0';
 
-      /* Re-apply window rules now that we have the real app_id.
-       * Many apps (Electron, browsers) set app_id late after map. */
       if(changed && v->mapped) {
         const char *title = v->xdg_toplevel->title ? v->xdg_toplevel->title : "";
-        view_do_map(v->server, v, p, new_id, title);
+        bool was_float = p->floating;
+        view_apply_rules(v->server, v, p, new_id, title);
+        if(p->floating != was_float) {
+          struct wlr_scene_tree *tgt =
+              p->floating ? v->server->layer_floating : v->server->layer_windows;
+          wlr_scene_node_reparent(&v->scene_tree->node, tgt);
+          wlr_scene_node_raise_to_top(&v->scene_tree->node);
+          view_apply_geom(v->server, v, p);
+          server_reflow_with_morph(v->server);
+        }
+        lua_apply_window_rules(v->server, p, new_id, title);
       }
     }
     bool claimed = twm_try_assign_scratch(&v->server->twm, v->pane_id,
@@ -2234,19 +2268,12 @@ static void view_handle_set_app_id(struct wl_listener *listener, void *data) {
 }
 
 static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
-  TrixieServer            *s = CONTAINER_OF(listener, TrixieServer, new_xdg_surface);
+  TrixieServer            *s        = CONTAINER_OF(listener, TrixieServer, new_xdg_surface);
   struct wlr_xdg_toplevel *toplevel = data;
   struct wlr_xdg_surface  *surface  = toplevel->base;
 
   const char *app_id = toplevel->app_id ? toplevel->app_id : "";
 
-  /*
-   * Pre-scan window rules for float/fullscreen BEFORE calling twm_open_ex so
-   * the pane is born with the correct classification.  twm_reflow (called
-   * inside twm_open_ex) must see p->floating == true on its first pass or it
-   * assigns a tiled slot, which causes a visible tiled→floating pop on the
-   * very first rendered frame.
-   */
   bool init_float      = false;
   bool init_fullscreen = false;
   for(int i = 0; i < s->cfg.win_rule_count; i++) {
@@ -2254,8 +2281,7 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
     const char *pat   = r->app_id;
     bool        match = false;
     if(!strncmp(pat, "title:", 6)) {
-      /* Title isn't available yet at surface-create time; skip title rules here.
-       * view_do_map will re-apply them at map time when the title is known. */
+      /* Title not available yet — skip; view_do_map re-applies at map time. */
     } else {
       match = pat[0] && strstr(app_id, pat) != NULL;
     }
@@ -2265,14 +2291,17 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   }
 
   PaneId pane_id = twm_open_ex(&s->twm, app_id, init_float, init_fullscreen);
-
-  /* BUGFIX: if pane pool is full, reject the surface immediately. */
   if(pane_id == 0) {
     wlr_log(WLR_ERROR, "MAX_PANES hit — closing incoming surface");
     wlr_xdg_toplevel_send_close(toplevel);
     return;
   }
 
+  /* Advertise compositor capabilities before the first configure.
+   * GTK4/libadwaita reads this to decide chrome layout and button visibility. */
+  wlr_xdg_toplevel_set_wm_capabilities(toplevel,
+      WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE |
+      WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
   wlr_xdg_toplevel_set_activated(toplevel, false);
   wlr_xdg_toplevel_set_tiled(
       toplevel, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
@@ -2413,10 +2442,9 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
 }
 
 static void xwayland_handle_commit(struct wl_listener *listener, void *data) {
+  (void)listener;
   (void)data;
-  TrixieView   *v = CONTAINER_OF(listener, TrixieView, commit);
-  TrixieServer *s = v->server;
-  server_request_redraw(s);
+  /* wlroots schedules the frame automatically on surface damage — no-op. */
 }
 
 static void xwayland_handle_request_fullscreen(struct wl_listener *listener,

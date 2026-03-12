@@ -264,23 +264,26 @@ PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating, bool fullscre
   p->fullscreen = fullscreen;
   strncpy(p->app_id, app_id, sizeof(p->app_id) - 1);
   strncpy(p->title, app_id, sizeof(p->title) - 1);
+
+  /* Pre-initialise float_rect so floating windows don't start at 0,0.
+   * view_do_map will override this with any forced sizes / rule positions. */
+  if(floating) {
+    int fw        = t->screen_w / 2;
+    int fh        = t->screen_h / 2;
+    p->float_rect = (Rect){ (t->screen_w - fw) / 2, (t->screen_h - fh) / 2, fw, fh };
+    p->rect       = p->float_rect;
+  }
+
   pane_ht_insert(p->id, p);
 
   Workspace *ws = &t->workspaces[t->active_ws];
 
-  /* Capture the previously focused tiled pane BEFORE updating focus.
-   * This is the leaf dwindle will split — must be read here, before
-   * ws->focused is overwritten to the new pane below.                    */
   PaneId prev_focused = ws->has_focused ? ws->focused : 0;
 
   ws->panes[ws->pane_count++] = p->id;
   ws->focused                 = p->id;
   ws->has_focused             = true;
 
-  /* For tiled panes on a dwindle workspace: insert directly into the tree
-   * now, splitting prev_focused.  This must happen before twm_reflow so
-   * dwindle_sync sees the leaf already present and does NOT re-insert it
-   * using the (wrong) currently-focused id.                              */
   if(!floating && !fullscreen && ws->layout == LAYOUT_DWINDLE)
     dwindle_insert(&ws->dwindle, p->id, prev_focused, t->content_rect, t->gap);
 
