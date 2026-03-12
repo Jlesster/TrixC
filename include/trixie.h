@@ -682,9 +682,21 @@ void twm_register_scratch(TwmState   *t,
 bool twm_try_assign_scratch(TwmState *t, PaneId id, const char *app_id);
 void twm_toggle_scratch(TwmState *t, const char *name);
 
+/* Uses bar_font_height() (defined in bar.c) so the title bar stays in sync
+ * with the status bar font.  Hard cap at 20px so it never stomps content.   */
+extern int bar_font_height(void);
+
+#define DECO_TB_PAD_V 2  /* vertical padding inside TUI title bar           */
+#define DECO_TB_MAX   20 /* hard ceiling in pixels                           */
+
 static inline int deco_title_h(int border_w, bool notitle) {
-  (void)notitle;
-  return border_w > 0 ? border_w : 0;
+  if(notitle) return border_w > 0 ? border_w : 0;
+  int fh = bar_font_height();
+  if(fh > 0) {
+    int h = fh + DECO_TB_PAD_V * 2;
+    return h > DECO_TB_MAX ? DECO_TB_MAX : h;
+  }
+  return border_w > 0 ? border_w * 3 : 16;
 }
 
 
@@ -738,6 +750,18 @@ void       bar_destroy(TrixieBar *b);
 void       bar_set_visible(TrixieBar *b, bool visible);
 void       bar_mark_dirty(TrixieBar *b);
 void       bar_sync_exec_modules(const Config *cfg);
+/* Font bridge used by deco.c for title-bar rendering */
+int        bar_measure_text(const char *text);
+int        bar_draw_text_pub(uint32_t   *px,
+                             int         stride,
+                             int         x,
+                             int         y,
+                             const char *text,
+                             Color       fg,
+                             int         clip_w,
+                             int         clip_h);
+int        bar_font_ascender(void);
+/* bar_font_height() declared near deco_title_h above */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §9  Decorations

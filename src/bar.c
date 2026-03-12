@@ -250,11 +250,6 @@ struct RawBuffer {
   int               stride;
 };
 
-static void raw_buffer_destroy(struct wlr_buffer *buf) {
-  struct RawBuffer *rb = wl_container_of(buf, rb, base);
-  free(rb->data);
-  free(rb);
-}
 static bool raw_buffer_begin_data_ptr_access(struct wlr_buffer *buf,
                                              uint32_t           flags,
                                              void             **data,
@@ -270,12 +265,6 @@ static bool raw_buffer_begin_data_ptr_access(struct wlr_buffer *buf,
 static void raw_buffer_end_data_ptr_access(struct wlr_buffer *buf) {
   (void)buf;
 }
-
-static const struct wlr_buffer_impl raw_buffer_impl = {
-  .destroy               = raw_buffer_destroy,
-  .begin_data_ptr_access = raw_buffer_begin_data_ptr_access,
-  .end_data_ptr_access   = raw_buffer_end_data_ptr_access,
-};
 
 /* Persistent variant — destroy frees the RawBuffer header but NOT rb->data,
  * because the pixel data is owned by TrixieBar.pixels and lives for the bar's
@@ -302,13 +291,6 @@ raw_buffer_create_persistent(uint32_t *pixels, int w, int h) {
   return rb;
 }
 
-static struct RawBuffer *raw_buffer_create(int w, int h) {
-  struct RawBuffer *rb = calloc(1, sizeof(*rb));
-  rb->stride           = w * 4;
-  rb->data             = calloc((size_t)(w * h), 4);
-  wlr_buffer_init(&rb->base, &raw_buffer_impl, w, h);
-  return rb;
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §4  Pixel helpers
@@ -350,75 +332,6 @@ static void fill_rect_px(uint32_t *px,
       px[row * stride + col] = color;
 }
 
-static void fill_pill_px(uint32_t *px,
-                         int       stride,
-                         int       x,
-                         int       y,
-                         int       w,
-                         int       h,
-                         uint32_t  color,
-                         int       radius,
-                         int       cw,
-                         int       ch) {
-  if(radius <= 0) {
-    fill_rect_px(px, stride, x, y, w, h, color, cw, ch);
-    return;
-  }
-  int r = radius;
-  if(r > w / 2) r = w / 2;
-  if(r > h / 2) r = h / 2;
-  for(int row = y; row < y + h && row < ch; row++) {
-    if(row < 0) continue;
-    for(int col = x; col < x + w && col < cw; col++) {
-      if(col < 0) continue;
-      int  lx = col - x, ly = row - y;
-      bool in_corner = ((lx < r && ly < r) || (lx >= w - r && ly < r) ||
-                        (lx < r && ly >= h - r) || (lx >= w - r && ly >= h - r));
-      if(in_corner) {
-        int cx = (lx < r) ? r - 1 : w - r;
-        int cy = (ly < r) ? r - 1 : h - r;
-        int dx = lx - cx, dy = ly - cy;
-        if(dx * dx + dy * dy > r * r) continue;
-      }
-      px[row * stride + col] = color;
-    }
-  }
-}
-
-static void
-draw_sep_pipe(uint32_t *px, int stride, int x, int bh, uint32_t col, int bw) {
-  int pad = bh / 5;
-  for(int y = pad; y < bh - pad; y++) {
-    if(x >= 0 && x < bw) px[y * stride + x] = col;
-  }
-}
-
-static void
-draw_sep_block(uint32_t *px, int stride, int x, int bh, uint32_t col, int bw) {
-  for(int y = 0; y < bh; y++) {
-    if(x >= 0 && x < bw) px[y * stride + x] = col;
-    if(x + 1 >= 0 && x + 1 < bw) px[y * stride + x + 1] = col;
-  }
-}
-
-static void draw_sep_arrow(uint32_t *px,
-                           int       stride,
-                           int       x,
-                           int       bh,
-                           int       w,
-                           uint32_t  left_col,
-                           uint32_t  right_col,
-                           int       bw) {
-  int half = bh / 2;
-  for(int row = 0; row < bh; row++) {
-    int dist = row <= half ? row : bh - 1 - row;
-    int tip  = (w * dist) / (half > 0 ? half : 1);
-    for(int col = x; col < x + w && col < bw; col++) {
-      if(col < 0) continue;
-      px[row * stride + col] = (col - x < tip) ? left_col : right_col;
-    }
-  }
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §5  FreeType/HarfBuzz text
@@ -490,39 +403,35 @@ static int measure_text_ft(const char *text) {
   return w;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §6  BarItem
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Public thin wrappers used by deco.c for title-bar rendering ────────── */
 
-typedef struct {
-  const char *text;
-  Color       fg;
-  Color       bg;
-  bool        has_bg;
-  int         pad;
-} BarItem;
-
-static int bar_item_width(const BarItem *it) {
-  return measure_text_ft(it->text) + it->pad * 2;
+int bar_measure_text(const char *text) {
+  return measure_text_ft(text);
 }
 
-static int flush_item(uint32_t      *px,
-                      int            stride,
-                      const BarItem *it,
-                      int            x,
-                      int            bar_h,
-                      int            bw,
-                      int            bh,
-                      int            radius) {
-  int w = bar_item_width(it);
-  if(it->has_bg) {
-    int ih = bar_h - 4;
-    int iy = (bar_h - ih) / 2;
-    fill_pill_px(px, stride, x, iy, w, ih, to_argb(it->bg), radius, bw, bh);
-  }
-  int baseline = (bar_h - g_font.height) / 2 + g_font.ascender;
-  draw_text_ft(px, stride, x + it->pad, baseline, it->text, it->fg, bw, bh);
-  return w;
+int bar_draw_text_pub(uint32_t   *px,
+                      int         stride,
+                      int         x,
+                      int         y,
+                      const char *text,
+                      Color       fg,
+                      int         clip_w,
+                      int         clip_h) {
+  return draw_text_ft(px, stride, x, y, text, fg, clip_w, clip_h);
+}
+
+int bar_font_ascender(void) {
+  return g_font.ascender;
+}
+int bar_font_height(void) {
+  return g_font.height;
+}
+
+/* Parse first integer found in a slot string like "CPU 42%" → 42 */
+static int parse_pct(const char *s) {
+  while(*s && (*s < '0' || *s > '9'))
+    s++;
+  return (*s) ? atoi(s) : 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -640,179 +549,306 @@ bool bar_update(TrixieBar *b, TwmState *twm, const Config *cfg) {
   uint32_t *px     = b->pixels;
   int       stride = bw;
 
-  /* Background */
+  /* ── Background — solid Catppuccin Mocha base ──────────────────────────── */
   uint32_t bg_c = to_argb(bar->bg);
   for(int i = 0; i < bw * bh; i++)
     px[i] = bg_c;
 
-  /* Separator line */
-  if(bar->separator) {
-    uint32_t sep_c = to_argb(bar->separator_color);
-    int      sep_y = bar->separator_top ? 0 : bh - 1;
-    for(int x = 0; x < bw; x++)
-      px[sep_y * stride + x] = sep_c;
-  }
-
-#define MAX_ITEMS 64
-  BarItem left[MAX_ITEMS], center[MAX_ITEMS], right[MAX_ITEMS];
-  int     ln = 0, cn = 0, rn = 0;
-
-  char ws_labels[MAX_WORKSPACES][8];
-  char clock_buf[64];
-  char title_buf[128];
-
-  int sp = bar->item_spacing > 0 ? bar->item_spacing : 4;
-
-  int sep_w = 0;
-  switch(bar->sep_style) {
-    case SEP_ARROW: sep_w = bh / 2; break;
-    case SEP_BLOCK: sep_w = 4; break;
-    case SEP_PIPE: sep_w = 8; break;
-    default: sep_w = 0; break;
-  }
-
-#define SLOT_ITEM(slot_idx_, list_, n_, fg_color_)                           \
-  do {                                                                       \
-    if(b->pool) {                                                            \
-      BarModuleSlot *_s = &b->pool->slots[(slot_idx_)];                      \
-      if(_s->valid && (n_) < MAX_ITEMS) {                                    \
-        BarItem _it     = { .text = _s->text, .fg = (fg_color_), .pad = 6 }; \
-        (list_)[(n_)++] = _it;                                               \
-      }                                                                      \
-    }                                                                        \
-  } while(0)
-
-#define RENDER_MODULE(name_, list_, n_)                                             \
-  do {                                                                              \
-    const char *_mn = (name_);                                                      \
-    BarItem    *_l  = (list_);                                                      \
-    int        *_n  = &(n_);                                                        \
-    if(!strcmp(_mn, "workspaces")) {                                                \
-      for(int _i = 0; _i < twm->ws_count && *_n < MAX_ITEMS; _i++) {                \
-        Workspace *_ws     = &twm->workspaces[_i];                                  \
-        bool       _urgent = (twm->ws_urgent_mask & (1u << _i)) != 0;               \
-        snprintf(ws_labels[_i],                                                     \
-                 sizeof(ws_labels[_i]),                                             \
-                 _urgent ? "%d\xE2\x80\xA2" : "%d",                                 \
-                 _i + 1);                                                           \
-        BarItem _it = { .text = ws_labels[_i], .pad = 5 };                          \
-        if(_i == twm->active_ws) {                                                  \
-          _it.fg     = bar->active_ws_fg;                                           \
-          _it.bg     = bar->active_ws_bg;                                           \
-          _it.has_bg = true;                                                        \
-        } else if(_urgent) {                                                        \
-          _it.fg = (Color){ 0xf3, 0x8b, 0xa8, 0xff };                               \
-        } else if(_ws->pane_count > 0) {                                            \
-          _it.fg = bar->occupied_ws_fg;                                             \
-        } else {                                                                    \
-          _it.fg = bar->inactive_ws_fg;                                             \
-        }                                                                           \
-        _l[(*_n)++] = _it;                                                          \
-      }                                                                             \
-    } else if(!strcmp(_mn, "title")) {                                              \
-      if(fp && fp->title[0] && *_n < MAX_ITEMS) {                                   \
-        strncpy(title_buf, fp->title, sizeof(title_buf) - 1);                       \
-        if(strlen(fp->title) > 48) {                                                \
-          title_buf[45] = '.';                                                      \
-          title_buf[46] = '.';                                                      \
-          title_buf[47] = '.';                                                      \
-          title_buf[48] = '\0';                                                     \
-        }                                                                           \
-        _l[(*_n)++] = (BarItem){ .text = title_buf, .fg = bar->fg, .pad = 6 };      \
-      }                                                                             \
-    } else if(!strcmp(_mn, "layout")) {                                             \
-      if(*_n < MAX_ITEMS) {                                                         \
-        static char _lb[32];                                                        \
-        snprintf(_lb,                                                               \
-                 sizeof(_lb),                                                       \
-                 "[%s]",                                                            \
-                 layout_label(twm->workspaces[twm->active_ws].layout));             \
-        _l[(*_n)++] = (BarItem){ .text = _lb, .fg = bar->accent, .pad = 8 };        \
-      }                                                                             \
-    } else if(!strcmp(_mn, "clock")) {                                              \
-      if(*_n < MAX_ITEMS) {                                                         \
-        const char *_fmt = "%H:%M";                                                 \
-        for(int _ci = 0; _ci < cfg->bar.module_cfg_count; _ci++) {                  \
-          if(!strcmp(cfg->bar.module_cfgs[_ci].name, "clock") &&                    \
-             cfg->bar.module_cfgs[_ci].format[0]) {                                 \
-            _fmt = cfg->bar.module_cfgs[_ci].format;                                \
-            break;                                                                  \
-          }                                                                         \
-        }                                                                           \
-        time_t     _nt = time(NULL);                                                \
-        struct tm *_tm = localtime(&_nt);                                           \
-        strftime(clock_buf, sizeof(clock_buf), _fmt, _tm);                          \
-        _l[(*_n)++] = (BarItem){ .text = clock_buf, .fg = bar->accent, .pad = 8 };  \
-      }                                                                             \
-    } else if(!strcmp(_mn, "battery")) {                                            \
-      SLOT_ITEM(BAR_SLOT_BATTERY, _l, *_n, bar->fg);                                \
-    } else if(!strcmp(_mn, "network")) {                                            \
-      SLOT_ITEM(BAR_SLOT_NETWORK, _l, *_n, bar->fg);                                \
-    } else if(!strcmp(_mn, "volume")) {                                             \
-      SLOT_ITEM(BAR_SLOT_VOLUME, _l, *_n, bar->fg);                                 \
-    } else if(!strcmp(_mn, "cpu")) {                                                \
-      SLOT_ITEM(BAR_SLOT_CPU, _l, *_n, bar->accent);                                \
-    } else if(!strcmp(_mn, "memory")) {                                             \
-      SLOT_ITEM(BAR_SLOT_MEMORY, _l, *_n, bar->accent);                             \
-    } else {                                                                        \
-      for(int _ei = 0; _ei < cfg->bar.module_cfg_count && *_n < MAX_ITEMS; _ei++) { \
-        const BarModuleCfg *_mc = &cfg->bar.module_cfgs[_ei];                       \
-        if(!strcmp(_mc->name, _mn)) {                                               \
-          Color _fg = _mc->has_color ? _mc->color : bar->fg;                        \
-          SLOT_ITEM(BAR_SLOT_EXEC_BASE + _ei, _l, *_n, _fg);                        \
-          break;                                                                    \
-        }                                                                           \
-      }                                                                             \
-    }                                                                               \
-  } while(0)
-
-  for(int mi = 0; mi < bar->modules_left_n && ln < MAX_ITEMS; mi++)
-    RENDER_MODULE(bar->modules_left[mi], left, ln);
-  for(int mi = 0; mi < bar->modules_center_n && cn < MAX_ITEMS; mi++)
-    RENDER_MODULE(bar->modules_center[mi], center, cn);
-  for(int mi = 0; mi < bar->modules_right_n && rn < MAX_ITEMS; mi++)
-    RENDER_MODULE(bar->modules_right[mi], right, rn);
-
-#undef RENDER_MODULE
-#undef SLOT_ITEM
-
-  int lw = 0;
-  for(int i = 0; i < ln; i++)
-    lw += bar_item_width(&left[i]) + sp;
-  int cw_total = 0;
-  for(int i = 0; i < cn; i++)
-    cw_total += bar_item_width(&center[i]) + sp;
-  int rw_total = 0;
-  for(int i = 0; i < rn; i++)
-    rw_total += bar_item_width(&right[i]) + sp;
-
+  /* Top edge rule — 1px accent line separating bar from windows */
   {
-    int x = sp;
-    for(int i = 0; i < ln; i++)
-      x += flush_item(px, stride, &left[i], x, bh, bw, bh, 0) + sp;
-    if(bar->sep_style != SEP_NONE && (cn > 0 || rn > 0)) {
-      uint32_t dim_c = to_argb(bar->dim);
-      uint32_t bg_c2 = to_argb(bar->bg);
-      switch(bar->sep_style) {
-        case SEP_PIPE: draw_sep_pipe(px, stride, x + 2, bh, dim_c, bw); break;
-        case SEP_BLOCK: draw_sep_block(px, stride, x + 1, bh, dim_c, bw); break;
-        case SEP_ARROW:
-          draw_sep_arrow(px, stride, x, bh, sep_w, bg_c2, bg_c2, bw);
+    uint32_t rule_c = to_argb(bar->separator ? bar->separator_color : bar->dim);
+    int      rule_y = bar->separator_top ? 0 : bh - 1;
+    for(int x = 0; x < bw; x++)
+      px[rule_y * stride + x] = rule_c;
+  }
+
+  /* ── TUI layout constants ───────────────────────────────────────────────── */
+  /* All text sits on a single baseline centred vertically in the bar. */
+  int baseline = (bh - g_font.height) / 2 + g_font.ascender;
+  int sp       = 6; /* horizontal padding around each segment's text */
+
+  /* Dim separator colour — used for │ glyphs between segments */
+  Color dim_col = bar->dim;
+  Color fg_col  = bar->fg;
+  Color ac_col  = bar->accent;
+
+  /* ── Braille bar helper ─────────────────────────────────────────────────
+   * Converts a 0-100 percentage into a 4-char braille progress bar.
+   * Uses Unicode braille patterns U+2800–U+28FF.
+   * Each braille char covers 4 vertical dots; we use 3 chars wide = 12 steps.
+   * ─────────────────────────────────────────────────────────────────────── */
+  /* Block bar using ▁▂▃▄▅▆▇█ (U+2581–U+2588) — one char, 8 levels */
+  static const char *BLOCKS8[] = { " ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
+  /* Build a 5-cell braille-style bar for a 0-100 value.
+   * Each cell is one of the block chars above. */
+#define BRAILLE_BAR(buf_, val_)                                                \
+  do {                                                                         \
+    int _v  = (val_) < 0 ? 0 : (val_) > 100 ? 100 : (val_);                    \
+    /* 5 cells, each representing 20% */                                       \
+    buf_[0] = '\0';                                                            \
+    for(int _ci = 0; _ci < 5; _ci++) {                                         \
+      int _cell_pct = _v - _ci * 20;                                           \
+      int _lvl      = _cell_pct >= 20  ? 8                                     \
+                      : _cell_pct <= 0 ? 0                                     \
+                                       : (int)(_cell_pct * 8.f / 20.f + 0.5f); \
+      strncat(buf_, BLOCKS8[_lvl], sizeof(buf_) - strlen(buf_) - 1);           \
+    }                                                                          \
+  } while(0)
+
+  /* ── Inline draw helpers ───────────────────────────────────────────────── */
+#define DRAW(x_, text_, col_) \
+  draw_text_ft(px, stride, (x_), baseline, (text_), (col_), bw, bh)
+#define MEASURE(text_) measure_text_ft(text_)
+#define PIPE(x_)       draw_text_ft(px, stride, (x_), baseline, " │ ", dim_col, bw, bh)
+#define PIPE_W         (MEASURE(" │ "))
+
+  /* ── Slot text extraction ──────────────────────────────────────────────── */
+#define SLOT_TEXT(idx_) \
+  (b->pool && b->pool->slots[(idx_)].valid ? b->pool->slots[(idx_)].text : "")
+
+  /* ── LEFT SIDE ─────────────────────────────────────────────────────────── */
+  int lx = sp;
+
+  /* Workspaces: active=[1] occupied=2 empty=·  urgent=!1 */
+  for(int mi = 0; mi < bar->modules_left_n; mi++) {
+    const char *mod = bar->modules_left[mi];
+
+    if(!strcmp(mod, "workspaces")) {
+      for(int wi = 0; wi < twm->ws_count; wi++) {
+        Workspace *ws     = &twm->workspaces[wi];
+        bool       urgent = (twm->ws_urgent_mask & (1u << wi)) != 0;
+        bool       active = (wi == twm->active_ws);
+        bool       occ    = (ws->pane_count > 0);
+        char       label[16];
+        if(urgent)
+          snprintf(label, sizeof(label), "[!%d]", wi + 1);
+        else if(active)
+          snprintf(label, sizeof(label), "[%d]", wi + 1);
+        else if(occ)
+          snprintf(label, sizeof(label), " %d ", wi + 1);
+        else
+          snprintf(label, sizeof(label), " · ");
+        Color col = urgent   ? (Color){ 0xf3, 0x8b, 0xa8, 0xff }
+                    : active ? bar->active_ws_fg
+                    : occ    ? bar->occupied_ws_fg
+                             : bar->inactive_ws_fg;
+        /* Highlight background for active ws */
+        if(active) {
+          int tw = MEASURE(label) + sp * 2;
+          int iy = 2, ih = bh - 4;
+          fill_rect_px(
+              px, stride, lx - sp, iy, tw, ih, to_argb(bar->active_ws_bg), bw, bh);
+        }
+        lx += DRAW(lx, label, col);
+      }
+      /* │ after workspaces */
+      lx += DRAW(lx, " │ ", dim_col);
+
+    } else if(!strcmp(mod, "layout")) {
+      char lb[32];
+      snprintf(lb,
+               sizeof(lb),
+               "[%s]",
+               layout_label(twm->workspaces[twm->active_ws].layout));
+      lx += DRAW(lx, lb, ac_col);
+      lx += DRAW(lx, " │ ", dim_col);
+
+    } else if(!strcmp(mod, "title")) {
+      if(fp && fp->title[0]) {
+        char tb2[96];
+        snprintf(tb2, sizeof(tb2), "%.80s", fp->title);
+        lx += DRAW(lx, tb2, fg_col);
+        lx += DRAW(lx, " │ ", dim_col);
+      }
+
+    } else if(!strcmp(mod, "clock")) {
+      const char *fmt = "%a %d %b  %H:%M";
+      for(int ci = 0; ci < cfg->bar.module_cfg_count; ci++) {
+        if(!strcmp(cfg->bar.module_cfgs[ci].name, "clock") &&
+           cfg->bar.module_cfgs[ci].format[0]) {
+          fmt = cfg->bar.module_cfgs[ci].format;
           break;
-        default: break;
+        }
+      }
+      char       clk[64];
+      time_t     nt = time(NULL);
+      struct tm *tm = localtime(&nt);
+      strftime(clk, sizeof(clk), fmt, tm);
+      lx += DRAW(lx, clk, fg_col);
+      lx += DRAW(lx, " │ ", dim_col);
+
+    } else {
+      /* Generic slot */
+      const char *txt = NULL;
+      if(!strcmp(mod, "battery"))
+        txt = SLOT_TEXT(BAR_SLOT_BATTERY);
+      else if(!strcmp(mod, "network"))
+        txt = SLOT_TEXT(BAR_SLOT_NETWORK);
+      else if(!strcmp(mod, "volume"))
+        txt = SLOT_TEXT(BAR_SLOT_VOLUME);
+      else if(!strcmp(mod, "cpu"))
+        txt = SLOT_TEXT(BAR_SLOT_CPU);
+      else if(!strcmp(mod, "memory"))
+        txt = SLOT_TEXT(BAR_SLOT_MEMORY);
+      else {
+        for(int ei = 0; ei < cfg->bar.module_cfg_count; ei++) {
+          if(!strcmp(cfg->bar.module_cfgs[ei].name, mod)) {
+            txt = SLOT_TEXT(BAR_SLOT_EXEC_BASE + ei);
+            break;
+          }
+        }
+      }
+      if(txt && txt[0]) {
+        lx += DRAW(lx, txt, fg_col);
+        lx += DRAW(lx, " │ ", dim_col);
       }
     }
   }
-  {
-    int rx = bw - rw_total - sp;
-    for(int i = 0; i < rn; i++)
-      rx += flush_item(px, stride, &right[i], rx, bh, bw, bh, 0) + sp;
+
+  /* ── RIGHT SIDE — build right-to-left, then render ─────────────────────── */
+  /* We pre-measure each right module and render right-to-left. */
+  struct {
+    char  text[128];
+    Color col;
+  } rsegs[MAX_BAR_MODS * 4];
+  int rn = 0;
+
+  for(int mi = bar->modules_right_n - 1; mi >= 0; mi--) {
+    const char *mod = bar->modules_right[mi];
+
+    if(!strcmp(mod, "clock")) {
+      const char *fmt = "%a %d %b  %H:%M";
+      for(int ci = 0; ci < cfg->bar.module_cfg_count; ci++) {
+        if(!strcmp(cfg->bar.module_cfgs[ci].name, "clock") &&
+           cfg->bar.module_cfgs[ci].format[0]) {
+          fmt = cfg->bar.module_cfgs[ci].format;
+          break;
+        }
+      }
+      char       clk[64];
+      time_t     nt = time(NULL);
+      struct tm *tm = localtime(&nt);
+      strftime(clk, sizeof(clk), fmt, tm);
+      if(rn < (int)(sizeof(rsegs) / sizeof(rsegs[0]))) {
+        snprintf(rsegs[rn].text, sizeof(rsegs[rn].text), "%s", clk);
+        rsegs[rn].col = ac_col;
+        rn++;
+      }
+
+    } else if(!strcmp(mod, "layout")) {
+      char lb[32];
+      snprintf(lb,
+               sizeof(lb),
+               "[%s]",
+               layout_label(twm->workspaces[twm->active_ws].layout));
+      if(rn < (int)(sizeof(rsegs) / sizeof(rsegs[0]))) {
+        snprintf(rsegs[rn].text, sizeof(rsegs[rn].text), "%s", lb);
+        rsegs[rn].col = ac_col;
+        rn++;
+      }
+
+    } else if(!strcmp(mod, "cpu")) {
+      const char *raw = SLOT_TEXT(BAR_SLOT_CPU);
+      if(raw && raw[0]) {
+        int  pct = parse_pct(raw);
+        char bar_str[32];
+        BRAILLE_BAR(bar_str, pct);
+        char seg[64];
+        snprintf(seg, sizeof(seg), "cpu %s %d%%", bar_str, pct);
+        if(rn < (int)(sizeof(rsegs) / sizeof(rsegs[0]))) {
+          snprintf(rsegs[rn].text, sizeof(rsegs[rn].text), "%s", seg);
+          rsegs[rn].col = ac_col;
+          rn++;
+        }
+      }
+
+    } else if(!strcmp(mod, "memory")) {
+      const char *raw = SLOT_TEXT(BAR_SLOT_MEMORY);
+      if(raw && raw[0]) {
+        if(rn < (int)(sizeof(rsegs) / sizeof(rsegs[0]))) {
+          snprintf(rsegs[rn].text, sizeof(rsegs[rn].text), "%s", raw);
+          rsegs[rn].col = fg_col;
+          rn++;
+        }
+      }
+
+    } else {
+      const char *txt = NULL;
+      if(!strcmp(mod, "battery"))
+        txt = SLOT_TEXT(BAR_SLOT_BATTERY);
+      else if(!strcmp(mod, "network"))
+        txt = SLOT_TEXT(BAR_SLOT_NETWORK);
+      else if(!strcmp(mod, "volume"))
+        txt = SLOT_TEXT(BAR_SLOT_VOLUME);
+      else {
+        for(int ei = 0; ei < cfg->bar.module_cfg_count; ei++) {
+          if(!strcmp(cfg->bar.module_cfgs[ei].name, mod)) {
+            txt = SLOT_TEXT(BAR_SLOT_EXEC_BASE + ei);
+            break;
+          }
+        }
+      }
+      if(txt && txt[0] && rn < (int)(sizeof(rsegs) / sizeof(rsegs[0]))) {
+        snprintf(rsegs[rn].text, sizeof(rsegs[rn].text), "%s", txt);
+        rsegs[rn].col = fg_col;
+        rn++;
+      }
+    }
   }
+
+  /* Render right segments right-to-left */
   {
-    int cx = (bw - cw_total + sp) / 2;
-    for(int i = 0; i < cn; i++)
-      cx += flush_item(px, stride, &center[i], cx, bh, bw, bh, 0) + sp;
+    int rx = bw - sp;
+    for(int i = 0; i < rn; i++) {
+      int tw = MEASURE(rsegs[i].text);
+      rx -= tw;
+      draw_text_ft(px, stride, rx, baseline, rsegs[i].text, rsegs[i].col, bw, bh);
+      if(i < rn - 1) {
+        rx -= PIPE_W;
+        draw_text_ft(px, stride, rx, baseline, " │ ", dim_col, bw, bh);
+      }
+    }
   }
+
+  /* ── CENTER — clock or title if configured ─────────────────────────────── */
+  for(int mi = 0; mi < bar->modules_center_n; mi++) {
+    const char *mod      = bar->modules_center[mi];
+    char        seg[128] = "";
+
+    if(!strcmp(mod, "clock")) {
+      const char *fmt = "%a %d %b  %H:%M";
+      for(int ci = 0; ci < cfg->bar.module_cfg_count; ci++) {
+        if(!strcmp(cfg->bar.module_cfgs[ci].name, "clock") &&
+           cfg->bar.module_cfgs[ci].format[0]) {
+          fmt = cfg->bar.module_cfgs[ci].format;
+          break;
+        }
+      }
+      time_t     nt = time(NULL);
+      struct tm *tm = localtime(&nt);
+      strftime(seg, sizeof(seg), fmt, tm);
+    } else if(!strcmp(mod, "title")) {
+      if(fp && fp->title[0]) snprintf(seg, sizeof(seg), "%.80s", fp->title);
+    } else if(!strcmp(mod, "layout")) {
+      snprintf(seg,
+               sizeof(seg),
+               "[%s]",
+               layout_label(twm->workspaces[twm->active_ws].layout));
+    }
+
+    if(seg[0]) {
+      int tw = MEASURE(seg);
+      int cx = (bw - tw) / 2;
+      draw_text_ft(px, stride, cx, baseline, seg, ac_col, bw, bh);
+    }
+  }
+
+#undef DRAW
+#undef MEASURE
+#undef PIPE
+#undef PIPE_W
+#undef SLOT_TEXT
+#undef BRAILLE_BAR
 
   /* Upload pixels using the persistent buffer — zero allocations on the hot path.
    * rb_cache->data already points at b->pixels, so no memcpy needed: we just
