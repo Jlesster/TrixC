@@ -1,233 +1,256 @@
-project(
-  'Trixie',
-  'c',
-  version: '0.1.0',
+project('trixie', 'c',
+  version: '0.4.0',
   default_options: [
-    'warning_level=3',
     'c_std=c11',
-    'buildtype=debugoptimized',
-  ],
+    'warning_level=1',
+    'werror=false',
+    'optimization=2',
+  ]
 )
 
-# ── Sources ──────────────────────────────────────────────────────────────────
-src = files(
+cc = meson.get_compiler('c')
+
+# ── Dependencies ───────────────────────────────────────────────────────────────
+wlroots = dependency('wlroots-0.18', required: false)
+if not wlroots.found()
+  wlroots = dependency('wlroots', required: true)
+endif
+
+wayland_server = dependency('wayland-server')
+wayland_client = dependency('wayland-client')
+wayland_p      = dependency('wayland-protocols')
+xkbcommon      = dependency('xkbcommon')
+libinput       = dependency('libinput')
+pixman         = dependency('pixman-1')
+drm            = dependency('libdrm')
+freetype       = dependency('freetype2')
+harfbuzz       = dependency('harfbuzz')
+fontconf       = dependency('fontconfig')
+threads        = dependency('threads')
+mathlib        = cc.find_library('m')
+
+lua = dependency('luajit', required: false)
+if not lua.found()
+  lua = dependency('lua5.1', required: false)
+endif
+if not lua.found()
+  lua = dependency('lua', required: true)
+endif
+
+xwayland_dep  = dependency('xwayland', required: false)
+xcb_dep       = dependency('xcb',      required: false)
+have_xwayland = xwayland_dep.found() and xcb_dep.found()
+
+# ── GLES2 / EGL — NixOS libglvnd path detection ───────────────────────────────
+# libglvnd on NixOS has no pkgconfig. Find the header and lib independently,
+# then wire up -I / -L / -l flags directly on the executable target.
+
+find_gles_h = run_command('bash', '-c',
+  'find /nix/store -maxdepth 5 -name "gl2.h" -path "*/GLES2/gl2.h" 2>/dev/null | head -1 || true',
+  check: false)
+gles_header = find_gles_h.stdout().strip()
+
+find_gles_so = run_command('bash', '-c',
+  # Prefer the libglvnd whose store hash matches the -dev output we found
+  # headers in. Strip "-dev" from the header store path to get the lib path.
+  'h=' + gles_header + '; ' +
+  'dev_dir=$(dirname $(dirname $(dirname $h))); ' +
+  'lib_dir=${dev_dir%-dev}; ' +
+  'so=$lib_dir/lib/libGLESv2.so; ' +
+  'if [ -f "$so" ]; then echo $so; ' +
+  'else find /nix/store -maxdepth 4 -name "libGLESv2.so" -not -path "*/electron*" 2>/dev/null | head -1; ' +
+  'fi',
+  check: false)
+gles_so = find_gles_so.stdout().strip()
+
+mesa_gl_inc  = []
+mesa_gl_link = []
+
+if gles_header != ''
+  inc_dir = run_command('bash', '-c',
+    'dirname $(dirname ' + gles_header + ')',
+    check: true).stdout().strip()
+  mesa_gl_inc = ['-I' + inc_dir]
+  message('GLES2 headers: ' + inc_dir)
+else
+  message('WARNING: GLES2/gl2.h not found — shader will not compile')
+endif
+
+if gles_so != ''
+  lib_dir = run_command('bash', '-c',
+    'dirname ' + gles_so,
+    check: true).stdout().strip()
+  mesa_gl_link = ['-L' + lib_dir, '-lGLESv2', '-lEGL']
+  message('GLES2 libs:    ' + lib_dir)
+else
+  message('WARNING: libGLESv2.so not found — linker will likely fail')
+endif
+
+# ── Wayland scanner ────────────────────────────────────────────────────────────
+wayland_scanner = find_program('wayland-scanner')
+wp_dir     = wayland_p.get_variable('pkgdatadir')
+proto_dir  = meson.project_source_root() / 'include/protocols'
+fs         = import('fs')
+proto_headers = []
+
+# ── Stable protocols ───────────────────────────────────────────────────────────
+foreach proto : ['presentation-time', 'viewporter', 'xdg-shell']
+  xml = proto_dir / proto + '.xml'
+  if not fs.exists(xml)
+    xml = wp_dir / 'stable' / proto / proto + '.xml'
+  endif
+  proto_headers += custom_target(proto + '-protocol.h',
+    output:  proto + '-protocol.h',
+    input:   xml,
+    command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+  )
+endforeach
+
+# ── Staging protocols ──────────────────────────────────────────────────────────
+staging_protos = [
+  ['content-type',     'v1'],
+  ['cursor-shape',     'v1'],
+  ['fractional-scale', 'v1'],
+  ['tearing-control',  'v1'],
+  ['xdg-activation',   'v1'],
+]
+foreach entry : staging_protos
+  proto   = entry[0]
+  version = entry[1]
+  name    = proto + '-' + version
+  xml = proto_dir / name + '.xml'
+  if not fs.exists(xml)
+    xml = wp_dir / 'staging' / proto / name + '.xml'
+  endif
+  proto_headers += custom_target(name + '-protocol.h',
+    output:  name + '-protocol.h',
+    input:   xml,
+    command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+  )
+endforeach
+
+# ── Unstable protocols ─────────────────────────────────────────────────────────
+unstable_protos = [
+  ['idle-inhibit',        'v1'],
+  ['pointer-constraints', 'v1'],
+  ['pointer-gestures',    'v1'],
+  ['primary-selection',   'v1'],
+  ['relative-pointer',    'v1'],
+  ['xdg-decoration',      'v1'],
+  ['xdg-output',          'v1'],
+]
+foreach entry : unstable_protos
+  proto   = entry[0]
+  version = entry[1]
+  name    = proto + '-unstable-' + version
+  xml = proto_dir / name + '.xml'
+  if not fs.exists(xml)
+    xml = wp_dir / 'unstable' / proto / name + '.xml'
+  endif
+  proto_headers += custom_target(name + '-protocol.h',
+    output:  name + '-protocol.h',
+    input:   xml,
+    command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+  )
+endforeach
+
+# ── wlr protocols ─────────────────────────────────────────────────────────────
+wlr_protos = [
+  'wlr-layer-shell-unstable-v1',
+  'wlr-output-power-management-unstable-v1',
+]
+wlroots_prefix = wlroots.get_variable(pkgconfig: 'prefix', default_value: '/usr')
+foreach name : wlr_protos
+  xml = proto_dir / name + '.xml'
+  if not fs.exists(xml)
+    candidates = [
+      wlroots_prefix / 'share/wlroots/protocol' / name + '.xml',
+      wlroots_prefix / 'share/wlroots-0.18/protocol' / name + '.xml',
+      '/run/current-system/sw/share/wlroots/protocol' / name + '.xml',
+    ]
+    found = ''
+    foreach c : candidates
+      if found == '' and fs.exists(c)
+        found = c
+      endif
+    endforeach
+    if found != ''
+      xml = found
+    else
+      warning('Protocol XML not found for ' + name + ' — build may fail')
+    endif
+  endif
+  proto_headers += custom_target(name + '-protocol.h',
+    output:  name + '-protocol.h',
+    input:   xml,
+    command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+  )
+endforeach
+
+# ── Compiler flags ─────────────────────────────────────────────────────────────
+add_project_arguments(
+  '-D_POSIX_C_SOURCE=200809L',
+  '-DWLR_USE_UNSTABLE',
+  '-Wno-unused-parameter',
+  '-Wno-builtin-macro-redefined',
+  language: 'c',
+)
+
+if have_xwayland
+  add_project_arguments('-DHAS_XWAYLAND', language: 'c')
+  message('XWayland: enabled')
+else
+  message('XWayland: disabled')
+endif
+
+if cc.has_function('wlr_gles2_renderer_get_buffer_fbo', dependencies: [wlroots])
+  add_project_arguments('-DHAVE_WLR_GLES2_FBO', language: 'c')
+  message('shader: wlr_gles2_renderer_get_buffer_fbo found — saturation enabled')
+else
+  message('shader: wlr_gles2_renderer_get_buffer_fbo not found — saturation disabled')
+endif
+
+# ── Sources ────────────────────────────────────────────────────────────────────
+trixie_src = [
+  'src/reload.c',
+  'src/lua_reload_bindings.c',
   'src/anim.c',
   'src/bar.c',
-  'src/bar_worker.c',
   'src/config.c',
   'src/deco.c',
-  'src/files_panel.c',
   'src/gesture.c',
   'src/ipc.c',
   'src/layout.c',
-  'src/lsp_panel.c',
   'src/lua.c',
   'src/main.c',
-  'src/marvin_panel.c',
-  'src/nvim_panel.c',
-  'src/overlay.c',
-  'src/overlay_exports.c',
-  'src/run_panel.c',
   'src/screenshot.c',
   'src/shader.c',
   'src/twm.c',
-)
+] + proto_headers
 
-# ── Include directories ──────────────────────────────────────────────────────
-inc = include_directories('include', 'include/protocols')
-
-# ── Dependencies ─────────────────────────────────────────────────────────────
-wayland_protocols_dep = dependency('wayland-protocols', required: true)
-wp_dir = wayland_protocols_dep.get_variable('pkgdatadir')
-libinput_dep = dependency('libinput', required: true)
-history_dep = dependency('history', required: true)
-lua_dep = dependency('luajit', required: true)
-libdrm_dep = dependency('libdrm', required: true)
-gles_dep = dependency('glesv2', required: true)
-egl_dep = dependency('egl', required: true)
-pixman_1_dep = dependency('pixman-1', required: true)
-fontconfig_dep = dependency('fontconfig', required: true)
-harfbuzz_gobject_dep = dependency('harfbuzz-gobject', required: true)
-spandsp_dep = dependency('spandsp', required: true)
-wlroots_0_18_dep = dependency('wlroots-0.18', required: true)
-jack_dep = dependency('jack', required: true)
-json_c_dep = dependency('json-c', required: true)
-girara_dep = dependency('girara', required: true)
-wayland_server_dep = dependency('wayland-server', required: true)
-xkbcommon_dep = dependency('xkbcommon', required: true)
-freetype_dep = dependency('freetype2')
-harfbuzz_dep = dependency('harfbuzz')
-# ── Wayland protocol generation ──────────────────────────────────────────────
-wayland_scanner = find_program('wayland-scanner')
-
-protocol_src = []
-xdg_shell_h = custom_target(
-  'xdg-shell-client-header',
-  input: wp_dir / 'stable/xdg-shell/xdg-shell.xml',
-  output: 'xdg-shell-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-xdg_shell_c = custom_target(
-  'xdg-shell-private-code',
-  input: wp_dir / 'stable/xdg-shell/xdg-shell.xml',
-  output: 'xdg-shell-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [xdg_shell_h, xdg_shell_c]
-
-wlr_layer_shell_unstable_v1_h = custom_target(
-  'wlr-layer-shell-unstable-v1-client-header',
-  input: files('include/protocols/wlr-layer-shell-unstable-v1.xml'),
-  output: 'wlr-layer-shell-unstable-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-wlr_layer_shell_unstable_v1_c = custom_target(
-  'wlr-layer-shell-unstable-v1-private-code',
-  input: files('include/protocols/wlr-layer-shell-unstable-v1.xml'),
-  output: 'wlr-layer-shell-unstable-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [wlr_layer_shell_unstable_v1_h, wlr_layer_shell_unstable_v1_c]
-
-wlr_output_power_management_unstable_v1_h = custom_target(
-  'wlr-output-power-management-unstable-v1-client-header',
-  input: files('include/protocols/wlr-output-power-management-unstable-v1.xml'),
-  output: 'wlr-output-power-management-unstable-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-wlr_output_power_management_unstable_v1_c = custom_target(
-  'wlr-output-power-management-unstable-v1-private-code',
-  input: files('include/protocols/wlr-output-power-management-unstable-v1.xml'),
-  output: 'wlr-output-power-management-unstable-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [
-  wlr_output_power_management_unstable_v1_h,
-  wlr_output_power_management_unstable_v1_c,
+trixie_deps = [
+  wlroots, wayland_server, xkbcommon, libinput,
+  pixman, drm, freetype, harfbuzz, fontconf,
+  lua, mathlib, threads,
 ]
+if have_xwayland
+  trixie_deps += [xwayland_dep, xcb_dep]
+endif
 
-tablet_v2_h = custom_target(
-  'tablet-v2-client-header',
-  input: wp_dir / 'stable/tablet/tablet-v2.xml',
-  output: 'tablet-v2-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-tablet_v2_c = custom_target(
-  'tablet-v2-private-code',
-  input: wp_dir / 'stable/tablet/tablet-v2.xml',
-  output: 'tablet-v2-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [tablet_v2_h, tablet_v2_c]
-
-content_type_v1_h = custom_target(
-  'content-type-v1-client-header',
-  input: wp_dir / 'staging/content-type/content-type-v1.xml',
-  output: 'content-type-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-content_type_v1_c = custom_target(
-  'content-type-v1-private-code',
-  input: wp_dir / 'staging/content-type/content-type-v1.xml',
-  output: 'content-type-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [content_type_v1_h, content_type_v1_c]
-
-cursor_shape_v1_h = custom_target(
-  'cursor-shape-v1-client-header',
-  input: wp_dir / 'staging/cursor-shape/cursor-shape-v1.xml',
-  output: 'cursor-shape-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-cursor_shape_v1_c = custom_target(
-  'cursor-shape-v1-private-code',
-  input: wp_dir / 'staging/cursor-shape/cursor-shape-v1.xml',
-  output: 'cursor-shape-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [cursor_shape_v1_h, cursor_shape_v1_c]
-
-tearing_control_v1_h = custom_target(
-  'tearing-control-v1-client-header',
-  input: wp_dir / 'staging/tearing-control/tearing-control-v1.xml',
-  output: 'tearing-control-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-tearing_control_v1_c = custom_target(
-  'tearing-control-v1-private-code',
-  input: wp_dir / 'staging/tearing-control/tearing-control-v1.xml',
-  output: 'tearing-control-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [tearing_control_v1_h, tearing_control_v1_c]
-
-fullscreen_shell_unstable_v1_h = custom_target(
-  'fullscreen-shell-unstable-v1-client-header',
-  input: wp_dir / 'unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
-  output: 'fullscreen-shell-unstable-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-fullscreen_shell_unstable_v1_c = custom_target(
-  'fullscreen-shell-unstable-v1-private-code',
-  input: wp_dir / 'unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
-  output: 'fullscreen-shell-unstable-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [fullscreen_shell_unstable_v1_h, fullscreen_shell_unstable_v1_c]
-
-pointer_constraints_unstable_v1_h = custom_target(
-  'pointer-constraints-unstable-v1-client-header',
-  input: wp_dir / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml',
-  output: 'pointer-constraints-unstable-v1-protocol.h',
-  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
-)
-pointer_constraints_unstable_v1_c = custom_target(
-  'pointer-constraints-unstable-v1-private-code',
-  input: wp_dir / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml',
-  output: 'pointer-constraints-unstable-v1-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-protocol_src += [pointer_constraints_unstable_v1_h, pointer_constraints_unstable_v1_c]
-
-# ── Executable ───────────────────────────────────────────────────────────────
-exe = executable(
-  'Trixie',
-  src + protocol_src,
-  include_directories: inc,
-  dependencies: [
-    history_dep,
-    libdrm_dep,
-    pixman_1_dep,
-    fontconfig_dep,
-    harfbuzz_gobject_dep,
-    spandsp_dep,
-    wlroots_0_18_dep,
-    jack_dep,
-    json_c_dep,
-    girara_dep,
-    wayland_server_dep,
-    xkbcommon_dep,
-    freetype_dep,
-    lua_dep,
-    egl_dep,
-    gles_dep,
-    harfbuzz_dep,
-    libinput_dep,
+executable('trixie',
+  trixie_src,
+  dependencies: trixie_deps,
+  c_args:    mesa_gl_inc,
+  link_args: mesa_gl_link,
+  include_directories: [
+    include_directories('include'),
+    include_directories('src'),
+    include_directories('.'),
   ],
-  c_args: ['-DWLR_USE_UNSTABLE', '-D_POSIX_C_SOURCE=200809L'],
-  link_args: ['-Wl,--as-needed'],
-  install: false,
-)
-executable(
-  'trixiectl',
-  sources: ['src/trixiectl.c'],
   install: true,
-  # no special deps needed — just libc
 )
 
-executable(
-  'tls',
-  sources: ['src/lsp/tls.c'],
+executable('trixiectl',
+  'src/trixiectl.c',
   install: true,
 )

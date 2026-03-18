@@ -1,213 +1,198 @@
-/* trixie.h — Shared types, structs, and function declarations.
- *
- */
+/* trixie.h — Wayland compositor, Lua-configured */
 #pragma once
+#define WLR_USE_UNSTABLE
+#define _POSIX_C_SOURCE 200809L
 
-#define TRIXIE_VERSION_MAJOR 0
-#define TRIXIE_VERSION_MINOR 3
-#define TRIXIE_VERSION_PATCH 1
-#define TRIXIE_VERSION_STR   "0.3.1"
-
-#include "gesture.h"
-#include "screenshot.h"
-
-#include <pthread.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
-#include <wlr/backend/session.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_alpha_modifier_v1.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_cursor_shape_v1.h>
+#include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
-#include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
-#include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
-#include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_server_decoration.h>
-#include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_single_pixel_buffer_v1.h>
+#include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 
 #ifdef HAS_XWAYLAND
 #include <wlr/xwayland.h>
 #endif
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §1  Constants
- * ═══════════════════════════════════════════════════════════════════════════ */
+#define TRIXIE_VERSION_STR "0.6.0"
 
-#define MAX_PANES           256
-#define MAX_WORKSPACES      16
-#define MAX_MONITORS        8
-#define MAX_KEYBINDS        256
-#define MAX_WIN_RULES       64
-#define MAX_SCRATCHPADS     16
-#define MAX_BAR_MODS        16
-#define MAX_BAR_MODULE_CFGS 32
-
-#define TITLE_BAR_H 22
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §2  Basic types
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-typedef uint32_t PaneId;
-
+/* ── Geometry ──────────────────────────────────────────────────────────── */
 typedef struct {
   int x, y, w, h;
 } Rect;
-
-typedef struct {
-  uint8_t r, g, b, a;
-} Color;
-
-static inline Color color_hex(uint32_t rgb) {
-  return (Color){
-    .r = (rgb >> 16) & 0xff,
-    .g = (rgb >> 8) & 0xff,
-    .b = rgb & 0xff,
-    .a = 0xff,
-  };
-}
-
-static inline bool rect_empty(Rect r) {
-  return r.w <= 0 || r.h <= 0;
-}
+static inline bool rect_empty(Rect r) { return r.w <= 0 || r.h <= 0; }
 static inline bool rect_contains(Rect r, int x, int y) {
   return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
 static inline Rect rect_inset(Rect r, int n) {
-  return (Rect){ r.x + n, r.y + n, r.w - n * 2, r.h - n * 2 };
-}
-static inline float fclampf(float v, float lo, float hi) {
-  return v < lo ? lo : (v > hi ? hi : v);
+  return (Rect){r.x + n, r.y + n, r.w - n * 2, r.h - n * 2};
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §3  Layout
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Color ─────────────────────────────────────────────────────────────── */
+typedef struct {
+  uint8_t r, g, b, a;
+} Color;
+static inline Color color_hex(uint32_t rgb) {
+  return (Color){(rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, 0xff};
+}
 
+/* ── Modifiers ─────────────────────────────────────────────────────────── */
+#define MOD_SUPER (1u << 0)
+#define MOD_CTRL (1u << 1)
+#define MOD_ALT (1u << 2)
+#define MOD_SHIFT (1u << 3)
+
+/* ── Layout ────────────────────────────────────────────────────────────── */
 typedef enum {
-  LAYOUT_DWINDLE  = 0,
-  LAYOUT_COLUMNS  = 1,
-  LAYOUT_ROWS     = 2,
-  LAYOUT_THREECOL = 3,
-  LAYOUT_MONOCLE  = 4,
-  LAYOUT_COUNT    = 5,
+  LAYOUT_DWINDLE = 0,
+  LAYOUT_COLUMNS,
+  LAYOUT_ROWS,
+  LAYOUT_THREECOL,
+  LAYOUT_MONOCLE,
+  LAYOUT_COUNT
 } Layout;
 
-/* ── BSP Dwindle types ────────────────────────────────────────────────────── */
-
-#define DWINDLE_MAX_NODES (MAX_PANES * 2)
-#define DWINDLE_NULL      (-1)
-
-typedef enum {
-  DNODE_LEAF      = 0,
-  DNODE_CONTAINER = 1,
-} DNodeKind;
-
-typedef enum {
-  DSPLIT_H = 0, /* left | right  (wide container)  */
-  DSPLIT_V = 1, /* top  | bottom (tall container)   */
-} DSplitDir;
-
+/* ── Dwindle BSP ───────────────────────────────────────────────────────── */
+#define DWINDLE_MAX_NODES 128
+#define DWINDLE_NULL (-1)
+typedef enum { DNODE_LEAF = 0, DNODE_CONTAINER } DNodeKind;
+typedef enum { DSPLIT_H = 0, DSPLIT_V } DSplitDir;
 typedef struct {
   DNodeKind kind;
-  bool      in_use;
-
-  /* LEAF only */
-  PaneId pane_id;
-
-  /* CONTAINER only */
-  int       child[2]; /* indices into DwindleTree.nodes[] */
-  float     ratio;    /* fraction of space given to child[0], default 0.5 */
-  DSplitDir split;    /* current split direction */
-
-  /* Both: bounding rect assigned during recompute */
+  DSplitDir split;
+  float ratio;
+  int child[2];
+  uint32_t pane_id;
   Rect rect;
+  bool in_use;
 } DwindleNode;
-
 typedef struct {
   DwindleNode nodes[DWINDLE_MAX_NODES];
-  int         root;  /* index of root node, or DWINDLE_NULL */
-  int         count; /* number of nodes currently in use    */
+  int root, count;
 } DwindleTree;
 
-/* ── Layout API ───────────────────────────────────────────────────────────── */
+/* ── Pane / Workspace ──────────────────────────────────────────────────── */
+#define MAX_PANES 64
+#define MAX_WORKSPACES 16
+#define MAX_SCRATCHPADS 16
+#define MAX_KEYBINDS 512
 
-const char *layout_label(Layout l);
-Layout      layout_next(Layout l);
-Layout      layout_prev(Layout l);
+typedef uint32_t PaneId;
 
-/* Non-dwindle stateless layout computation. */
-void layout_compute(Layout l, Rect area, int n, float ratio, int gap, Rect *out);
+typedef struct {
+  PaneId id;
+  char app_id[128];
+  char title[256];
+  Rect rect, float_rect;
+  bool floating, fullscreen, ontop;
+  float rule_opacity;
+  int lua_signals_ref; /* LUA_NOREF if unused */
+} Pane;
 
-/* ── BSP Dwindle API ──────────────────────────────────────────────────────── */
+typedef struct {
+  int index;
+  PaneId panes[MAX_PANES];
+  int pane_count;
+  PaneId focused;
+  bool has_focused;
+  Layout layout;
+  float main_ratio;
+  int gap;
+  DwindleTree dwindle;
+} Workspace;
 
-/* Clear/reset a tree (call once on workspace init, or on layout switch). */
-void dwindle_clear(DwindleTree *tree);
+/* ── Scratchpad ────────────────────────────────────────────────────────── */
+typedef enum { SCRATCH_FIELD_APP_ID = 0, SCRATCH_FIELD_TITLE } ScratchField;
+typedef enum {
+  SCRATCH_SPEC_EXACT = 0,
+  SCRATCH_SPEC_SUBSTR,
+  SCRATCH_SPEC_GLOB
+} ScratchSpec;
+typedef struct {
+  ScratchField field;
+  ScratchSpec kind;
+  char pat[128];
+} ScratchPattern;
+typedef struct {
+  char name[64];
+  char app_id[128];
+  char exec[256];
+  float width_pct, height_pct;
+  PaneId pane_id;
+  bool has_pane, visible;
+  ScratchPattern pattern;
+} Scratchpad;
 
-/* Insert a new pane by splitting the focused leaf.
- * focused_id = 0 is safe (falls back to rightmost leaf). */
-void dwindle_insert(
-    DwindleTree *tree, PaneId new_id, PaneId focused_id, Rect area, int gap);
+/* ── TWM state ─────────────────────────────────────────────────────────── */
+typedef struct {
+  Workspace workspaces[MAX_WORKSPACES];
+  int ws_count, active_ws;
+  Pane panes[MAX_PANES];
+  int pane_count;
+  int screen_w, screen_h;
+  Rect content_rect, bar_rect;
+  int gap, border_w, padding;
+  bool smart_gaps, bar_visible;
+  uint32_t ws_urgent_mask;
+  Scratchpad scratchpads[MAX_SCRATCHPADS];
+  int scratch_count;
+} TwmState;
 
-/* Remove a closed pane and promote its sibling. */
-void dwindle_remove(DwindleTree *tree, PaneId closed_id);
+/* ── Signal system ─────────────────────────────────────────────────────── */
+#define MAX_SIGNAL_NAME 64
+#define MAX_SIGNALS 64
+#define MAX_SIGNAL_CBS 16
+typedef struct {
+  char name[MAX_SIGNAL_NAME];
+  int fn_refs[MAX_SIGNAL_CBS];
+  int count;
+} LuaSignal;
+typedef struct {
+  LuaSignal signals[MAX_SIGNALS];
+  int count;
+} LuaSignalTable;
 
-/* Recompute all rects from the root, applying current ratios and gaps.
- * Call this on resize / reflow. */
-void dwindle_recompute(DwindleTree *tree, Rect area, int gap);
-void dwindle_recompute_subtree(DwindleTree *tree, int idx, Rect area, int gap);
-
-/* Read back the rect that was assigned to a pane. Returns false if not found. */
-bool dwindle_get_rect(DwindleTree *tree, PaneId id, Rect *out);
-/* Returns true if a leaf for `id` exists in the tree. */
-bool dwindle_has_leaf(DwindleTree *tree, PaneId id);
-/* Prune stale leaves and insert missing ones so the tree exactly mirrors
- * the tiled[] list. Call before dwindle_recompute on every reflow.         */
-void dwindle_sync(DwindleTree *tree, const PaneId *tiled, int n, PaneId focused_id);
-
-/* Adjust the split ratio of the parent container of `id`.
- * delta > 0 grows the pane, delta < 0 shrinks it. Returns false if no parent. */
-bool dwindle_adjust_split(DwindleTree *tree, PaneId id, float delta);
-
-/* Toggle H/V split on the parent container of `id` (like Hyprland togglesplit). */
-bool dwindle_toggle_split(DwindleTree *tree, PaneId id);
-bool dwindle_swap_cycle(DwindleTree *tree, PaneId focused_id, bool forward);
-bool dwindle_swap_main(DwindleTree *tree, PaneId focused_id);
-bool dwindle_swap_dir(DwindleTree *tree, PaneId focused_id, int dx, int dy);
-
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §4  Animation
- * ═══════════════════════════════════════════════════════════════════════════ */
-
+/* ── Animation ─────────────────────────────────────────────────────────── */
 typedef enum {
   ANIM_OPEN,
   ANIM_CLOSE,
@@ -217,89 +202,40 @@ typedef enum {
   ANIM_SCRATCH_CLOSE,
   ANIM_MORPH,
   ANIM_FADE_IN,
-  ANIM_FADE_OUT,
+  ANIM_FADE_OUT
 } AnimKind;
-
-typedef enum { WS_DIR_LEFT, WS_DIR_RIGHT } WsDir;
-
+typedef enum { WS_DIR_LEFT = 0, WS_DIR_RIGHT } WsDir;
 typedef struct {
-  AnimKind        kind;
-  int             from[4];
-  Rect            target;
-  int             duration_ms;
-  bool            active;
+  AnimKind kind;
+  Rect target;
+  int from[4];
+  int duration_ms;
+  bool active;
   struct timespec start;
-  float           opacity_from;
-  float           opacity_to;
+  float opacity_from, opacity_to;
 } PaneAnim;
-
 typedef struct {
-  PaneId   id;
+  PaneId id;
   PaneAnim anim;
 } AnimEntry;
-
 typedef struct {
-  bool            active;
-  WsDir           dir;
-  int             duration_ms;
-  int             screen_w;
+  bool active;
+  WsDir dir;
+  int duration_ms, screen_w;
   struct timespec start;
-  float           cached_e; /* eased progress cached by anim_tick() each frame;
-                               -1.0 means not yet computed this frame          */
+  float cached_e;
 } WsAnim;
-
 typedef struct {
   AnimEntry entries[MAX_PANES];
-  int       count;
-  int       screen_w, screen_h;
-  WsAnim    ws;
-  /* Sorted parallel arrays for O(log n) entry lookup.
-   * id_index[i] holds the sorted id; idx_map[i] holds the corresponding
-   * index into entries[].  Rebuilt by anim_tick() after compaction. */
-  uint32_t  id_index[MAX_PANES];
-  int       idx_map[MAX_PANES];
+  uint32_t id_index[MAX_PANES];
+  int idx_map[MAX_PANES];
+  int count, screen_w, screen_h;
+  WsAnim ws;
 } AnimSet;
 
-void  anim_cancel(AnimSet *a, uint32_t id);
-void  anim_set_resize(AnimSet *a, int w, int h);
-void  anim_open(AnimSet *a, uint32_t id, Rect r);
-void  anim_close(AnimSet *a, uint32_t id, Rect r);
-void  anim_float_open(AnimSet *a, uint32_t id, Rect r);
-void  anim_float_close(AnimSet *a, uint32_t id, Rect r);
-void  anim_scratch_open(AnimSet *a, uint32_t id, Rect r);
-void  anim_scratch_close(AnimSet *a, uint32_t id, Rect r);
-void  anim_morph(AnimSet *a, uint32_t id, Rect from, Rect to);
-void  anim_fade_in(AnimSet *a, uint32_t id, int duration_ms);
-void  anim_fade_out(AnimSet *a, uint32_t id, int duration_ms);
-void  anim_workspace_transition(AnimSet *a, WsDir dir);
-bool  anim_tick(AnimSet *a);
-Rect  anim_get_rect(AnimSet *a, uint32_t id, Rect fallback);
-float anim_get_opacity(AnimSet *a, uint32_t id, float fallback);
-bool  anim_is_closing(AnimSet *a, uint32_t id);
-bool  anim_any(AnimSet *a);
-int   anim_ws_incoming_x(AnimSet *a);
-int   anim_ws_outgoing_x(AnimSet *a);
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §5  Config
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-typedef enum { BAR_TOP, BAR_BOTTOM } BarPosition;
-
+/* ── Actions ───────────────────────────────────────────────────────────── */
 typedef enum {
-  MOD_SUPER = 1 << 0,
-  MOD_CTRL  = 1 << 1,
-  MOD_ALT   = 1 << 2,
-  MOD_SHIFT = 1 << 3,
-} ModKey;
-
-typedef enum {
-  ACTION_SCREENSHOT_FULL,
-  ACTION_SCREENSHOT_WINDOW,
-  ACTION_SCREENSHOT_REGION,
-  ACTION_QUIT,
-  ACTION_RELOAD,
-  ACTION_EXEC,
+  ACTION_EXEC = 0,
   ACTION_CLOSE,
   ACTION_FULLSCREEN,
   ACTION_TOGGLE_FLOAT,
@@ -312,7 +248,6 @@ typedef enum {
   ACTION_MOVE_RIGHT,
   ACTION_MOVE_UP,
   ACTION_MOVE_DOWN,
-  ACTION_SWAP_MAIN,
   ACTION_WORKSPACE,
   ACTION_MOVE_TO_WS,
   ACTION_NEXT_WS,
@@ -321,759 +256,423 @@ typedef enum {
   ACTION_PREV_LAYOUT,
   ACTION_GROW_MAIN,
   ACTION_SHRINK_MAIN,
+  ACTION_SWAP_MAIN,
   ACTION_SCRATCHPAD,
   ACTION_SWITCH_VT,
+  ACTION_QUIT,
+  ACTION_RELOAD,
   ACTION_EMERGENCY_QUIT,
-  ACTION_TOGGLE_OVERLAY,
   ACTION_RESIZE_RATIO,
-  ACTION_FOCUS_URGENT,
 } ActionKind;
-
 typedef struct {
   ActionKind kind;
-  char       exec_cmd[256];
-  char       name[64];
-  int        n;
-  float      ratio_delta;
+  int n;
+  float ratio_delta;
+  char exec_cmd[256];
+  char name[64];
 } Action;
 
-typedef struct {
-  uint32_t     mods;
-  xkb_keysym_t sym;
-  Action       action;
-} Keybind;
+/* ── Gesture (kept as its own header) ─────────────────────────────────── */
+#include "gesture.h"
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * Runtime config
+ *
+ * Only what C actually needs at runtime.  No keybind arrays, no exec lists,
+ * no scratchpad defs, no monitor configs, no win rules — Lua owns all of
+ * that.  Lua writes into this struct via trixie.set(); C reads it.
+ * ══════════════════════════════════════════════════════════════════════════ */
 typedef struct {
-  char  app_id[128];
-  bool  float_rule;
-  bool  fullscreen_rule;
-  bool  noborder;
-  bool  notitle;
-  int   forced_ws;
-  int   forced_w, forced_h;
-  int   forced_x, forced_y;
-  float opacity;
-} WinRule;
+  /* Font — resolved from fontconfig at init before Lua runs */
+  char font_path[256], font_path_bold[256], font_path_italic[256];
+  float font_size;
 
-typedef struct {
-  char  name[64];
-  int   width, height, refresh;
-  int   pos_x, pos_y;
-  float scale;
+  /* Geometry — written by trixie.set() */
+  int gap, outer_gap, border_width;
+  bool smart_gaps;
+  int workspaces;
+
+  /* Cursor — written by trixie.set(), applied when xcursor_mgr is up */
+  char cursor_theme[64];
+  int cursor_size;
+
+  /* Keyboard — written by trixie.set(), applied on keyboard attach */
+  char kb_layout[64], kb_variant[64], kb_options[128];
+  int repeat_rate, repeat_delay;
+
+  /* Colors — read by deco at render time */
+  struct {
+    Color active_border, inactive_border;
+    Color active_title, inactive_title;
+    Color pane_bg, background;
+  } colors;
+
+  /* Misc */
   float saturation;
-  bool  shader_enabled;
-  bool  shader_set;
-} MonitorCfg;
+  bool shader_enabled;
+  int idle_timeout;
+  char seat_name[64];
+  bool xwayland;
+  char build_dir[256]; /* for binary hot-reload */
 
-typedef struct {
-  char  name[64];
-  char  app_id[64];
-  char  exec[256]; /* command to spawn when the scratchpad has no live pane */
-  float width_pct, height_pct;
-} ScratchpadCfg;
-
-typedef struct {
-  char  name[64];
-  char  exec[256];
-  char  icon[32];
-  char  format[64];
-  int   interval;
-  Color color;
-  bool  has_color;
-} BarModuleCfg;
-
-typedef enum {
-  SEP_NONE  = 0,
-  SEP_PIPE  = 1,
-  SEP_BLOCK = 2,
-  SEP_ARROW = 3
-} BarSepStyle;
-
-typedef struct {
-  BarPosition  position;
-  int          height;
-  int          padding;
-  int          glyph_y_offset;
-  int          item_spacing;
-  int          pill_radius;
-  float        font_size;
-  Color        bg, fg, accent, dim;
-  Color        active_ws_fg, active_ws_bg;
-  Color        occupied_ws_fg, inactive_ws_fg;
-  bool         separator;
-  bool         separator_top;
-  Color        separator_color;
-  BarSepStyle  sep_style;
-  char         modules_left[MAX_BAR_MODS][64];
-  int          modules_left_n;
-  char         modules_center[MAX_BAR_MODS][64];
-  int          modules_center_n;
-  char         modules_right[MAX_BAR_MODS][64];
-  int          modules_right_n;
-  BarModuleCfg module_cfgs[MAX_BAR_MODULE_CFGS];
-  int          module_cfg_count;
-} BarCfg;
-
-typedef struct {
-  char kb_layout[32];
-  char kb_variant[32];
-  char kb_options[64];
-  int  repeat_rate;
-  int  repeat_delay;
-} KeyboardCfg;
-
-typedef struct {
-  Color active_border, inactive_border;
-  Color active_title, inactive_title;
-  Color pane_bg;
-  Color bar_bg, bar_fg, bar_accent;
-  Color focus_ring;
-  Color background;
-} ColorSet;
-
-typedef enum {
-  THEME_CUSTOM = 0,
-  THEME_CATPPUCCIN_MOCHA,
-  THEME_CATPPUCCIN_LATTE,
-  THEME_GRUVBOX,
-  THEME_NORD,
-  THEME_TOKYO_NIGHT,
-} ThemeId;
-
-#define MAX_DEV_LANGS 8
-
-typedef struct {
-  char name[32];
-  char build[256];
-  char run[256];
-  char test[256];
-  char fmt[256];
-  char lint[256];
-  char lsp[128];
-} DevLangCfg;
-
-typedef struct {
-  bool       enabled;
-  char       editor[128];
-  char       terminal[128];
-  char       nvim_socket[256];
-  char       nvim_listen_addr[256];
-  char       project_root[512];
-  char       default_panel[32];
-  bool       lsp_diagnostics;
-  int        lsp_poll_ms;
-  DevLangCfg langs[MAX_DEV_LANGS];
-  int        lang_count;
-} OverlayCfg;
-
-typedef struct {
-  /* Fonts */
-  char          font_path[256];
-  char          font_path_bold[256];
-  char          font_path_italic[256];
-  float         font_size;
-  /* Layout */
-  int           gap;
-  int           outer_gap;
-  int           border_width;
-  int           corner_radius;
-  bool          smart_gaps;
-  /* Cursor */
-  char          cursor_theme[64];
-  int           cursor_size;
-  /* Session */
-  int           workspaces;
-  char          seat_name[32];
-  int           idle_timeout;
-  bool          xwayland;
-  /* Colors */
-  ColorSet      colors;
-  ThemeId       theme;
-  /* Bar */
-  BarCfg        bar;
-  /* Input */
-  KeyboardCfg   keyboard;
-  /* Keybinds */
-  Keybind       keybinds[MAX_KEYBINDS];
-  int           keybind_count;
-  /* Window rules */
-  WinRule       win_rules[MAX_WIN_RULES];
-  int           win_rule_count;
-  /* Monitors */
-  MonitorCfg    monitors[MAX_MONITORS];
-  int           monitor_count;
-  /* Scratchpads */
-  ScratchpadCfg scratchpads[MAX_SCRATCHPADS];
-  int           scratchpad_count;
-  /* Per-workspace layout overrides */
-  Layout        ws_layout[MAX_WORKSPACES];
-  bool          ws_layout_set[MAX_WORKSPACES];
-  float         ws_ratio[MAX_WORKSPACES];
-  bool          ws_ratio_set[MAX_WORKSPACES];
-  /* Exec */
-  char          exec_once[16][256];
-  int           exec_once_count;
-  char          exec[16][256];
-  int           exec_count;
-  /* Hot-reload build path — directory where ninja should be run.
-   * Set via:  build_dir = ~/Code/Trixie/build
-   * Defaults to the directory the trixie binary lives in.          */
-  char          build_dir[512];
-  float         saturation;     /* global default saturation (1.0 = neutral) */
-  bool          shader_enabled; /* global shader on/off */
-  OverlayCfg    overlay;
+  /* Gesture bindings — configured via trixie.gesture() in Lua */
   GestureConfig gestures;
 } Config;
 
-void config_defaults(Config *c);
-void config_load(Config *c, const char *path);
-void config_reload(Config *c);
-void config_apply_fallback_keybinds(Config *c);
-void config_set_theme(Config *c, const char *name);
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §5a  Window rule matching helper
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-typedef struct Pane_s Pane;
-
-#include <string.h>
-static inline bool rule_matches(const WinRule *wr, const Pane *p);
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §6  TWM state
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-typedef enum { PANE_SHELL, PANE_XWAYLAND } PaneKind;
-
-struct Pane_s {
-  PaneId   id;
-  PaneKind kind;
-  Rect     rect;
-  Rect     float_rect;
-  bool     floating;
-  bool     fullscreen;
-  char     title[256];
-  char     app_id[128];
-  /* Cached win-rule opacity: 0.0 = uncached, -1.0 = no rule, >0 = matched. */
-  float    rule_opacity;
-};
-
-typedef enum {
-  SCRATCH_FIELD_APP_ID, /* match against pane->app_id  (default) */
-  SCRATCH_FIELD_TITLE,  /* match against pane->title             */
-} ScratchField;
-
-typedef enum {
-  SCRATCH_SPEC_EXACT,  /* strcasecmp                            */
-  SCRATCH_SPEC_SUBSTR, /* case-insensitive strstr  (~ prefix)  */
-  SCRATCH_SPEC_GLOB,   /* fnmatch()  (* ? [ syntax)            */
-} ScratchSpec;
-
+/* ── Canvas (pixel buffer for wibox drawing) ───────────────────────────── */
 typedef struct {
-  ScratchField field;
-  ScratchSpec  kind;
-  char         pat[256];
-} ScratchPattern;
+  uint32_t *px;
+  int w, h, stride;
+} Canvas;
 
-typedef struct {
-  int         index;
-  Layout      layout;
-  float       main_ratio;
-  int         gap;
-  PaneId      panes[MAX_PANES];
-  int         pane_count;
-  PaneId      focused;
-  bool        has_focused;
-  /* BSP tree for LAYOUT_DWINDLE — persists across reflows */
-  DwindleTree dwindle;
-} Workspace;
+/* ── Wibox ─────────────────────────────────────────────────────────────── */
+#define MAX_WIBOXES 8
+typedef enum { BAR_TOP = 0, BAR_BOTTOM } BarPos;
+typedef struct TrixieWibox {
+  struct wlr_scene_buffer *scene_buf;
+  Canvas canvas;
+  int x, y, w, h;
+  bool visible;
+  int lua_draw_ref;
+  BarPos position;
+  bool dirty;
+  lua_State *L;
+  void **lua_ud_wb_ptr;
+} TrixieWibox;
 
-typedef struct {
-  char           name[32];
-  char           app_id[64];
-  char           exec[256]; /* ← add this */
-  float          width_pct, height_pct;
-  PaneId         pane_id;
-  bool           has_pane;
-  bool           visible;
-  ScratchPattern pattern; /* ← ADD THIS LINE */
-} Scratchpad;
-
-typedef struct {
-  int        screen_w, screen_h;
-  Rect       content_rect;
-  Rect       bar_rect;
-  int        gap;
-  int        border_w;
-  int        padding;
-  bool       smart_gaps;
-  bool       bar_visible;
-  Workspace  workspaces[MAX_WORKSPACES];
-  int        ws_count;
-  int        active_ws;
-  Pane       panes[MAX_PANES];
-  int        pane_count;
-  Scratchpad scratchpads[MAX_SCRATCHPADS];
-  int        scratch_count;
-  uint32_t   ws_urgent_mask;
-} TwmState;
-
-static inline bool rule_matches(const WinRule *wr, const Pane *p) {
-  const char *pat = wr->app_id;
-  if(!pat[0]) return false;
-  if(!strncmp(pat, "title:", 6)) return strstr(p->title, pat + 6) != NULL;
-  if(strchr(pat, '*')) {
-    size_t pl        = strlen(pat);
-    bool   ls        = pat[0] == '*';
-    bool   ts        = pat[pl - 1] == '*';
-    char   core[128] = { 0 };
-    size_t cl        = 0;
-    for(size_t i = (ls ? 1 : 0); i < pl - (ts ? 1 : 0) && cl < 127; i++)
-      core[cl++] = pat[i];
-    return strstr(p->app_id, core) != NULL;
-  }
-  return strcmp(p->app_id, pat) == 0;
-}
-
-PaneId new_pane_id(void);
-
-void twm_scratch_notify_title(TwmState *t, PaneId id);
-void twm_init(TwmState *t,
-              int       w,
-              int       h,
-              int       bar_h,
-              bool      bar_bottom,
-              int       gap,
-              int       border_w,
-              int       pad,
-              int       ws_count,
-              bool      smart_gaps);
-void twm_resize(TwmState *t, int w, int h);
-void twm_set_bar_height(TwmState *t, int h, bool at_bottom);
-void twm_reflow(TwmState *t);
-
-PaneId twm_open(TwmState *t, const char *app_id);
-PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating, bool fullscreen);
-void   twm_close(TwmState *t, PaneId id);
-void   twm_set_title(TwmState *t, PaneId id, const char *title);
-
-PaneId twm_focused_id(TwmState *t);
-Pane  *twm_focused(TwmState *t);
-Pane  *twm_pane_by_id(TwmState *t, PaneId id);
-
-void twm_set_focused(TwmState *t, PaneId id);
-void twm_focus_dir(TwmState *t, int dx, int dy);
-void twm_toggle_float(TwmState *t);
-void twm_float_move(TwmState *t, PaneId id, int dx, int dy);
-void twm_float_resize(TwmState *t, PaneId id, int dw, int dh);
-void twm_swap(TwmState *t, bool forward);
-void twm_swap_main(TwmState *t);
-void twm_swap_dir(TwmState *t, int dx, int dy);
-void twm_switch_ws(TwmState *t, int n);
-void twm_move_to_ws(TwmState *t, int n);
-
-void twm_register_scratch(TwmState   *t,
-                          const char *name,
-                          const char *app_id,
-                          const char *exec_cmd,
-                          float       wpct,
-                          float       hpct);
-bool twm_try_assign_scratch(TwmState *t, PaneId id, const char *app_id);
-void twm_toggle_scratch(TwmState *t, const char *name);
-
-/* Uses bar_font_height() (defined in bar.c) so the title bar stays in sync
- * with the status bar font.  Hard cap at 20px so it never stomps content.   */
-extern int bar_font_height(void);
-
-#define DECO_TB_PAD_V 2  /* vertical padding inside TUI title bar           */
-#define DECO_TB_MAX   20 /* hard ceiling in pixels                           */
-
-static inline int deco_title_h(int border_w, bool notitle) {
-  if(notitle) return border_w > 0 ? border_w : 0;
-  int fh = bar_font_height();
-  if(fh > 0) {
-    int h = fh + DECO_TB_PAD_V * 2;
-    return h > DECO_TB_MAX ? DECO_TB_MAX : h;
-  }
-  return border_w > 0 ? border_w * 3 : 16;
-}
-
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §7  Bar worker
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-typedef struct {
-  char    text[256];
-  bool    valid;
-  int64_t updated_ms;
-} BarModuleSlot;
-
-#define BAR_SLOT_BATTERY       0
-#define BAR_SLOT_NETWORK       1
-#define BAR_SLOT_VOLUME        2
-#define BAR_SLOT_CPU           3
-#define BAR_SLOT_MEMORY        4
-#define BAR_SLOT_BUILTIN_COUNT 5
-#define BAR_SLOT_EXEC_BASE     5
-#define BAR_SLOT_MAX           (BAR_SLOT_EXEC_BASE + MAX_BAR_MODULE_CFGS)
-
-typedef struct {
-  _Atomic(uint64_t) generation;
-  BarModuleSlot     slots[BAR_SLOT_MAX];
-  pthread_mutex_t   mu;
-  pthread_cond_t    wake;
-  pthread_t         threads[BAR_SLOT_MAX];
-  bool              running;
-  const Config     *cfg;
-} BarWorkerPool;
-
-void bar_workers_init(BarWorkerPool *pool, const Config *cfg);
-void bar_workers_sync_exec(BarWorkerPool *pool, const Config *cfg);
-void bar_workers_stop(BarWorkerPool *pool);
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §8  Bar renderer
- * ═══════════════════════════════════════════════════════════════════════════ */
-
+/* ── Forward decls ─────────────────────────────────────────────────────── */
 typedef struct TrixieBar TrixieBar;
-
-TrixieBar *bar_create(struct wlr_scene_tree *layer,
-                      int                    w,
-                      int                    h,
-                      const Config          *cfg,
-                      BarWorkerPool         *pool);
-bool       bar_update(TrixieBar *b, TwmState *twm, const Config *cfg);
-void       bar_resize(TrixieBar *b, int w, int h);
-void       bar_destroy(TrixieBar *b);
-void       bar_set_visible(TrixieBar *b, bool visible);
-void       bar_mark_dirty(TrixieBar *b);
-void       bar_sync_exec_modules(const Config *cfg);
-/* Font bridge used by deco.c for title-bar rendering */
-int        bar_measure_text(const char *text);
-int        bar_draw_text_pub(uint32_t   *px,
-                             int         stride,
-                             int         x,
-                             int         y,
-                             const char *text,
-                             Color       fg,
-                             int         clip_w,
-                             int         clip_h);
-int        bar_font_ascender(void);
-/* bar_font_height() declared near deco_title_h above */
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §9  Decorations
- * ═══════════════════════════════════════════════════════════════════════════ */
-
 typedef struct TrixieDeco TrixieDeco;
-
-TrixieDeco *deco_create(struct wlr_scene_tree *layer_tiled,
-                        struct wlr_scene_tree *layer_floating);
-void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim, const Config *cfg);
-void deco_destroy(TrixieDeco *d);
-void deco_mark_dirty(TrixieDeco *d);
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §10  TUI overlay
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-typedef struct TrixieOverlay TrixieOverlay;
-
-TrixieOverlay      *
-overlay_create(struct wlr_scene_tree *layer, int w, int h, const Config *cfg);
-void overlay_destroy(TrixieOverlay *o);
-void overlay_toggle(TrixieOverlay *o);
-bool overlay_visible(TrixieOverlay *o);
-bool overlay_key(TrixieOverlay *o, xkb_keysym_t sym, uint32_t mods);
-bool overlay_update(TrixieOverlay *o,
-                    TwmState      *twm,
-                    const Config  *cfg,
-                    BarWorkerPool *pool);
-void overlay_resize(TrixieOverlay *o, int w, int h);
-void overlay_set_cwd(TrixieOverlay *o, const char *path);
-void overlay_notify(TrixieOverlay *o, const char *title, const char *msg);
-void overlay_show_panel(TrixieOverlay *o, const char *name);
-void overlay_git_invalidate(TrixieOverlay *o);
-
-/* nvim bridge receivers — called from ipc_dispatch when nvim pushes state */
-void overlay_nvim_state(
-    TrixieOverlay *o, const char *file, int line, int col, const char *filetype);
-void overlay_nvim_diag(TrixieOverlay *o, const char *json);
-void overlay_nvim_buffers(TrixieOverlay *o, const char *json);
-
-/* Serialise the current build error list as a JSON quickfix array.
- * Used by the IPC quickfix_get command so nvim can load errors natively. */
-void overlay_quickfix_json(char *out, size_t sz);
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * §11  Compositor structs
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-#include "shader.h"
-
-typedef struct TrixieServer TrixieServer;
-typedef struct TrixieView   TrixieView;
 typedef struct TrixieOutput TrixieOutput;
+typedef struct TrixieServer TrixieServer;
 
+/* ── Layer surface ─────────────────────────────────────────────────────── */
+typedef struct {
+  struct wlr_layer_surface_v1 *wlr_surface;
+  struct wlr_scene_layer_surface_v1 *scene_surface;
+  TrixieServer *server;
+  struct wl_listener map, unmap, destroy;
+  struct wl_list link;
+} TrixieLayerSurface;
+
+/* ── Output ────────────────────────────────────────────────────────────── */
 struct TrixieOutput {
-  struct wl_list           link;
-  TrixieServer            *server;
-  struct wlr_output       *wlr_output;
+  struct wlr_output *wlr_output;
+  TrixieServer *server;
+  struct wl_listener frame, request_state, destroy;
+  struct wl_list link;
   struct wlr_scene_output *scene_output;
-  struct wl_listener       frame;
-  struct wl_listener       request_state;
-  struct wl_listener       destroy;
-  TrixieBar               *bar;
-  TrixieDeco              *deco;
-  TrixieOverlay           *overlay;
-  TrixieShader             shader;
-  float                    saturation;
-  bool                     shader_enabled;
-  bool                     shader_init_tried;
-  int                      width, height;
-  int                      logical_w, logical_h;
-  bool                     was_animating;
-  bool                     deco_dirty;
+  int width, height, logical_w, logical_h;
+  TrixieBar *bar;
+  TrixieDeco *deco;
+  TrixieWibox *wiboxes[MAX_WIBOXES];
+  int wibox_count;
+  bool was_animating, deco_dirty;
+  int lua_signals_ref;
 };
 
+/* ── Keyboard ──────────────────────────────────────────────────────────── */
 typedef struct {
-  struct wl_list       link;
-  TrixieServer        *server;
+  TrixieServer *server;
   struct wlr_keyboard *wlr_keyboard;
-  struct wl_listener   modifiers;
-  struct wl_listener   key;
-  struct wl_listener   destroy;
+  struct wl_listener modifiers, key, destroy;
+  struct wl_list link;
 } TrixieKeyboard;
 
-typedef enum { DRAG_NONE, DRAG_MOVE, DRAG_RESIZE } DragMode;
+/* ── Drag ──────────────────────────────────────────────────────────────── */
+typedef enum { DRAG_NONE = 0, DRAG_MOVE, DRAG_RESIZE } DragMode;
 
-struct TrixieView {
-  struct wl_list link;
-  TrixieServer  *server;
-
+/* ── View ──────────────────────────────────────────────────────────────── */
+typedef struct TrixieView {
+  TrixieServer *server;
   struct wlr_xdg_toplevel *xdg_toplevel;
-
+  struct wlr_scene_tree *scene_tree;
+  PaneId pane_id;
+  bool mapped;
+  struct wl_listener map, unmap, destroy, commit;
+  struct wl_listener request_fullscreen, set_title, set_app_id;
+  struct wlr_foreign_toplevel_handle_v1 *foreign_handle;
+  struct wl_listener foreign_request_activate, foreign_request_close;
+  struct wl_list link;
+  bool is_xwayland;
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else
   void *xwayland_surface;
 #endif
-  bool is_xwayland;
+} TrixieView;
 
-  struct wlr_scene_tree *scene_tree;
-  PaneId                 pane_id;
-  bool                   mapped;
-  bool                   urgent;
+/* ── IPC ───────────────────────────────────────────────────────────────── */
+#define MAX_IPC_SUBSCRIBERS 16
 
-  struct wl_listener map;
-  struct wl_listener unmap;
-  struct wl_listener destroy;
-  struct wl_listener commit;
-  struct wl_listener request_fullscreen;
-  struct wl_listener set_title;
-  struct wl_listener set_app_id;
-  struct wl_listener urgent_listener;
-
-  struct wlr_foreign_toplevel_handle_v1 *foreign_handle;
-  struct wl_listener                     foreign_request_activate;
-  struct wl_listener                     foreign_request_close;
-};
-
-typedef struct {
-  struct wl_list                     link;
-  TrixieServer                      *server;
-  struct wlr_layer_surface_v1       *wlr_surface;
-  struct wlr_scene_layer_surface_v1 *scene_surface;
-  struct wl_listener                 map;
-  struct wl_listener                 unmap;
-  struct wl_listener                 destroy;
-} TrixieLayerSurface;
-
-/* Live state pushed by the nvim bridge plugin */
-typedef struct {
-  char file[1024];
-  char filetype[64];
-  char diag_json[65536];    /* raw JSON array from nvim_diag */
-  char buffers_json[65536]; /* raw JSON array from nvim_buffers */
-  int  line;
-  int  col;
-  bool connected;
-} NvimState;
-
+/* ══════════════════════════════════════════════════════════════════════════
+ * TrixieServer
+ * ══════════════════════════════════════════════════════════════════════════ */
 struct TrixieServer {
-  struct wl_display     *display;
-  struct wlr_backend    *backend;
-  struct wlr_session    *session;
-  struct wlr_renderer   *renderer;
-  struct wlr_allocator  *allocator;
+  /* Wayland / wlroots objects */
+  struct wl_event_source *reload_idle;
+  struct wl_display *display;
+  struct wlr_backend *backend;
+  struct wlr_renderer *renderer;
+  struct wlr_allocator *allocator;
   struct wlr_compositor *compositor;
-
-  /* Idle inhibit protocol */
-  struct wlr_idle_inhibit_manager_v1 *idle_inhibit_mgr;
-  struct wl_listener                  idle_inhibit_new;
-  int                                 idle_inhibit_count;
-
-  struct wlr_screencopy_manager_v1 *screencopy_mgr;
-
-  struct wlr_pointer_gestures_v1 *pointer_gestures;
-  struct wl_listener              swipe_begin;
-  struct wl_listener              swipe_update;
-  struct wl_listener              swipe_end;
-  struct wl_listener              pinch_begin;
-  struct wl_listener              pinch_update;
-  struct wl_listener              pinch_end;
-  GestureTracker                  gesture;
-
-  struct wlr_scene                 *scene;
-  struct wlr_scene_output_layout   *scene_layout;
-  struct wlr_output_layout         *output_layout;
+  struct wlr_scene *scene;
+  struct wlr_scene_output_layout *scene_layout;
+  struct wlr_output_layout *output_layout;
+  struct wlr_xdg_shell *xdg_shell;
+  struct wlr_layer_shell_v1 *layer_shell;
   struct wlr_xdg_output_manager_v1 *output_mgr;
+  struct wlr_xdg_decoration_manager_v1 *deco_mgr;
+  struct wlr_server_decoration_manager *srv_deco;
+  struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_mgr;
+  struct wlr_screencopy_manager_v1 *screencopy_mgr;
+  struct wlr_cursor *cursor;
+  struct wlr_xcursor_manager *xcursor_mgr;
+  struct wlr_seat *seat;
+  struct wlr_idle_inhibit_manager_v1 *idle_inhibit_mgr;
+  struct wlr_pointer_gestures_v1 *pointer_gestures;
+  struct wlr_pointer_constraints_v1 *pointer_constraints;
+  struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
+  struct wlr_xdg_activation_v1 *xdg_activation;
+  struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
+  struct wlr_fractional_scale_manager_v1 *fractional_scale_mgr;
+  struct wlr_presentation *presentation;
+  struct wlr_scene_rect *bg_rect;
+  struct wlr_session *session;
 
+  /* Scene layers (bottom → top) */
   struct wlr_scene_tree *layer_background;
-  struct wlr_scene_tree *layer_chrome_floating;
   struct wlr_scene_tree *layer_windows;
   struct wlr_scene_tree *layer_chrome;
   struct wlr_scene_tree *layer_floating;
+  struct wlr_scene_tree *layer_chrome_floating;
   struct wlr_scene_tree *layer_overlay;
-  struct wlr_scene_rect *bg_rect;
 
-  struct wlr_xdg_shell                 *xdg_shell;
-  struct wlr_layer_shell_v1            *layer_shell;
-  struct wlr_xdg_decoration_manager_v1 *deco_mgr;
-  struct wlr_server_decoration_manager *srv_deco;
-
-  struct wlr_seat            *seat;
-  struct wlr_cursor          *cursor;
-  struct wlr_xcursor_manager *xcursor_mgr;
-  DragMode                    drag_mode;
-  PaneId                      drag_pane;
-
-  struct wlr_presentation                *presentation;
-  struct wlr_fractional_scale_manager_v1 *fractional_scale_mgr;
-  struct wlr_linux_dmabuf_v1             *linux_dmabuf;
-  struct wlr_alpha_modifier_v1           *alpha_modifier;
-  struct wlr_xdg_activation_v1           *xdg_activation;
-  struct wlr_pointer_constraints_v1      *pointer_constraints;
-  struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
-  struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_mgr;
-  struct wlr_cursor_shape_manager_v1     *cursor_shape_mgr;
-
-  struct wl_listener new_output;
-  struct wl_listener new_input;
-  struct wl_listener new_xdg_surface;
-  struct wl_listener new_xdg_popup;
-  struct wl_listener new_layer_surface;
-  struct wl_listener new_deco;
-  struct wl_listener cursor_motion;
-  struct wl_listener cursor_motion_abs;
-  struct wl_listener cursor_button;
-  struct wl_listener cursor_axis;
-  struct wl_listener cursor_frame;
-  struct wl_listener seat_request_cursor;
-  struct wl_listener seat_request_set_selection;
+  /* Wayland event listeners */
+  struct wl_listener new_output, new_input, new_xdg_surface, new_xdg_popup;
+  struct wl_listener new_layer_surface, new_deco;
+  struct wl_listener cursor_motion, cursor_motion_abs;
+  struct wl_listener cursor_button, cursor_axis, cursor_frame;
+  struct wl_listener seat_request_cursor, seat_request_set_selection;
   struct wl_listener seat_request_set_primary_selection;
-  struct wl_listener seat_request_start_drag;
-  struct wl_listener seat_start_drag;
-  struct wl_listener xdg_activation_request;
-  struct wl_listener new_pointer_constraint;
+  struct wl_listener seat_request_start_drag, seat_start_drag;
+  struct wl_listener new_pointer_constraint, xdg_activation_request;
   struct wl_listener cursor_shape_request;
+  struct wl_listener swipe_begin, swipe_update, swipe_end;
+  struct wl_listener pinch_begin, pinch_update, pinch_end;
+  struct wl_listener idle_inhibit_new;
 
-#ifdef HAS_XWAYLAND
-  struct wlr_xwayland *xwayland;
-  struct wl_listener   xwayland_ready;
-  struct wl_listener   new_xwayland_surface;
-#endif
+  struct wl_list outputs, views, keyboards, layer_surfaces;
 
-  struct wl_list views;
-  struct wl_list outputs;
-  struct wl_list keyboards;
-  struct wl_list layer_surfaces;
-
-  TwmState      twm;
-  AnimSet       anim;
-  Config        cfg;
-  BarWorkerPool bar_workers;
-  NvimState     nvim; /* live state from the nvim bridge */
+  /* Core state */
+  TwmState twm;
+  AnimSet anim;
+  Config cfg;
+  GestureTracker gesture;
 
   bool running;
-  bool exec_once_done;
+  DragMode drag_mode;
+  PaneId drag_pane;
+  int idle_inhibit_count;
 
-  /* ── Hot-reload state ───────────────────────────────────────────────────
-   * When the user triggers a binary reload (keybind or trixie-ctl reload),
-   * we fork ninja, pipe its output into the overlay, and exec-replace
-   * ourselves on success.  saved_argv lets us pass the original argv to
-   * execv so flags like --config are preserved across reloads.           */
-  char **saved_argv;          /* pointer to main()'s argv                */
-  char   reload_new_bin[512]; /* binary path captured before ninja runs  */
-  pid_t  reload_pid;          /* pid of the running ninja process, or -1 */
-  int    reload_pipe_fd;      /* read-end of ninja's stdout+stderr pipe  */
-  struct wl_event_source *reload_pipe_src; /* wl event source for the pipe */
-
-  int                     ipc_fd;
-  struct wl_event_source *ipc_src;
-
-#define MAX_IPC_SUBSCRIBERS 16
+  /* IPC */
+  int ipc_fd, inotify_fd;
+  struct wl_event_source *ipc_src, *inotify_src, *idle_timer;
+  int idle_timeout_ms;
   int subscriber_fds[MAX_IPC_SUBSCRIBERS];
   int subscriber_count;
 
-  int                     inotify_fd;
-  struct wl_event_source *inotify_src;
+  /* Binary hot-reload */
+  pid_t reload_pid;
+  int reload_pipe_fd;
+  struct wl_event_source *reload_pipe_src;
+  char reload_new_bin[512];
+  char **saved_argv;
 
-  struct wl_event_source *idle_timer;
-  struct wl_event_source *nvim_timer;
-  int                     idle_timeout_ms;
+  /* Lua */
+  lua_State *L;
+  LuaSignalTable signals;
+
+  /* trixie.key() bindings */
+  struct {
+    uint32_t mods;
+    xkb_keysym_t sym;
+    int fn_ref;
+  } lua_binds[MAX_KEYBINDS];
+  int lua_bind_count;
+
+#ifdef HAS_XWAYLAND
+  struct wlr_xwayland *xwayland;
+  struct wl_listener xwayland_ready;
+  struct wl_listener new_xwayland_surface;
+#endif
 };
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §12  Server API
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════════════
+ * Function declarations
+ * ══════════════════════════════════════════════════════════════════════════ */
 
-void server_binary_reload(TrixieServer *s);
-void server_spawn(TrixieServer *s, const char *cmd);
-void server_focus_pane(TrixieServer *s, PaneId id);
-void server_sync_focus(TrixieServer *s);
-void server_sync_windows(TrixieServer *s);
-void server_request_redraw(TrixieServer *s);
-void server_dispatch_action(TrixieServer *s, Action *a);
-void server_float_toggle(TrixieServer *s);
-void server_scratch_toggle(TrixieServer *s, const char *name);
-void server_apply_config_reload(TrixieServer *s);
-void server_reset_idle(TrixieServer *s);
-void server_init_ipc(TrixieServer *s);
-void server_init_config_watch(TrixieServer *s);
+/* Layout */
+const char *layout_label(Layout l);
+Layout layout_next(Layout l);
+Layout layout_prev(Layout l);
+void layout_compute(Layout, Rect, int n, float ratio, int gap, Rect *out);
+void dwindle_clear(DwindleTree *);
+void dwindle_insert(DwindleTree *, PaneId, PaneId focused, Rect, int gap);
+void dwindle_remove(DwindleTree *, PaneId);
+void dwindle_recompute(DwindleTree *, Rect, int gap);
+bool dwindle_get_rect(DwindleTree *, PaneId, Rect *out);
+bool dwindle_has_leaf(DwindleTree *, PaneId);
+void dwindle_sync(DwindleTree *, const PaneId *tiled, int n, PaneId focused);
+bool dwindle_adjust_split(DwindleTree *, PaneId, float delta);
+bool dwindle_swap_cycle(DwindleTree *, PaneId, bool forward);
+bool dwindle_swap_main(DwindleTree *, PaneId);
+bool dwindle_swap_dir(DwindleTree *, PaneId, int dx, int dy);
 
-TrixieView *view_from_pane(TrixieServer *s, PaneId id);
-TrixieView *view_at(TrixieServer        *s,
-                    double               lx,
-                    double               ly,
-                    struct wlr_surface **surf_out,
-                    double              *sx,
-                    double              *sy);
+/* TWM */
+void twm_init(TwmState *, int w, int h, int bar_h, bool bar_bottom, int gap,
+              int border_w, int pad, int ws_count, bool smart_gaps);
+void twm_resize(TwmState *, int w, int h);
+void twm_set_bar_height(TwmState *, int h, bool at_bottom);
+void twm_reflow(TwmState *);
+PaneId twm_open(TwmState *, const char *app_id);
+PaneId twm_open_ex(TwmState *, const char *app_id, bool floating,
+                   bool fullscreen);
+void twm_close(TwmState *, PaneId);
+void twm_set_title(TwmState *, PaneId, const char *title);
+void twm_set_focused(TwmState *, PaneId);
+PaneId twm_focused_id(TwmState *);
+Pane *twm_focused(TwmState *);
+Pane *twm_pane_by_id(TwmState *, PaneId);
+void twm_focus_dir(TwmState *, int dx, int dy);
+void twm_toggle_float(TwmState *);
+void twm_float_move(TwmState *, PaneId, int dx, int dy);
+void twm_float_resize(TwmState *, PaneId, int dw, int dh);
+void twm_switch_ws(TwmState *, int n);
+void twm_move_to_ws(TwmState *, int n);
+void twm_swap(TwmState *, bool forward);
+void twm_swap_main(TwmState *);
+void twm_swap_dir(TwmState *, int dx, int dy);
+void twm_register_scratch(TwmState *, const char *name, const char *app_id,
+                          const char *exec, float wpct, float hpct);
+bool twm_try_assign_scratch(TwmState *, PaneId, const char *app_id);
+void twm_scratch_notify_title(TwmState *, PaneId);
+void twm_toggle_scratch(TwmState *, const char *name);
+int ipc_scratch_json(TwmState *, char *buf, size_t sz);
+PaneId new_pane_id(void);
 
-int  ipc_scratch_json(TwmState *t, char *buf, size_t bufsz);
-void ipc_dispatch(TrixieServer *s, const char *line, char *reply, size_t reply_sz);
-bool ipc_subscribe(TrixieServer *s, int client_fd);
-void ipc_push_focus_changed(TrixieServer *s);
-void ipc_push_workspace_changed(TrixieServer *s);
-void ipc_push_title_changed(TrixieServer *s, PaneId id);
-void ipc_push_build_done(TrixieServer *s, int exit_code, int err_count);
+/* Animation */
+void anim_set_resize(AnimSet *, int w, int h);
+void anim_open(AnimSet *, PaneId, Rect);
+void anim_close(AnimSet *, PaneId, Rect);
+void anim_float_open(AnimSet *, PaneId, Rect);
+void anim_float_close(AnimSet *, PaneId, Rect);
+void anim_scratch_open(AnimSet *, PaneId, Rect);
+void anim_scratch_close(AnimSet *, PaneId, Rect);
+void anim_morph(AnimSet *, PaneId, Rect from, Rect to);
+void anim_cancel(AnimSet *, PaneId);
+bool anim_tick(AnimSet *);
+Rect anim_get_rect(AnimSet *, PaneId, Rect fallback);
+float anim_get_opacity(AnimSet *, PaneId, float fallback);
+bool anim_is_closing(AnimSet *, PaneId);
+bool anim_any(AnimSet *);
+int anim_ws_incoming_x(AnimSet *);
+void anim_workspace_transition(AnimSet *, WsDir);
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * §13  Lua scripting layer
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* Config — just defaults, Lua owns everything else */
+void config_defaults(Config *);
 
-void lua_init(TrixieServer *s);
-void lua_reload(TrixieServer *s);
-void lua_destroy(TrixieServer *s);
-bool lua_dispatch_key(TrixieServer *s, uint32_t mods, xkb_keysym_t sym);
-void lua_apply_window_rules(TrixieServer *s,
-                            Pane         *p,
-                            const char   *app_id,
-                            const char   *title);
-void lua_on_window_open(TrixieServer *s, PaneId id);
-void lua_on_window_close(TrixieServer *s, PaneId id);
-void lua_on_focus_changed(TrixieServer *s);
-void lua_on_workspace_changed(TrixieServer *s);
-void lua_on_title_changed(TrixieServer *s, PaneId id);
+/* Canvas / font */
+bool canvas_font_init(const char *path, const char *bold, const char *italic,
+                      float size_pt);
+void canvas_font_reload(const char *path, const char *bold, const char *italic,
+                        float size_pt);
+int canvas_measure(const char *text);
+int canvas_draw_text(Canvas *c, int x, int y, const char *text, Color fg);
+int canvas_font_ascender(void);
+int canvas_font_height(void);
+void canvas_fill_rect(Canvas *c, int x, int y, int w, int h, Color col);
+void canvas_clear(Canvas *c, Color col);
+
+/* Wibox */
+TrixieWibox *wibox_create(TrixieServer *s, TrixieOutput *o, int x, int y, int w,
+                          int h);
+void wibox_destroy(TrixieWibox *wb);
+void wibox_mark_dirty(TrixieWibox *wb);
+void wibox_commit(TrixieWibox *wb);
+void wibox_lua_draw(TrixieWibox *wb, lua_State *L);
+void wibox_clear_output(TrixieOutput *o);
+void wibox_reset_output(TrixieOutput *o, lua_State *L);
+
+/* Bar */
+TrixieBar *bar_create(struct wlr_scene_tree *, int w, int h, const Config *);
+bool bar_update(TrixieBar *, TwmState *, const Config *);
+void bar_destroy(TrixieBar *);
+void bar_mark_dirty(TrixieBar *);
+void bar_set_visible(TrixieBar *, bool);
+void bar_resize(TrixieBar *, int w, int h);
+
+/* Deco */
+TrixieDeco *deco_create(struct wlr_scene_tree *tiled,
+                        struct wlr_scene_tree *floating);
+void deco_destroy(TrixieDeco *);
+void deco_mark_dirty(TrixieDeco *);
+void deco_update(TrixieDeco *, TwmState *, AnimSet *, const Config *);
+void deco_complete_update(TrixieDeco *d, TwmState *twm, AnimSet *anim,
+                          const Config *cfg);
+
+/* IPC */
+void ipc_dispatch(TrixieServer *, const char *line, char *reply, size_t sz);
+bool ipc_subscribe(TrixieServer *, int fd);
+void ipc_push_focus_changed(TrixieServer *);
+void ipc_push_workspace_changed(TrixieServer *);
+void ipc_push_title_changed(TrixieServer *, PaneId);
+
+/* Signal system */
+void lua_signal_init(LuaSignalTable *t);
+int lua_signal_connect(lua_State *L, LuaSignalTable *t, const char *name);
+void lua_signal_disconnect(lua_State *L, LuaSignalTable *t, const char *name,
+                           int fn_ref);
+void lua_signal_emit(lua_State *L, LuaSignalTable *t, const char *name,
+                     int nargs);
+void lua_signal_emit_obj(lua_State *L, int *obj_ref, const char *name,
+                         int nargs);
+
+/* Lua */
+void lua_init(TrixieServer *);
+void lua_reload(TrixieServer *);
+void lua_destroy(TrixieServer *);
+bool lua_dispatch_key(TrixieServer *, uint32_t mods, xkb_keysym_t sym);
+void lua_apply_window_rules(TrixieServer *, Pane *, const char *app_id,
+                            const char *title);
+void lua_emit_manage(TrixieServer *, PaneId);
+void lua_emit_unmanage(TrixieServer *, PaneId);
+void lua_emit_focus(TrixieServer *);
+void lua_emit_workspace_changed(TrixieServer *);
+void lua_emit_title_changed(TrixieServer *, PaneId);
+void lua_emit_property(TrixieServer *, PaneId, const char *prop);
+void lua_emit_screen_added(TrixieServer *, TrixieOutput *);
+void lua_emit_screen_removed(TrixieServer *, TrixieOutput *);
+void lua_emit_startup(TrixieServer *);
+
+/* Server */
+void server_spawn(TrixieServer *, const char *cmd);
+void server_dispatch_action(TrixieServer *, Action *);
+void server_sync_focus(TrixieServer *);
+void server_sync_windows(TrixieServer *);
+void server_request_redraw(TrixieServer *);
+void server_focus_pane(TrixieServer *, PaneId);
+void server_float_toggle(TrixieServer *);
+void server_scratch_toggle(TrixieServer *, const char *name);
+void server_apply_config_reload(TrixieServer *);
+void server_binary_reload(TrixieServer *);
+void server_reset_idle(TrixieServer *);
+void server_init_ipc(TrixieServer *);
+void server_init_config_watch(TrixieServer *);
+void server_schedule_reload(TrixieServer *);
+void server_set_bar_inset(TrixieServer *, int h, bool at_bottom);
+TrixieView *view_from_pane(TrixieServer *, PaneId);
+
+// Reload
+void reload_config(TrixieServer *s);
+void lua_register_reload(TrixieServer *s);

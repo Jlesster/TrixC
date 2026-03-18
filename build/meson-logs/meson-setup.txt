@@ -3,32 +3,35 @@ Version: 1.10.1
 Source dir: /home/jless/Code/c-cpp/c/Trixie
 Build dir: /home/jless/Code/c-cpp/c/Trixie/build
 Build type: native build
-Project name: Trixie
-Project version: 0.1.0
-C compiler for the host machine: cc (gcc 15.2.1 "cc (GCC) 15.2.1 20260209")
-C linker for the host machine: cc ld.bfd 2.46
+Project name: trixie
+Project version: 0.4.0
+C compiler for the host machine: gcc (gcc 15.2.0 "gcc (GCC) 15.2.0")
+C linker for the host machine: gcc ld.bfd 2.44
 Host machine cpu family: x86_64
 Host machine cpu: x86_64
-Dependency wayland-protocols found: YES 1.47 (cached)
-Dependency libinput found: YES 1.30.1 (cached)
-Dependency history found: YES 8.3 (cached)
-Dependency luajit found: YES 2.1.1767980792 (cached)
-Dependency libdrm found: YES 2.4.131 (cached)
-Dependency glesv2 found: YES 3.2 (cached)
-Dependency egl found: YES 1.5 (cached)
-Dependency pixman-1 found: YES 0.46.4 (cached)
-Dependency fontconfig found: YES 2.17.1 (cached)
-Dependency harfbuzz-gobject found: YES 12.3.2 (cached)
-Dependency spandsp found: YES 0.0.6 (cached)
-Dependency wlroots-0.18 found: YES 0.18.3 (cached)
-Dependency jack found: YES 3.1410.0 (cached)
-Dependency json-c found: YES 0.18 (cached)
-Dependency girara found: YES 2026.02.04 (cached)
-Dependency wayland-server found: YES 1.24.0 (cached)
-Dependency xkbcommon found: YES 1.13.1 (cached)
-Dependency freetype2 found: YES 26.4.20 (cached)
-Dependency harfbuzz found: YES 12.3.2 (cached)
-Program wayland-scanner found: YES (/usr/sbin/wayland-scanner)
-Build targets in project: 21
+Found pkg-config: YES (/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config) 0.29.2
+Run-time dependency wlroots-0.18 found: YES 0.18.3
+Run-time dependency wayland-server found: YES 1.24.0
+Run-time dependency wayland-client found: YES 1.24.0
+Run-time dependency wayland-protocols found: YES 1.47
+Run-time dependency xkbcommon found: YES 1.11.0
+Run-time dependency libinput found: YES 1.29.2
+Run-time dependency pixman-1 found: YES 0.46.4
+Run-time dependency libdrm found: YES 2.4.131
+Run-time dependency freetype2 found: YES 26.2.20
+Run-time dependency harfbuzz found: YES 12.3.0
+Run-time dependency fontconfig found: YES 2.17.1
+Run-time dependency threads found: YES
+Library m found: YES
+Run-time dependency luajit found: YES 2.1.1741730670
+Run-time dependency xwayland found: YES 24.1.9
+Run-time dependency xcb found: YES 1.17.0
+Message: GLES2 headers: /nix/store/3drkfkyzxfb9rcpnv1xy0nvdj78qngy8-libglvnd-1.7.0-dev/include
+Message: GLES2 libs:    /nix/store/wwckb31fcbwj479g7qwcb3b7cv6416pf-libglvnd-1.7.0/lib
+Program wayland-scanner found: YES (/nix/store/ym2nazjm9vqi0md5dw03vsh9zhg4v6q9-wayland-scanner-1.24.0-bin/bin/wayland-scanner)
+Message: XWayland: enabled
+Checking for function "wlr_gles2_renderer_get_buffer_fbo" with dependency wlroots-0.18: YES 
+Message: shader: wlr_gles2_renderer_get_buffer_fbo found — saturation enabled
+Build targets in project: 19
 
-Found ninja-1.13.2 at /usr/sbin/ninja
+Found ninja-1.13.2 at /nix/store/4siii6hvzs9ymbq37k04vcpx6xnybz21-ninja-1.13.2/bin/ninja
