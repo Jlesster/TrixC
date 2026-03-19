@@ -346,7 +346,16 @@ static void view_apply_geom(TrixieServer *s, TrixieView *v, Pane *p) {
     return;
   }
 #endif
-  wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
+  /* Guard against scheduling a configure on an uninitialized xdg_surface.
+   * Dolphin and some Qt apps emit map before their initial ack_configure,
+   * causing wlroots to log "configure scheduled for uninitialized surface"
+   * and crash. In wlroots 0.18 the correct check is initial_commit — true
+   * means the surface hasn't completed its first commit yet. */
+  if (!v->xdg_toplevel || !v->xdg_toplevel->base)
+    return;
+  if (v->xdg_toplevel->base->initial_commit)
+    return;
+  wlr_xdg_toplevel_set_size(v->xdg_toplevel, (uint32_t)cw, (uint32_t)ch);
 }
 
 /* Public wrapper used by lua.c client_geometry write */
@@ -393,6 +402,7 @@ void server_spawn(TrixieServer *s, const char *cmd) {
       unsetenv("WLR_NO_HARDWARE_CURSORS");
       unsetenv("WLR_RENDERER");
       unsetenv("WLR_DRM_DEVICES");
+      unsetenv("MOZ_WEBRENDER_FORCE");
       execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
       _exit(127);
     }
@@ -2450,12 +2460,9 @@ int main(int argc, char *argv[]) {
   setenv("MOZ_ENABLE_WAYLAND", "1", true);
   setenv("MOZ_DBUS_REMOTE", "1", true);
   setenv("MOZ_USE_XINPUT2", "1", false);
-  setenv("MOZ_WEBRENDER_FORCE", "1", false);
-  /* MOZ_X11_EGL=1: force Firefox's glxtest probe subprocess to use X11 EGL
-   * instead of EGL-Wayland.  glxtest is forked without a wl_display/event-loop
-   * so libnvidia-egl-wayland crashes in wl_proxy_create_wrapper when it tries
-   * to use the inherited Wayland socket.  The main Firefox process still uses
-   * the full Wayland backend — only the GPU capability probe uses X11 EGL. */
+  /* MOZ_X11_EGL=1: force glxtest subprocess to use X11 EGL probe path.
+   * Without this, libnvidia-egl-wayland crashes in the forked child
+   * (no wl_display/event-loop available in glxtest). */
   setenv("MOZ_X11_EGL", "1", false);
   setenv("OZONE_PLATFORM", "wayland", true);
   setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);

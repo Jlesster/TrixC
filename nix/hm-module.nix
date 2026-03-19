@@ -198,6 +198,28 @@ in
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
 
+    # Push compositor environment into systemd --user session so that
+    # xdg-desktop-portal-wlr and other services that gate on
+    # ConditionEnvironment=WAYLAND_DISPLAY can start correctly.
+    # This runs as a systemd user service that Trixie's NixOS module
+    # activates via graphical-session.target, ensuring it fires before
+    # any portal service attempts to start.
+    systemd.user.services.trixie-import-environment = {
+      Unit = {
+        Description = "Import Trixie compositor environment into systemd user session";
+        After = [ "graphical-session-pre.target" ];
+        PartOf = [ "graphical-session.target" ];
+      };
+      Service = {
+        Type = "oneshot";
+        ExecStart = "${pkgs.bash}/bin/bash -c 'systemctl --user import-environment WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DISPLAY && ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DISPLAY'";
+        RemainAfterExit = true;
+      };
+      Install = {
+        WantedBy = [ "graphical-session.target" ];
+      };
+    };
+
     # Wayland-only hints are written to environment.d so systemd --user
     # picks them up only for the graphical Wayland session.  They are
     # intentionally NOT in home.sessionVariables (which goes into ~/.profile
