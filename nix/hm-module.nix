@@ -240,42 +240,34 @@ in
 
   # ── Implementation ─────────────────────────────────────────────────────────
   config = lib.mkIf cfg.enable {
-    # Ensure the package is in the user's profile.
     home.packages = [ cfg.package ];
 
-    # ── Write generated config block ─────────────────────────────────────────
-    xdg.configFile."trixie/_hm_generated.lua".text = generatedInitLua;
-
-    # ── Write init.lua ───────────────────────────────────────────────────────
-    xdg.configFile."trixie/init.lua" =
-      if cfg.configFile != null then
-        {
-          # User supplied a hand-written init.lua — symlink it but inject the
-          # HM generated require() at the very top via a wrapper.
-          text = ''
-            -- Injected by home-manager — loads declarative settings first.
-            require("_hm_generated")
-
-            -- User init.lua (symlinked source: ${toString cfg.configFile})
-          ''
-          + builtins.readFile cfg.configFile;
-        }
-      else
-        {
-          # Fully managed init.lua.
-          text = ''
-            -- init.lua — managed by home-manager.
-            -- Edit via wayland.windowManager.trixie in your HM config.
-            -- Hand-written additions go in extraConfig.
-
-            require("_hm_generated")
-
-            ${cfg.extraConfig}
-          '';
-        };
-
-    # ── Install extra module files ────────────────────────────────────────────
-    xdg.configFile = lib.mapAttrs' (
+    xdg.configFile = {
+      "trixie/_hm_generated.lua".text = generatedInitLua;
+    }
+    // {
+      "trixie/init.lua" =
+        if cfg.configFile != null then
+          {
+            text = ''
+              -- Injected by home-manager — loads declarative settings first.
+              require("_hm_generated")
+              -- User init.lua (symlinked source: ${toString cfg.configFile})
+            ''
+            + builtins.readFile cfg.configFile;
+          }
+        else
+          {
+            text = ''
+              -- init.lua — managed by home-manager.
+              -- Edit via wayland.windowManager.trixie in your HM config.
+              -- Hand-written additions go in extraConfig.
+              require("_hm_generated")
+              ${cfg.extraConfig}
+            '';
+          };
+    }
+    // lib.mapAttrs' (
       name: src: lib.nameValuePair "trixie/modules/${name}.lua" { source = src; }
     ) cfg.extraModules;
   };
