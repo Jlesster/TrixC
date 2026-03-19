@@ -77,7 +77,9 @@ static inline void pane_ht_remove(PaneId id) {
 }
 
 /* Rebuild the hash table from the current pane array (called after compaction).
+ * Kept for future use — suppress unused-function warning with __attribute__.
  */
+static void pane_ht_rebuild(TwmState *t) __attribute__((unused));
 static void pane_ht_rebuild(TwmState *t) {
   pane_ht_clear();
   for (int i = 0; i < t->pane_count; i++)
@@ -597,7 +599,11 @@ void twm_move_to_ws(TwmState *t, int n) {
   dst->panes[dst->pane_count++] = id;
   dst->focused = id;
   dst->has_focused = true;
-  { Pane *_p = twm_pane_by_id(t, id); if (_p) _p->ws_idx = target; }
+  {
+    Pane *_p = twm_pane_by_id(t, id);
+    if (_p)
+      _p->ws_idx = target;
+  }
 
   /* Reflow only the two affected workspaces — src lost a pane, dst gained one.
    * All other workspaces are unchanged and don't need reflow. */
@@ -651,13 +657,13 @@ static ScratchPattern scratch_parse_pattern(const char *raw) {
 
   if (spec[0] == '~') {
     sp.kind = SCRATCH_SPEC_SUBSTR;
-    strncpy(sp.pat, spec + 1, sizeof(sp.pat) - 1);
+    snprintf(sp.pat, sizeof(sp.pat), "%s", spec + 1);
   } else if (strchr(spec, '*') || strchr(spec, '?') || strchr(spec, '[')) {
     sp.kind = SCRATCH_SPEC_GLOB;
-    strncpy(sp.pat, spec, sizeof(sp.pat) - 1);
+    snprintf(sp.pat, sizeof(sp.pat), "%s", spec);
   } else {
     sp.kind = SCRATCH_SPEC_EXACT;
-    strncpy(sp.pat, spec, sizeof(sp.pat) - 1);
+    snprintf(sp.pat, sizeof(sp.pat), "%s", spec);
   }
   return sp;
 }
