@@ -90,8 +90,8 @@
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_single_pixel_buffer_v1.h>
-#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_tearing_control_v1.h>
+#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
@@ -535,6 +535,12 @@ void server_sync_focus(TrixieServer *s) {
 
 /* ── Window sync ────────────────────────────────────────────────────────────
  */
+static void set_buffer_opacity_cb(struct wlr_scene_buffer *buf, int sx, int sy,
+                                  void *data) {
+  (void)sx; (void)sy;
+  wlr_scene_buffer_set_opacity(buf, *(float *)data);
+}
+
 void server_sync_windows(TrixieServer *s) {
   Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
   int incoming_x = anim_ws_incoming_x(&s->anim);
@@ -581,22 +587,17 @@ void server_sync_windows(TrixieServer *s) {
       win_h = 1;
     wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
 
-    bool is_focused = (v->pane_id == focused_id);
-    /* Opacity: rule_opacity if set by window rules, else full opaque.
-     * The old forced 0.9 dim on unfocused tiled windows is removed —
-     * it broke GTK/Electron transparency and was unconditional. */
+    /* Opacity: rule_opacity from window rules, multiplied by animation fade.
+     * wlr_scene_buffer_set_opacity is the correct wlroots 0.18 API — there
+     * is no node-level opacity; it must be set per scene_buffer child. */
     float opacity = (p->rule_opacity > 0.f) ? p->rule_opacity : 1.0f;
     if (p->floating || is_closing) {
       float fade = anim_get_opacity(&s->anim, v->pane_id, -1.f);
       if (fade >= 0.f)
         opacity *= fade;
     }
-    /* wlr_scene_node_set_opacity is available in wlroots 0.18.
-     * Skip the call when opacity is 1.0 to avoid unnecessary scene damage. */
-    if (opacity < 0.9999f)
-      wlr_scene_node_set_opacity(&v->scene_tree->node, opacity);
-    else
-      wlr_scene_node_set_opacity(&v->scene_tree->node, 1.0f);
+    wlr_scene_node_for_each_buffer(&v->scene_tree->node,
+        set_buffer_opacity_cb, &opacity);
     if (!is_closing) {
       int cw = p->rect.w - bw * 2;
       if (cw < 1)
@@ -1559,14 +1560,13 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
           surf = fv->xwayland_surface->surface;
         else
 #endif
-            if (fv->xdg_toplevel)
+        if (fv->xdg_toplevel)
           surf = fv->xdg_toplevel->base->surface;
         if (surf) {
-          struct wlr_tearing_control_v1 *tc =
+          enum wp_tearing_control_v1_presentation_hint hint =
               wlr_tearing_control_manager_v1_surface_hint_from_surface(
                   s->tearing_mgr, surf);
-          if (tc &&
-              tc->current == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC)
+          if (hint == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC)
             want_tearing = true;
         }
         break;
@@ -1586,8 +1586,8 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
     /* Shader path: blit scene → intermediate FBO, run saturation quad.
      * frame_done MUST be sent after commit so wp_presentation feedback
      * reaches clients (video players, Electron, GTK4 frame callbacks). */
-    shader_render_frame(&o->shader, s->renderer, o->scene_output, o->wlr_output,
-                        sat);
+    shader_render_frame(&o->shader, s->renderer, o->scene_output,
+                        o->wlr_output, sat);
     wlr_scene_output_send_frame_done(o->scene_output, &now);
   } else {
     /* Direct scene commit path. Build state so we can set tearing hint. */
@@ -2095,8 +2095,8 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
   /* Wire xs->surface->events.* here rather than in handle_new_xwayland_surface.
    * The surface is guaranteed live for the lifetime of this map. */
   if (!v->xw_commit_connected) {
-    wl_signal_add(&xs->surface->events.map, &v->map);
-    wl_signal_add(&xs->surface->events.unmap, &v->unmap);
+    wl_signal_add(&xs->surface->events.map,    &v->map);
+    wl_signal_add(&xs->surface->events.unmap,  &v->unmap);
     wl_signal_add(&xs->surface->events.commit, &v->commit);
     v->xw_commit_connected = true;
   }
@@ -2266,10 +2266,10 @@ static void handle_new_xwayland_surface(struct wl_listener *listener,
   v->request_fullscreen.notify = xwayland_handle_request_fullscreen;
   v->set_title.notify = xwayland_handle_set_title;
   v->set_app_id.notify = xwayland_handle_set_class;
-  wl_signal_add(&xs->events.destroy, &v->destroy);
+  wl_signal_add(&xs->events.destroy,            &v->destroy);
   wl_signal_add(&xs->events.request_fullscreen, &v->request_fullscreen);
-  wl_signal_add(&xs->events.set_title, &v->set_title);
-  wl_signal_add(&xs->events.set_class, &v->set_app_id);
+  wl_signal_add(&xs->events.set_title,          &v->set_title);
+  wl_signal_add(&xs->events.set_class,          &v->set_app_id);
   /* Do NOT wire xs->surface->events.{map,unmap,commit} here.
    * Firefox creates a probe X11 window that is immediately destroyed via
    * XCB_DESTROY_NOTIFY before it ever maps.  Wlroots frees xs->surface
@@ -2573,7 +2573,7 @@ int main(int argc, char *argv[]) {
    * virtual_keyboard_v1: ydotool, screen keyboards
    * virtual_pointer_v1: warpd, xdotool Wayland mode
    * session_lock_manager_v1: swaylock, hyprlock
-   * xdg_foreign_v1/v2: GTK4 portal / cross-surface parenting */
+   * xdg_foreign_v1/v2: GTK4 portal / cross-surface parenting */ 
 #ifdef HAVE_TEXT_INPUT_V3
   wlr_text_input_manager_v3_create(s->display);
 #endif
