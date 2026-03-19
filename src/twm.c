@@ -254,12 +254,6 @@ static void reflow_workspace(TwmState *t, int ws_idx) {
 
 void twm_reflow(TwmState *t) { reflow_workspace(t, t->active_ws); }
 
-static void twm_reflow_all(TwmState *t) {
-  for (int i = 0; i < t->ws_count; i++)
-    if (t->workspaces[i].pane_count > 0) /* skip empty workspaces */
-      reflow_workspace(t, i);
-}
-
 /* ── Pane management ──────────────────────────────────────────────────────────
  */
 
@@ -296,6 +290,7 @@ PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating,
   PaneId prev_focused = ws->has_focused ? ws->focused : 0;
 
   ws->panes[ws->pane_count++] = p->id;
+  p->ws_idx = t->active_ws;
   ws->focused = p->id;
   ws->has_focused = true;
 
@@ -311,17 +306,20 @@ void twm_close(TwmState *t, PaneId id) {
   for (int i = 0; i < t->pane_count; i++) {
     if (t->panes[i].id == id) {
       t->panes[i] = t->panes[--t->pane_count];
-      /* The swapped pane's pointer has moved — update hash entry. */
       if (i < t->pane_count)
         pane_ht_insert(t->panes[i].id, &t->panes[i]);
       break;
     }
   }
+  /* Track which workspaces actually contained the pane so we only reflow
+   * those — skips reflowing unaffected workspaces entirely. */
+  bool ws_dirty[MAX_WORKSPACES] = {false};
   for (int wi = 0; wi < t->ws_count; wi++) {
     Workspace *ws = &t->workspaces[wi];
     for (int i = 0; i < ws->pane_count; i++) {
       if (ws->panes[i] == id) {
         ws->panes[i] = ws->panes[--ws->pane_count];
+        ws_dirty[wi] = true;
         break;
       }
     }
@@ -338,7 +336,9 @@ void twm_close(TwmState *t, PaneId id) {
       t->scratchpads[i].visible = false;
     }
   }
-  twm_reflow_all(t);
+  for (int wi = 0; wi < t->ws_count; wi++)
+    if (ws_dirty[wi] && t->workspaces[wi].pane_count > 0)
+      reflow_workspace(t, wi);
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -597,10 +597,12 @@ void twm_move_to_ws(TwmState *t, int n) {
   dst->panes[dst->pane_count++] = id;
   dst->focused = id;
   dst->has_focused = true;
+  { Pane *_p = twm_pane_by_id(t, id); if (_p) _p->ws_idx = target; }
 
-  /* dwindle_sync in reflow_workspace will prune the pane from src's tree
-   * and insert it into dst's tree on the next reflow of each workspace.   */
-  twm_reflow_all(t);
+  /* Reflow only the two affected workspaces — src lost a pane, dst gained one.
+   * All other workspaces are unchanged and don't need reflow. */
+  reflow_workspace(t, t->active_ws); /* src — active_ws hasn't changed yet */
+  reflow_workspace(t, target);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -725,18 +727,17 @@ static void scratch_claim(TwmState *t, Scratchpad *sp, PaneId id) {
     p->floating = true;
     p->rect = r;
     p->float_rect = r;
+    p->ws_idx = -1; /* scratchpads live outside all workspace pane lists */
   }
 
-  /* Remove from every workspace pane list.  Scratchpads live outside the
-   * tiling tree entirely.  We call twm_reflow_all below so dwindle_sync
-   * will prune the stale leaf from every workspace tree immediately,
-   * freeing the reserved space rather than leaving a gap until the next
-   * user action triggers a reflow.                                        */
+  /* Reflow only workspaces that actually contained this pane — not all. */
+  bool ws_dirty[MAX_WORKSPACES] = {false};
   for (int wi = 0; wi < t->ws_count; wi++) {
     Workspace *ws = &t->workspaces[wi];
     for (int j = 0; j < ws->pane_count; j++) {
       if (ws->panes[j] == id) {
         ws->panes[j] = ws->panes[--ws->pane_count];
+        ws_dirty[wi] = true;
         if (ws->has_focused && ws->focused == id) {
           ws->has_focused = ws->pane_count > 0;
           if (ws->has_focused)
@@ -746,10 +747,9 @@ static void scratch_claim(TwmState *t, Scratchpad *sp, PaneId id) {
       }
     }
   }
-
-  /* Reflow all workspaces so dwindle_sync prunes the stale leaf immediately
-   * and other tiled windows expand to fill the freed space right away.     */
-  twm_reflow_all(t);
+  for (int wi = 0; wi < t->ws_count; wi++)
+    if (ws_dirty[wi])
+      reflow_workspace(t, wi);
 
   wlr_log(WLR_INFO, "twm: scratch '%s' claimed pane %u  rect=%dx%d+%d+%d",
           sp->name, id, r.w, r.h, r.x, r.y);
@@ -923,6 +923,7 @@ void twm_toggle_scratch(TwmState *t, const char *name) {
       p->floating = true;
       p->rect = r;
       p->float_rect = r;
+      p->ws_idx = t->active_ws;
     }
     ws->panes[ws->pane_count++] = sp->pane_id;
     ws->focused = sp->pane_id;

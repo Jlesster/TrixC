@@ -143,6 +143,7 @@ typedef struct {
   bool minimized; /* hidden from display, preserved in workspace */
   bool sticky;    /* visible on all workspaces */
   float rule_opacity;
+  int ws_idx; /* which workspace this pane belongs to (-1 = scratchpad) */
   /* per-client Lua signal registry index (LUA_NOREF = none) */
   int lua_signals_ref;
 } Pane;
@@ -779,12 +780,14 @@ void lua_emit_title_changed(TrixieServer *, PaneId);
 void lua_emit_property(TrixieServer *, PaneId, const char *prop);
 void lua_emit_screen_added(TrixieServer *, TrixieOutput *);
 void lua_emit_screen_removed(TrixieServer *, TrixieOutput *);
+void lua_apply_pending_monitor(TrixieServer *s, TrixieOutput *o);
 void lua_emit_startup(TrixieServer *);
 
 /* ── Server ────────────────────────────────────────────────────────────── */
 void server_spawn(TrixieServer *, const char *cmd);
 void server_dispatch_action(TrixieServer *, Action *);
-void server_sync_focus(TrixieServer *);
+
+void server_sync_focus(TrixieServer *s);
 void server_sync_windows(TrixieServer *);
 void server_request_redraw(TrixieServer *);
 void server_mark_deco_dirty(TrixieServer *);

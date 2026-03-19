@@ -7,19 +7,20 @@
   wayland,
   wayland-protocols,
   wayland-scanner,
-  wlroots_0_18,
+  wlroots_0_18, # trixie targets wlroots 0.18.x
   libdrm,
   libxkbcommon,
   libinput,
   pixman,
-  mesa,
-  libglvnd,
+  mesa, # provides libEGL + libGLESv2
   freetype,
   harfbuzz,
   fontconfig,
   luajit,
   xwayland,
-  xcbutilwm,
+  xcbutilwm, # xcb-icccm, needed by wlroots xwayland
+  libGL,
+  # Optional — set to null to disable
   withXwayland ? true,
 }:
 
@@ -44,8 +45,8 @@ stdenv.mkDerivation (finalAttrs: {
     libxkbcommon
     libinput
     pixman
-    mesa
-    libglvnd.dev # provides egl.pc and glesv2.pc
+    mesa # EGL + GLES2
+    libGL
     freetype
     harfbuzz
     fontconfig
@@ -57,19 +58,21 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   mesonFlags = [
-    "--wipe"
     (lib.mesonBool "xwayland" withXwayland)
   ];
 
+  # wlroots 0.18 exposes wlr_gles2_renderer_get_buffer_fbo — enable the
+  # saturation shader path.
+  env.NIX_CFLAGS_COMPILE = "-DHAVE_WLR_GLES2_FBO";
+
   postInstall = ''
+    # Install the trixiectl IPC client alongside the compositor
     install -Dm755 trixiectl $out/bin/trixiectl
   '';
 
-  passthru.providedSessions = [ "trixie" ];
-
   meta = {
     description = "wlroots Wayland compositor with LuaJIT scripting";
-    homepage = "https://github.com/Jlesster/TrixC";
+    homepage = "https://github.com/yourname/trixie";
     license = lib.licenses.mit;
     maintainers = [ ];
     platforms = [
