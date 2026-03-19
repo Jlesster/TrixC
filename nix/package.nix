@@ -57,6 +57,7 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   mesonFlags = [
+    "--wipe"
     (lib.mesonBool "xwayland" withXwayland)
   ];
 
