@@ -70,7 +70,7 @@ stdenv.mkDerivation (finalAttrs: {
     install -Dm755 trixiectl $out/bin/trixiectl
   '';
 
-  passthru.providedSession = [ "Trixie" ];
+  passthru.providedSessions = [ "Trixie" ];
 
   meta = {
     description = "wlroots Wayland compositor with LuaJIT scripting";
