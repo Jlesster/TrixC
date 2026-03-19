@@ -2343,7 +2343,7 @@ int main(int argc, char *argv[]) {
   s->foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(s->display);
   s->screencopy_mgr = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
-  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 4, s->renderer);
+  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer);
 #ifdef HAVE_ALPHA_MODIFIER
   wlr_alpha_modifier_v1_create(s->display);
 #endif
