@@ -390,6 +390,9 @@ void server_spawn(TrixieServer *s, const char *cmd) {
       unsetenv("GBM_BACKEND");
       unsetenv("__GLX_VENDOR_LIBRARY_NAME");
       unsetenv("EGL_PLATFORM");
+      unsetenv("WLR_NO_HARDWARE_CURSORS");
+      unsetenv("WLR_RENDERER");
+      unsetenv("WLR_DRM_DEVICES");
       execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
       _exit(127);
     }
@@ -2428,6 +2431,10 @@ int main(int argc, char *argv[]) {
   setenv("GBM_BACKEND", "nvidia-drm", false);
   setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", false);
   setenv("EGL_PLATFORM", "wayland", true);
+  /* wlroots driver hints — compositor-only, stripped in server_spawn. */
+  setenv("WLR_NO_HARDWARE_CURSORS", "1", false);
+  setenv("WLR_RENDERER", "gles2", false);
+  setenv("WLR_DRM_DEVICES", "/dev/dri/card1", false);
   setenv("QT_QPA_PLATFORM", "wayland;xcb", true);
   setenv("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1", true);
   setenv("QT_AUTO_SCREEN_SCALE_FACTOR", "1", false);
