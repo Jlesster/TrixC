@@ -446,6 +446,7 @@ void server_spawn(TrixieServer *s, const char *cmd) {
       unsetenv("WLR_RENDERER");
       unsetenv("WLR_DRM_DEVICES");
       unsetenv("MOZ_WEBRENDER_FORCE");
+      unsetenv("MOZ_X11_EGL"); /* conflicts with Wayland EGL on Nvidia */
       execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
       _exit(127);
     }
@@ -2567,10 +2568,15 @@ int main(int argc, char *argv[]) {
   setenv("MOZ_ENABLE_WAYLAND", "1", true);
   setenv("MOZ_DBUS_REMOTE", "1", true);
   setenv("MOZ_USE_XINPUT2", "1", false);
-  /* MOZ_X11_EGL=1: force glxtest subprocess to use X11 EGL probe path.
-   * Without this, libnvidia-egl-wayland crashes in the forked child
-   * (no wl_display/event-loop available in glxtest). */
-  setenv("MOZ_X11_EGL", "1", false);
+  /* MOZ_X11_EGL caused GPU process to use X11 EGL path instead of Wayland
+   * EGL on Nvidia, leaving zwp_linux_dmabuf proxies dangling when the GPU
+   * process failed. Removed in favour of the correct Nvidia+Wayland vars. */
+  /* MOZ_DISABLE_RDD_SANDBOX: prevents the RDD (Remote Data Decoder) sandbox
+   * from breaking VA-API/NVDEC hardware decode under Wayland on Nvidia. */
+  setenv("MOZ_DISABLE_RDD_SANDBOX", "1", false);
+  /* Tell Firefox's GPU process to use the Wayland EGL platform explicitly. */
+  setenv("MOZ_WEBRENDER", "1", false);
+  setenv("MOZ_ACCELERATED", "1", false);
   setenv("OZONE_PLATFORM", "wayland", true);
   setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
   setenv("NIXOS_OZONE_WL", "1", true);
