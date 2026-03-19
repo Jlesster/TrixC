@@ -503,6 +503,8 @@ typedef struct TrixieView {
   bool is_xwayland;
   bool xw_scene_attached;   /* true once wlr_scene_surface_create has run */
   bool xw_commit_connected; /* true once xs->surface->events.commit is wired */
+  bool xw_surface_listeners_pending; /* true when xs->surface was NULL at
+                                        new_surface time */
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else
