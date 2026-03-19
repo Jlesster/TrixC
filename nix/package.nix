@@ -28,8 +28,6 @@ stdenv.mkDerivation (finalAttrs: {
   pname = "trixie";
   version = "0.5.0";
 
-  passthru.providedSession = [ "Trixie" ];
-
   src = lib.cleanSource ../.;
 
   nativeBuildInputs = [
@@ -71,6 +69,8 @@ stdenv.mkDerivation (finalAttrs: {
     # Install the trixiectl IPC client alongside the compositor
     install -Dm755 trixiectl $out/bin/trixiectl
   '';
+
+  passthru.providedSession = [ "Trixie" ];
 
   meta = {
     description = "wlroots Wayland compositor with LuaJIT scripting";
