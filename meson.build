@@ -138,6 +138,8 @@ executable(
   c_args: [
     '-DHAVE_WLR_GLES2_FBO',
     '-D_POSIX_C_SOURCE=200809L',
+    '-Wno-format-truncation',
+    '-Wno-stringop-truncation',
   ] + xwayland_cflags,
   install: true,
 )
