@@ -568,10 +568,16 @@ void server_sync_windows(TrixieServer *s) {
       } else
 #endif
           if (v->xdg_toplevel) {
-        struct wlr_box cur;
-        wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &cur);
-        if (cur.width != cw || cur.height != ch)
-          wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
+        /* Guard: don't configure before the first ack_configure.
+         * Dolphin and other Qt/KDE apps emit map before their initial
+         * ack_configure; scheduling a configure on an uninitialized
+         * xdg_surface crashes wlroots 0.18. */
+        if (!v->xdg_toplevel->base->initial_commit) {
+          struct wlr_box cur;
+          wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &cur);
+          if (cur.width != cw || cur.height != ch)
+            wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
+        }
       }
     }
   }
@@ -1915,6 +1921,13 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
     wlr_scene_surface_create(v->scene_tree, xs->surface);
     v->xw_scene_attached = true;
   }
+  /* Connect the commit listener here where xs->surface is guaranteed.
+   * We couldn't safely do this in handle_new_xwayland_surface because
+   * xs->surface can be NULL at that point (Firefox, multi-process apps). */
+  if (!v->xw_commit_connected) {
+    wl_signal_add(&xs->surface->events.commit, &v->commit);
+    v->xw_commit_connected = true;
+  }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (!p)
     return;
@@ -2055,10 +2068,15 @@ static void handle_new_xwayland_surface(struct wl_listener *listener,
   v->request_fullscreen.notify = xwayland_handle_request_fullscreen;
   v->set_title.notify = xwayland_handle_set_title;
   v->set_app_id.notify = xwayland_handle_set_class;
-  wl_signal_add(&xs->surface->events.map, &v->map);
-  wl_signal_add(&xs->surface->events.unmap, &v->unmap);
+  /* Use xs->events.map/unmap (wlr_xwayland_surface level) rather than
+   * xs->surface->events.* — xs->surface can be NULL until the X11 client
+   * associates a wl_surface, and dereferencing it here is the root cause of
+   * Firefox and other multi-process apps failing to launch.  The commit
+   * listener is deferred to xwayland_handle_map where xs->surface is
+   * guaranteed to be non-NULL. */
+  wl_signal_add(&xs->events.map, &v->map);
+  wl_signal_add(&xs->events.unmap, &v->unmap);
   wl_signal_add(&xs->events.destroy, &v->destroy);
-  wl_signal_add(&xs->surface->events.commit, &v->commit);
   wl_signal_add(&xs->events.request_fullscreen, &v->request_fullscreen);
   wl_signal_add(&xs->events.set_title, &v->set_title);
   wl_signal_add(&xs->events.set_class, &v->set_app_id);
