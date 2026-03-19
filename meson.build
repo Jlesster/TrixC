@@ -260,7 +260,7 @@ executable('trixiectl',
 # display managers (greetd, GDM, SDDM) and the NixOS
 # services.displayManager.sessionPackages mechanism can find the session.
 install_data(
-  'data/trixie.desktop',
+  'data/Trixie.desktop',
   install_dir: join_paths(get_option('datadir'), 'wayland-sessions'),
 )
 
