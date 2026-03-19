@@ -12,14 +12,13 @@ project(
 
 cc = meson.get_compiler('c')
 
-inc = include_directories('include', '.')
+inc = include_directories('include', 'src', '.')
 
-# ── Options ──────────────────────────────────────────────────────────────────
+# ── Options ───────────────────────────────────────────────────────────────────
 
-# Defined via meson_options.txt or inline below (meson >= 1.1 supports both)
 xwayland_opt = get_option('xwayland')
 
-# ── Dependencies ─────────────────────────────────────────────────────────────
+# ── Dependencies ──────────────────────────────────────────────────────────────
 
 wayland_server  = dependency('wayland-server')
 wayland_client  = dependency('wayland-client')
@@ -43,7 +42,7 @@ wayland_scanner = find_program(
   native: true,
 )
 
-xwayland_deps = []
+xwayland_deps   = []
 xwayland_cflags = []
 if xwayland_opt
   xwayland_dep = dependency('xwayland', required: true)
@@ -52,24 +51,48 @@ if xwayland_opt
   xwayland_cflags = ['-DHAS_XWAYLAND']
 endif
 
-# ── Wayland protocol codegen ─────────────────────────────────────────────────
+# ── Wayland protocol codegen ──────────────────────────────────────────────────
+#
+# All XMLs live in include/protocols/. For each protocol we generate both a
+# private-code .c and a server-header .h, then compile the .c into the binary.
 
-wl_proto_dir = wayland_protos.get_variable('pkgdatadir')
+proto_dir = meson.project_source_root() / 'include/protocols'
 
-xdg_shell_xml = wl_proto_dir / 'stable/xdg-shell/xdg-shell.xml'
+# Helper: given a stem like 'xdg-shell', returns [c_target, h_target]
+# The generated files land in the build directory root (same dir as before).
 
-xdg_shell_c = custom_target(
-  'xdg-shell-protocol-c',
-  input:   xdg_shell_xml,
-  output:  'xdg-shell-protocol.c',
-  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
-)
-xdg_shell_h = custom_target(
-  'xdg-shell-protocol-h',
-  input:   xdg_shell_xml,
-  output:  'xdg-shell-protocol.h',
-  command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
-)
+protocols = [
+  'xdg-shell',
+  'content-type-v1',
+  'cursor-shape-v1',
+  'fullscreen-shell-unstable-v1',
+  'pointer-constraints-unstable-v1',
+  'tablet-v2',
+  'tearing-control-v1',
+  'wlr-layer-shell-unstable-v1',
+  'wlr-output-power-management-unstable-v1',
+]
+
+proto_sources = []
+
+foreach p : protocols
+  xml = proto_dir / p + '.xml'
+
+  c_tgt = custom_target(
+    p + '-protocol-c',
+    input:   xml,
+    output:  p + '-protocol.c',
+    command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+  )
+  h_tgt = custom_target(
+    p + '-protocol-h',
+    input:   xml,
+    output:  p + '-protocol.h',
+    command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+  )
+
+  proto_sources += [c_tgt, h_tgt]
+endforeach
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 
@@ -94,7 +117,7 @@ sources = files(
 
 executable(
   'trixie',
-  sources + [xdg_shell_c, xdg_shell_h],
+  sources + proto_sources,
   include_directories: inc,
   dependencies: [
     wayland_server,
@@ -126,6 +149,10 @@ executable(
   'src/trixiectl.c',
   install: true,
 )
+
+# ── Man pages ─────────────────────────────────────────────────────────────────
+
+install_man('man/trixie.1', 'man/trixie.5', 'man/trixiectl.1')
 
 # ── Desktop entry ─────────────────────────────────────────────────────────────
 
