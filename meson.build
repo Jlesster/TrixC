@@ -95,7 +95,7 @@ sources = files(
 executable(
   'trixie',
   sources + [xdg_shell_c, xdg_shell_h],
-  include_directories: inc
+  include_directories: inc,
   dependencies: [
     wayland_server,
     wayland_client,
