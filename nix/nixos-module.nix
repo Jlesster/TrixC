@@ -72,12 +72,23 @@ in
       enable = true;
       wlr.enable = true;
       extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-      config.trixie = {
-        default = [
+      # XDG_CURRENT_DESKTOP is set to "trixie:wlroots" by main.c.
+      # Portal config keys are matched against the first component only,
+      # so "trixie" is the correct key here.
+      config = {
+        common.default = [
           "wlr"
           "gtk"
         ];
-        "org.freedesktop.impl.portal.FileChooser" = [ "gtk" ];
+        trixie = {
+          default = [
+            "wlr"
+            "gtk"
+          ];
+          "org.freedesktop.impl.portal.FileChooser" = [ "gtk" ];
+          "org.freedesktop.impl.portal.Screenshot" = [ "wlr" ];
+          "org.freedesktop.impl.portal.ScreenCast" = [ "wlr" ];
+        };
       };
     };
 
