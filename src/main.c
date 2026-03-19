@@ -375,6 +375,21 @@ void server_spawn(TrixieServer *s, const char *cmd) {
         close(fd);
       if (!getenv("PATH"))
         setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
+      /* Unset vars that are needed by the compositor/wlroots but break
+       * client applications (especially Firefox and Electron):
+       *
+       * GBM_BACKEND=nvidia-drm    — correct for wlroots/GBM buffer alloc,
+       *                             but breaks Firefox's own Mesa EGL path
+       *                             which does not go through GBM.
+       * __GLX_VENDOR_LIBRARY_NAME — forces libGLX_nvidia which is wrong for
+       *                             Wayland clients that use EGL directly.
+       * EGL_PLATFORM              — compositor needs this set before its own
+       *                             EGL init; clients should auto-detect.
+       *                             Firefox's glxtest forks without a
+       * wl_display and crashes if forced to wayland platform. */
+      unsetenv("GBM_BACKEND");
+      unsetenv("__GLX_VENDOR_LIBRARY_NAME");
+      unsetenv("EGL_PLATFORM");
       execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
       _exit(127);
     }
@@ -2400,6 +2415,14 @@ int main(int argc, char *argv[]) {
   setenv("WAYLAND_DISPLAY", socket, true);
   setenv("XDG_SESSION_TYPE", "wayland", true);
   setenv("XDG_CURRENT_DESKTOP", "trixie:wlroots", true);
+  /* NVIDIA — needed by wlroots/GBM for buffer allocation.
+   * These are intentionally NOT propagated to child processes:
+   * server_spawn() unsets them before exec so Firefox/Electron don't
+   * inherit them (GBM_BACKEND breaks client Mesa EGL, __GLX_VENDOR breaks
+   * libGL dispatch in Wayland-native apps). */
+  setenv("GBM_BACKEND", "nvidia-drm", false);
+  setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", false);
+  setenv("EGL_PLATFORM", "wayland", true);
   setenv("QT_QPA_PLATFORM", "wayland;xcb", true);
   setenv("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1", true);
   setenv("QT_AUTO_SCREEN_SCALE_FACTOR", "1", false);
@@ -2419,7 +2442,6 @@ int main(int argc, char *argv[]) {
   setenv("OZONE_PLATFORM", "wayland", true);
   setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
   setenv("NIXOS_OZONE_WL", "1", true);
-  setenv("EGL_PLATFORM", "wayland", true);
   setenv("WLR_NO_HARDWARE_CURSORS", "1", false);
 
   wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket);
