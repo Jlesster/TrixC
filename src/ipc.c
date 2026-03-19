@@ -518,6 +518,6 @@ bool ipc_subscribe(TrixieServer *s, int client_fd) {
   snprintf(buf, sizeof(buf),
            "{\"event\":\"subscribed\",\"version\":\"%s\",\"workspace\":%d}\n",
            TRIXIE_VERSION_STR, s->twm.active_ws + 1);
-  write(client_fd, buf, strlen(buf));
+  (void)write(client_fd, buf, strlen(buf));
   return true;
 }
