@@ -47,6 +47,7 @@
 #include <wlr/types/wlr_server_decoration.h>
 #include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_tearing_control_v1.h>
+#define HAVE_TEARING_CONTROL 1
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
@@ -503,7 +504,9 @@ typedef struct TrixieView {
   bool is_xwayland;
   bool xw_scene_attached;   /* true once wlr_scene_surface_create has run */
   bool xw_commit_connected; /* true once xs->surface->events.{map,unmap,commit}
-                               are wired (deferred to xwayland_handle_map) */
+                               are wired */
+  bool xw_surface_listeners_pending; /* set when xs->surface was NULL at
+                                        new_surface time */
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else
@@ -532,6 +535,7 @@ struct TrixieServer {
   struct wlr_server_decoration_manager *srv_deco;
   struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_mgr;
   struct wlr_screencopy_manager_v1 *screencopy_mgr;
+  struct wlr_tearing_control_manager_v1 *tearing_mgr;
   struct wlr_cursor *cursor;
   struct wlr_xcursor_manager *xcursor_mgr;
   struct wlr_seat *seat;

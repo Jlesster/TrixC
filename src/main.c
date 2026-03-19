@@ -582,19 +582,21 @@ void server_sync_windows(TrixieServer *s) {
     wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
 
     bool is_focused = (v->pane_id == focused_id);
+    /* Opacity: rule_opacity if set by window rules, else full opaque.
+     * The old forced 0.9 dim on unfocused tiled windows is removed —
+     * it broke GTK/Electron transparency and was unconditional. */
     float opacity = (p->rule_opacity > 0.f) ? p->rule_opacity : 1.0f;
-    if (opacity >= 1.0f && !is_focused && !p->floating && !p->fullscreen)
-      opacity = 0.90f;
     if (p->floating || is_closing) {
       float fade = anim_get_opacity(&s->anim, v->pane_id, -1.f);
       if (fade >= 0.f)
         opacity *= fade;
     }
-#ifdef WLR_SCENE_HAS_OPACITY
-    wlr_scene_node_set_opacity(&v->scene_tree->node, opacity);
-#else
-    (void)opacity;
-#endif
+    /* wlr_scene_node_set_opacity is available in wlroots 0.18.
+     * Skip the call when opacity is 1.0 to avoid unnecessary scene damage. */
+    if (opacity < 0.9999f)
+      wlr_scene_node_set_opacity(&v->scene_tree->node, opacity);
+    else
+      wlr_scene_node_set_opacity(&v->scene_tree->node, 1.0f);
     if (!is_closing) {
       int cw = p->rect.w - bw * 2;
       if (cw < 1)
@@ -1524,9 +1526,9 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
     if (!wb->dirty)
       continue;
     if (wb->lua_draw_ref != LUA_NOREF)
-      wibox_lua_draw(wb, s->L); /* draw fn marks dirty=true then commits */
+      wibox_lua_draw(wb, s->L);
     else
-      wibox_commit(wb); /* manual canvas path */
+      wibox_commit(wb);
     bar_dirty = true;
   }
 
@@ -1536,18 +1538,78 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
   }
   deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
 
+  /* Check if any focused surface on this output has requested tearing.
+   * wp_tearing_control_manager_v1 is advertised; we honour ASYNC hints by
+   * setting tearing_page_flip on the output state before commit.
+   * Only attempt tearing if the focused fullscreen window requests it —
+   * tearing on a composited desktop looks terrible otherwise. */
+  bool want_tearing = false;
+#ifdef HAVE_TEARING_CONTROL
+  PaneId fid = twm_focused_id(&s->twm);
+  if (fid) {
+    Pane *fp = twm_pane_by_id(&s->twm, fid);
+    if (fp && fp->fullscreen) {
+      TrixieView *fv;
+      wl_list_for_each(fv, &s->views, link) {
+        if (fv->pane_id != fid || !fv->mapped)
+          continue;
+        struct wlr_surface *surf = NULL;
+#ifdef HAS_XWAYLAND
+        if (fv->is_xwayland && fv->xwayland_surface)
+          surf = fv->xwayland_surface->surface;
+        else
+#endif
+            if (fv->xdg_toplevel)
+          surf = fv->xdg_toplevel->base->surface;
+        if (surf) {
+          struct wlr_tearing_control_v1 *tc =
+              wlr_tearing_control_manager_v1_surface_hint_from_surface(
+                  s->tearing_mgr, surf);
+          if (tc &&
+              tc->current == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC)
+            want_tearing = true;
+        }
+        break;
+      }
+    }
+  }
+#endif
+
   float sat = s->cfg.saturation;
   bool use_shader = s->cfg.shader_enabled && sat != 1.0f &&
                     wlr_renderer_is_gles2(s->renderer) && o->shader.ready;
+
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
   if (use_shader) {
+    /* Shader path: blit scene → intermediate FBO, run saturation quad.
+     * frame_done MUST be sent after commit so wp_presentation feedback
+     * reaches clients (video players, Electron, GTK4 frame callbacks). */
     shader_render_frame(&o->shader, s->renderer, o->scene_output, o->wlr_output,
                         sat);
+    wlr_scene_output_send_frame_done(o->scene_output, &now);
   } else {
-    wlr_scene_output_commit(o->scene_output, NULL);
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    /* Direct scene commit path. Build state so we can set tearing hint. */
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    if (wlr_scene_output_build_state(o->scene_output, &state, NULL)) {
+      if (want_tearing)
+        state.tearing_page_flip = true;
+      if (!wlr_output_commit_state(o->wlr_output, &state)) {
+        /* Fall back to plain commit if tearing flip fails */
+        wlr_output_state_finish(&state);
+        wlr_output_state_init(&state);
+        wlr_scene_output_build_state(o->scene_output, &state, NULL);
+        wlr_output_commit_state(o->wlr_output, &state);
+      }
+    } else {
+      wlr_scene_output_commit(o->scene_output, NULL);
+    }
+    wlr_output_state_finish(&state);
     wlr_scene_output_send_frame_done(o->scene_output, &now);
   }
+
   if (s->running && (still_animating || bar_dirty))
     wlr_output_schedule_frame(o->wlr_output);
 }
@@ -1555,11 +1617,36 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
 static void output_handle_request_state(struct wl_listener *listener,
                                         void *data) {
   TrixieOutput *o = CONTAINER_OF(listener, TrixieOutput, request_state);
+  TrixieServer *s = o->server;
   struct wlr_output_event_request_state *ev = data;
   wlr_output_commit_state(o->wlr_output, ev->state);
   int nw = o->wlr_output->width, nh = o->wlr_output->height;
-  if (nw > 0 && nh > 0 && (nw != o->shader.width || nh != o->shader.height))
+  if (nw <= 0 || nh <= 0)
+    return;
+  /* Resize shader intermediate FBO if output dimensions changed */
+  if (nw != o->shader.width || nh != o->shader.height)
     shader_output_resize(&o->shader, nw, nh);
+  /* Resize bar and background rect to match new output size.
+   * Without this, the bar stays at the old size after a mode change
+   * or when a display manager changes resolution at runtime. */
+  if (o->width != nw || o->height != nh) {
+    o->width = nw;
+    o->height = nh;
+    o->logical_w = nw;
+    o->logical_h = nh;
+    if (o->bar)
+      bar_resize(o->bar, nw, nh);
+    if (s->bg_rect)
+      wlr_scene_rect_set_size(s->bg_rect, nw, nh);
+    /* Reflow windows to new output dimensions */
+    TrixieOutput *primary = wl_container_of(s->outputs.next, primary, link);
+    if (primary == o) {
+      twm_resize(&s->twm, nw, nh);
+      anim_set_resize(&s->anim, nw, nh);
+      server_sync_windows(s);
+    }
+    server_mark_deco_dirty(s);
+  }
 }
 
 static void output_handle_destroy(struct wl_listener *listener, void *data) {
@@ -1596,10 +1683,18 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   struct wlr_output_state state;
   wlr_output_state_init(&state);
   wlr_output_state_set_enabled(&state, true);
-  wlr_output_state_set_adaptive_sync_enabled(&state, true);
   struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
   if (mode)
     wlr_output_state_set_mode(&state, mode);
+  /* Try adaptive sync first; fall back gracefully if the driver rejects it.
+   * Blindly enabling it on outputs that don't support it causes commit
+   * failures on some DRM drivers (especially older Nvidia). */
+  wlr_output_state_set_adaptive_sync_enabled(&state, true);
+  if (!wlr_output_test_state(wlr_output, &state)) {
+    wlr_log(WLR_DEBUG, "output %s: adaptive sync not supported, disabling",
+            wlr_output->name);
+    wlr_output_state_set_adaptive_sync_enabled(&state, false);
+  }
   wlr_output_commit_state(wlr_output, &state);
   wlr_output_state_finish(&state);
 
@@ -1834,11 +1929,47 @@ static void view_handle_commit(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, commit);
   TrixieServer *s = v->server;
-  if (s->fractional_scale_mgr && v->xdg_toplevel &&
-      v->xdg_toplevel->base->surface) {
-    TrixieOutput *o;
-    wl_list_for_each(o, &s->outputs, link) wlr_fractional_scale_v1_notify_scale(
-        v->xdg_toplevel->base->surface, o->wlr_output->scale);
+  if (!s->fractional_scale_mgr || !v->xdg_toplevel ||
+      !v->xdg_toplevel->base->surface)
+    return;
+  struct wlr_surface *surf = v->xdg_toplevel->base->surface;
+  /* Notify fractional scale for each output this surface intersects.
+   * Notifying all outputs was wrong — it picks the last output's scale
+   * regardless of where the window actually is. */
+  TrixieOutput *o;
+  wl_list_for_each(o, &s->outputs, link) {
+    struct wlr_output_layout_output *lo =
+        wlr_output_layout_get(s->output_layout, o->wlr_output);
+    if (!lo)
+      continue;
+    /* Use the output the pane is positioned on — approximate by center point */
+    Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
+    if (p) {
+      int cx = p->rect.x + p->rect.w / 2;
+      int cy = p->rect.y + p->rect.h / 2;
+      struct wlr_output *at =
+          wlr_output_layout_output_at(s->output_layout, cx, cy);
+      if (at == o->wlr_output)
+        wlr_fractional_scale_v1_notify_scale(surf, o->wlr_output->scale);
+    } else {
+      /* No pane yet (pre-map) — notify all outputs */
+      wlr_fractional_scale_v1_notify_scale(surf, o->wlr_output->scale);
+    }
+  }
+  /* Notify which output the surface is entering/leaving so apps can
+   * adapt refresh rate, color profile, and scale. */
+  Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
+  if (p) {
+    int cx = p->rect.x + p->rect.w / 2;
+    int cy = p->rect.y + p->rect.h / 2;
+    wl_list_for_each(o, &s->outputs, link) {
+      struct wlr_output *at =
+          wlr_output_layout_output_at(s->output_layout, cx, cy);
+      if (at == o->wlr_output)
+        wlr_surface_send_enter(surf, o->wlr_output);
+      else
+        wlr_surface_send_leave(surf, o->wlr_output);
+    }
   }
 }
 
@@ -2042,11 +2173,35 @@ static void xwayland_handle_commit(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, commit);
   TrixieServer *s = v->server;
-  if (s->fractional_scale_mgr && v->xwayland_surface &&
-      v->xwayland_surface->surface) {
-    TrixieOutput *o;
-    wl_list_for_each(o, &s->outputs, link) wlr_fractional_scale_v1_notify_scale(
-        v->xwayland_surface->surface, o->wlr_output->scale);
+  if (!v->xwayland_surface || !v->xwayland_surface->surface)
+    return;
+  struct wlr_surface *surf = v->xwayland_surface->surface;
+  /* Send enter/leave so X11 apps get correct output scale and refresh. */
+  Pane *p = v->pane_id ? twm_pane_by_id(&s->twm, v->pane_id) : NULL;
+  TrixieOutput *o;
+  wl_list_for_each(o, &s->outputs, link) {
+    if (p) {
+      int cx = p->rect.x + p->rect.w / 2;
+      int cy = p->rect.y + p->rect.h / 2;
+      struct wlr_output *at =
+          wlr_output_layout_output_at(s->output_layout, cx, cy);
+      if (at == o->wlr_output)
+        wlr_surface_send_enter(surf, o->wlr_output);
+      else
+        wlr_surface_send_leave(surf, o->wlr_output);
+    }
+    if (s->fractional_scale_mgr) {
+      if (p) {
+        int cx = p->rect.x + p->rect.w / 2;
+        int cy = p->rect.y + p->rect.h / 2;
+        struct wlr_output *at =
+            wlr_output_layout_output_at(s->output_layout, cx, cy);
+        if (at == o->wlr_output)
+          wlr_fractional_scale_v1_notify_scale(surf, o->wlr_output->scale);
+      } else {
+        wlr_fractional_scale_v1_notify_scale(surf, o->wlr_output->scale);
+      }
+    }
   }
 }
 static void xwayland_handle_request_fullscreen(struct wl_listener *listener,
@@ -2406,7 +2561,7 @@ int main(int argc, char *argv[]) {
                   &s->idle_inhibit_new);
   }
   wlr_content_type_manager_v1_create(s->display, 1);
-  wlr_tearing_control_manager_v1_create(s->display, 1);
+  s->tearing_mgr = wlr_tearing_control_manager_v1_create(s->display, 1);
 
   /* ── Additional protocols for full app compatibility ─────────────────────
    * text_input_v3: GTK4, Qt6, Electron keyboard input

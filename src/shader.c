@@ -10,7 +10,7 @@
 /* Map header's opaque aliases to real GL types now that we have GL headers.
  * TrixieGLuint == GLuint == unsigned int; TrixieGLint == GLint == int.    */
 #define TrixieGLuint GLuint
-#define TrixieGLint  GLint
+#define TrixieGLint GLint
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -325,16 +325,22 @@ bool shader_render_frame(TrixieShader *sh, struct wlr_renderer *renderer,
                          struct wlr_scene_output *scene_output,
                          struct wlr_output *output, float saturation) {
 
+  /* Short-circuit: if saturation is effectively 1.0 the shader does nothing.
+   * Caller already checked sat != 1.0f but guard here too for safety. */
+  if (saturation >= 0.9999f && saturation <= 1.0001f) {
+    wlr_scene_output_commit(scene_output, NULL);
+    return true;
+  }
+
 #ifndef HAVE_WLR_GLES2_FBO
   /* wlr_gles2_renderer_get_buffer_fbo not available — fall back to plain
-   * scene commit with no saturation shader.  Everything still works.      */
+   * scene commit with no saturation shader.  Everything still works.
+   * Note: frame_done is sent by the caller (output_handle_frame) so we
+   * must NOT send it here — doing so would double-send and confuse clients. */
   (void)sh;
   (void)renderer;
   (void)saturation;
   wlr_scene_output_commit(scene_output, NULL);
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  wlr_scene_output_send_frame_done(scene_output, &now);
   return true;
 #else
   /* ── 1. Render scene ─────────────────────────────────────────────────── */
@@ -401,6 +407,8 @@ bool shader_render_frame(TrixieShader *sh, struct wlr_renderer *renderer,
   wlr_output_commit_state(output, &final_state);
   wlr_output_state_finish(&scene_state);
   wlr_output_state_finish(&final_state);
+  /* frame_done is sent by the caller (output_handle_frame) after this
+   * returns, so we must NOT send it here. */
   return true;
 #endif
 }
