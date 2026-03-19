@@ -119,7 +119,7 @@ executable(
 # ── trixiectl ─────────────────────────────────────────────────────────────────
 
 executable(
-  'trixiectl',
+  'src/trixiectl',
   'trixiectl.c',
   install: true,
 )
