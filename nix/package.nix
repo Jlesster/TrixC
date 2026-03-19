@@ -28,6 +28,8 @@ stdenv.mkDerivation (finalAttrs: {
   pname = "trixie";
   version = "0.5.0";
 
+  passthru.providedSession = [ "Trixie" ];
+
   src = lib.cleanSource ../.;
 
   nativeBuildInputs = [
