@@ -72,20 +72,20 @@ xdg_shell_h = custom_target(
 # ── Sources ───────────────────────────────────────────────────────────────────
 
 sources = files(
-  'anim.c',
-  'bar.c',
-  'config.c',
-  'deco.c',
-  'gesture.c',
-  'ipc.c',
-  'layout.c',
-  'lua.c',
-  'lua_reload_bindings.c',
-  'main.c',
-  'reload.c',
-  'screenshot.c',
-  'shader.c',
-  'twm.c',
+  'src/anim.c',
+  'src/bar.c',
+  'src/config.c',
+  'src/deco.c',
+  'src/gesture.c',
+  'src/ipc.c',
+  'src/layout.c',
+  'src/lua.c',
+  'src/lua_reload_bindings.c',
+  'src/main.c',
+  'src/reload.c',
+  'src/screenshot.c',
+  'src/shader.c',
+  'src/twm.c',
 )
 
 # ── Executable ────────────────────────────────────────────────────────────────
