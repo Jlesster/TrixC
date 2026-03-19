@@ -12,6 +12,8 @@ project(
 
 cc = meson.get_compiler('c')
 
+inc = include_directories('include', '.')
+
 # ── Options ──────────────────────────────────────────────────────────────────
 
 # Defined via meson_options.txt or inline below (meson >= 1.1 supports both)
@@ -93,6 +95,7 @@ sources = files(
 executable(
   'trixie',
   sources + [xdg_shell_c, xdg_shell_h],
+  include_directories: inc
   dependencies: [
     wayland_server,
     wayland_client,
