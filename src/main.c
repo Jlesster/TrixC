@@ -2484,7 +2484,7 @@ int main(int argc, char *argv[]) {
   s->output_mgr =
       wlr_xdg_output_manager_v1_create(s->display, s->output_layout);
 #ifdef HAVE_OUTPUT_MANAGEMENT_V1
-  wlr_output_manager_v1_create(s->display, s->output_layout);
+  wlr_output_manager_v1_create(s->display);
 #endif
 
   s->deco_mgr = wlr_xdg_decoration_manager_v1_create(s->display);
