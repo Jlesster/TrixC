@@ -86,9 +86,9 @@ void config_defaults(Config *c) {
   c->workspaces = 9;
   strncpy(c->cursor_theme, "default", sizeof(c->cursor_theme) - 1);
   c->cursor_size = 24;
-  strncpy(c->kb_layout, "us", sizeof(c->kb_layout) - 1);
-  c->repeat_rate = 25;
-  c->repeat_delay = 600;
+  strncpy(c->keyboard.kb_layout, "us", sizeof(c->keyboard.kb_layout) - 1);
+  c->keyboard.repeat_rate = 25;
+  c->keyboard.repeat_delay = 600;
   /* Catppuccin Mocha defaults — Lua overrides on startup */
   c->colors.active_border = color_hex(0xcba6f7);
   c->colors.inactive_border = color_hex(0x313244);

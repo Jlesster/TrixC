@@ -1,9 +1,11 @@
 /* bar.c — FreeType/HarfBuzz canvas primitives + Wibox surface management. */
 #include "trixie.h"
 #include <drm_fourcc.h>
+#include <fontconfig/fontconfig.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/types/wlr_scene.h>
 
@@ -98,6 +100,71 @@ static const GlyphCache *gcache_get(uint32_t gi) {
   return &s_tmp;
 }
 
+/* ── Fontconfig resolver — resolve family name or absolute path to .ttf ─── */
+
+static bool fc_resolve_path(const char *query, int weight, int slant, char *out,
+                            int olen) {
+  if (!query || !query[0])
+    return false;
+
+  /* Absolute path — use directly if readable */
+  if (query[0] == '/') {
+    FILE *f = fopen(query, "r");
+    if (!f)
+      return false;
+    fclose(f);
+    strncpy(out, query, olen - 1);
+    out[olen - 1] = '\0';
+    return true;
+  }
+
+  FcInit();
+  FcConfig *fc = FcConfigGetCurrent();
+
+  /* Filename match (e.g. "JetBrainsMono-Regular.ttf") */
+  if (strchr(query, '.')) {
+    FcFontSet *fs = FcConfigGetFonts(fc, FcSetSystem);
+    if (fs) {
+      for (int i = 0; i < fs->nfont; i++) {
+        FcChar8 *file = NULL;
+        if (FcPatternGetString(fs->fonts[i], FC_FILE, 0, &file) ==
+            FcResultMatch) {
+          const char *base = strrchr((char *)file, '/');
+          base = base ? base + 1 : (char *)file;
+          if (!strcasecmp(base, query)) {
+            strncpy(out, (char *)file, olen - 1);
+            out[olen - 1] = '\0';
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  /* Family name — let fontconfig find the best match */
+  FcPattern *pat = FcNameParse((FcChar8 *)query);
+  if (!pat)
+    return false;
+  FcPatternAddInteger(pat, FC_WEIGHT, weight);
+  FcPatternAddInteger(pat, FC_SLANT, slant);
+  FcConfigSubstitute(fc, pat, FcMatchPattern);
+  FcDefaultSubstitute(pat);
+  FcResult res;
+  FcPattern *match = FcFontMatch(fc, pat, &res);
+  FcPatternDestroy(pat);
+  if (!match)
+    return false;
+  FcChar8 *file = NULL;
+  bool ok = false;
+  if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
+    strncpy(out, (char *)file, olen - 1);
+    out[olen - 1] = '\0';
+    ok = true;
+  }
+  FcPatternDestroy(match);
+  return ok;
+}
+
 /* ── Face loader ───────────────────────────────────────────────────────── */
 
 static bool load_face(FT_Library lib, const char *path, float size_pt,
@@ -112,36 +179,58 @@ static bool load_face(FT_Library lib, const char *path, float size_pt,
   return true;
 }
 
-static bool font_load(const char *path, const char *bold, const char *italic,
-                      float size_pt) {
+static bool font_load(const char *query, const char *bold_query,
+                      const char *italic_query, float size_pt) {
   if (size_pt <= 0.f)
     size_pt = 13.f;
   if (FT_Init_FreeType(&g_font.ft_lib))
     return false;
 
-  const char *candidates[] = {
-      (path && path[0]) ? path : NULL,
-      "/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf",
-      "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-      "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-      "/usr/share/fonts/TTF/DejaVuSans.ttf",
-      NULL,
-  };
-  bool loaded = false;
-  for (int i = 0; candidates[i]; i++) {
-    if (!candidates[i])
-      continue;
-    if (load_face(g_font.ft_lib, candidates[i], size_pt, &g_font.ft_face,
-                  &g_font.hb_font)) {
-      loaded = true;
-      break;
+  /* Resolve the primary font via fontconfig */
+  char path[512] = {0};
+  bool resolved = fc_resolve_path(query, FC_WEIGHT_REGULAR, FC_SLANT_ROMAN,
+                                  path, sizeof(path));
+  if (!resolved) {
+    /* fontconfig didn't find it — try common system fallbacks */
+    const char *fallbacks[] = {
+        "/run/current-system/sw/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/run/current-system/sw/share/fonts/truetype/liberation/"
+        "LiberationMono-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        NULL,
+    };
+    for (int i = 0; fallbacks[i]; i++) {
+      FILE *f = fopen(fallbacks[i], "r");
+      if (f) {
+        fclose(f);
+        strncpy(path, fallbacks[i], sizeof(path) - 1);
+        resolved = true;
+        wlr_log(WLR_INFO, "[font] '%s' not found, using fallback: %s",
+                query ? query : "(null)", path);
+        break;
+      }
     }
   }
-  if (!loaded) {
+
+  if (!resolved || !path[0]) {
+    wlr_log(WLR_ERROR, "[font] could not find font '%s'",
+            query ? query : "(null)");
     FT_Done_FreeType(g_font.ft_lib);
     g_font.ft_lib = NULL;
     return false;
   }
+
+  if (!load_face(g_font.ft_lib, path, size_pt, &g_font.ft_face,
+                 &g_font.hb_font)) {
+    wlr_log(WLR_ERROR, "[font] FreeType failed to load '%s'", path);
+    FT_Done_FreeType(g_font.ft_lib);
+    g_font.ft_lib = NULL;
+    return false;
+  }
+
+  wlr_log(WLR_INFO, "[font] loaded: %s (%.0fpt)", path, size_pt);
 
   g_font.ascender =
       (int)ceilf((float)g_font.ft_face->size->metrics.ascender / 64.f);
@@ -149,20 +238,44 @@ static bool font_load(const char *path, const char *bold, const char *italic,
       (int)floorf((float)g_font.ft_face->size->metrics.descender / 64.f);
   g_font.height = g_font.ascender - g_font.descender;
 
-  if (bold && bold[0] &&
-      load_face(g_font.ft_lib, bold, size_pt, &g_font.ft_face_bold,
+  /* Bold — try to resolve separately, fall back to regular */
+  char bold_path[512] = {0};
+  if (bold_query && bold_query[0] &&
+      fc_resolve_path(bold_query, FC_WEIGHT_BOLD, FC_SLANT_ROMAN, bold_path,
+                      sizeof(bold_path)) &&
+      load_face(g_font.ft_lib, bold_path, size_pt, &g_font.ft_face_bold,
                 &g_font.hb_font_bold)) {
+    /* ok */
+  } else if (fc_resolve_path(path, FC_WEIGHT_BOLD, FC_SLANT_ROMAN, bold_path,
+                             sizeof(bold_path)) &&
+             strcmp(bold_path, path) != 0 &&
+             load_face(g_font.ft_lib, bold_path, size_pt, &g_font.ft_face_bold,
+                       &g_font.hb_font_bold)) {
+    /* found bold variant of same family */
   } else {
     g_font.ft_face_bold = g_font.ft_face;
     g_font.hb_font_bold = g_font.hb_font;
   }
-  if (italic && italic[0] &&
-      load_face(g_font.ft_lib, italic, size_pt, &g_font.ft_face_italic,
+
+  /* Italic — same approach */
+  char italic_path[512] = {0};
+  if (italic_query && italic_query[0] &&
+      fc_resolve_path(italic_query, FC_WEIGHT_REGULAR, FC_SLANT_ITALIC,
+                      italic_path, sizeof(italic_path)) &&
+      load_face(g_font.ft_lib, italic_path, size_pt, &g_font.ft_face_italic,
                 &g_font.hb_font_italic)) {
+    /* ok */
+  } else if (fc_resolve_path(path, FC_WEIGHT_REGULAR, FC_SLANT_ITALIC,
+                             italic_path, sizeof(italic_path)) &&
+             strcmp(italic_path, path) != 0 &&
+             load_face(g_font.ft_lib, italic_path, size_pt,
+                       &g_font.ft_face_italic, &g_font.hb_font_italic)) {
+    /* found italic variant */
   } else {
     g_font.ft_face_italic = g_font.ft_face;
     g_font.hb_font_italic = g_font.hb_font;
   }
+
   g_font.ready = true;
   return true;
 }
@@ -189,7 +302,7 @@ bool canvas_font_init(const char *path, const char *bold, const char *italic,
   return font_load(path, bold, italic, size_pt);
 }
 
-void canvas_font_reload(const char *path, const char *bold, const char *italic,
+bool canvas_font_reload(const char *path, const char *bold, const char *italic,
                         float size_pt) {
   if (g_font.hb_font_italic && g_font.hb_font_italic != g_font.hb_font)
     hb_font_destroy(g_font.hb_font_italic);
@@ -207,7 +320,7 @@ void canvas_font_reload(const char *path, const char *bold, const char *italic,
     FT_Done_FreeType(g_font.ft_lib);
   memset(&g_font, 0, sizeof(g_font));
   gcache_clear();
-  font_load(path, bold, italic, size_pt);
+  return font_load(path, bold, italic, size_pt);
 }
 
 int canvas_font_ascender(void) { return g_font.ascender; }
@@ -393,6 +506,12 @@ TrixieWibox *wibox_create(TrixieServer *s, TrixieOutput *o, int x, int y, int w,
   if (!g_font.ready)
     canvas_font_init(o->server->cfg.font_path, o->server->cfg.font_path_bold,
                      o->server->cfg.font_path_italic, o->server->cfg.font_size);
+  if (!g_font.ready)
+    wlr_log(WLR_ERROR, "[wibox] font not ready — check font_path '%s'",
+            o->server->cfg.font_path);
+  else
+    wlr_log(WLR_DEBUG, "[wibox] font ready: ascender=%d height=%d",
+            g_font.ascender, g_font.height);
   return wb;
 }
 

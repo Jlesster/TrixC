@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <libinput.h>
 #include <linux/input-event-codes.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,9 +87,17 @@ static int s_bar_bot_h = 0;
 
 /* ── Gesture handlers ───────────────────────────────────────────────────────
  */
+static double s_swipe_dx = 0, s_swipe_dy = 0;
+static int s_swipe_fingers = 0;
+static double s_pinch_scale = 1.0;
+static int s_pinch_fingers = 0;
+
 static void handle_swipe_begin(struct wl_listener *l, void *data) {
   TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_begin);
   struct wlr_pointer_swipe_begin_event *ev = data;
+  s_swipe_dx = 0;
+  s_swipe_dy = 0;
+  s_swipe_fingers = (int)ev->fingers;
   gesture_swipe_begin(&s->gesture, &s->cfg.gestures, s, (int)ev->fingers);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_swipe_begin(s->pointer_gestures, s->seat,
@@ -97,6 +106,8 @@ static void handle_swipe_begin(struct wl_listener *l, void *data) {
 static void handle_swipe_update(struct wl_listener *l, void *data) {
   TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_update);
   struct wlr_pointer_swipe_update_event *ev = data;
+  s_swipe_dx += ev->dx;
+  s_swipe_dy += ev->dy;
   gesture_swipe_update(&s->gesture, &s->cfg.gestures, s, ev->dx, ev->dy);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_swipe_update(s->pointer_gestures, s->seat,
@@ -106,6 +117,17 @@ static void handle_swipe_end(struct wl_listener *l, void *data) {
   TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_end);
   struct wlr_pointer_swipe_end_event *ev = data;
   gesture_swipe_end(&s->gesture, &s->cfg.gestures, s, ev->cancelled);
+  if (!ev->cancelled && (s_swipe_dx != 0.0 || s_swipe_dy != 0.0)) {
+    /* Determine dominant direction */
+    const char *dir;
+    if (fabs(s_swipe_dx) >= fabs(s_swipe_dy))
+      dir = s_swipe_dx > 0 ? "right" : "left";
+    else
+      dir = s_swipe_dy > 0 ? "down" : "up";
+    char spec[64];
+    snprintf(spec, sizeof(spec), "swipe:%d:%s", s_swipe_fingers, dir);
+    lua_dispatch_gesture(s, spec);
+  }
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_swipe_end(s->pointer_gestures, s->seat,
                                            ev->time_msec, ev->cancelled);
@@ -113,6 +135,8 @@ static void handle_swipe_end(struct wl_listener *l, void *data) {
 static void handle_pinch_begin(struct wl_listener *l, void *data) {
   TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_begin);
   struct wlr_pointer_pinch_begin_event *ev = data;
+  s_pinch_scale = 1.0;
+  s_pinch_fingers = (int)ev->fingers;
   gesture_pinch_begin(&s->gesture, &s->cfg.gestures, s, (int)ev->fingers);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_pinch_begin(s->pointer_gestures, s->seat,
@@ -121,6 +145,7 @@ static void handle_pinch_begin(struct wl_listener *l, void *data) {
 static void handle_pinch_update(struct wl_listener *l, void *data) {
   TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_update);
   struct wlr_pointer_pinch_update_event *ev = data;
+  s_pinch_scale = ev->scale;
   gesture_pinch_update(&s->gesture, &s->cfg.gestures, s, ev->scale);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_pinch_update(s->pointer_gestures, s->seat,
@@ -131,6 +156,12 @@ static void handle_pinch_end(struct wl_listener *l, void *data) {
   TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_end);
   struct wlr_pointer_pinch_end_event *ev = data;
   gesture_pinch_end(&s->gesture, &s->cfg.gestures, s, ev->cancelled);
+  if (!ev->cancelled) {
+    char spec[64];
+    snprintf(spec, sizeof(spec), "pinch:%d:%s", s_pinch_fingers,
+             s_pinch_scale < 0.9 ? "in" : "out");
+    lua_dispatch_gesture(s, spec);
+  }
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_pinch_end(s->pointer_gestures, s->seat,
                                            ev->time_msec, ev->cancelled);
@@ -306,6 +337,11 @@ static void view_apply_geom(TrixieServer *s, TrixieView *v, Pane *p) {
   wlr_xdg_toplevel_set_size(v->xdg_toplevel, cw, ch);
 }
 
+/* Public wrapper used by lua.c client_geometry write */
+void view_apply_geom_pub(TrixieServer *s, TrixieView *v, Pane *p) {
+  view_apply_geom(s, v, p);
+}
+
 /* ── Spawn ──────────────────────────────────────────────────────────────────
  */
 void server_spawn(TrixieServer *s, const char *cmd) {
@@ -426,12 +462,13 @@ void server_sync_windows(TrixieServer *s) {
     Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
     if (!p)
       continue;
-    bool on_ws = false;
-    for (int i = 0; i < ws->pane_count; i++)
-      if (ws->panes[i] == v->pane_id) {
-        on_ws = true;
-        break;
-      }
+    bool on_ws = p->sticky; /* sticky = visible everywhere */
+    if (!on_ws)
+      for (int i = 0; i < ws->pane_count; i++)
+        if (ws->panes[i] == v->pane_id) {
+          on_ws = true;
+          break;
+        }
     bool is_closing = anim_is_closing(&s->anim, v->pane_id);
     if (!on_ws && !is_closing) {
       wlr_scene_node_set_enabled(&v->scene_tree->node, false);
@@ -439,6 +476,11 @@ void server_sync_windows(TrixieServer *s) {
       if (v->is_xwayland && v->xwayland_surface)
         wlr_xwayland_surface_activate(v->xwayland_surface, false);
 #endif
+      continue;
+    }
+    /* minimized windows are logically on the workspace but visually hidden */
+    if (p->minimized) {
+      wlr_scene_node_set_enabled(&v->scene_tree->node, false);
       continue;
     }
     wlr_scene_node_set_enabled(&v->scene_tree->node, true);
@@ -833,7 +875,8 @@ void server_apply_config_reload(TrixieServer *s) {
 
   TrixieKeyboard *kb;
   wl_list_for_each(kb, &s->keyboards, link) wlr_keyboard_set_repeat_info(
-      kb->wlr_keyboard, s->cfg.repeat_rate, s->cfg.repeat_delay);
+      kb->wlr_keyboard, s->cfg.keyboard.repeat_rate,
+      s->cfg.keyboard.repeat_delay);
 
   if (s->idle_timer) {
     s->idle_timeout_ms = s->cfg.idle_timeout * 1000;
@@ -1051,16 +1094,19 @@ static void server_new_keyboard(TrixieServer *s, struct wlr_input_device *dev) {
   kb->wlr_keyboard = wlr_kb;
   struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   struct xkb_rule_names rules = {
-      .layout = s->cfg.kb_layout[0] ? s->cfg.kb_layout : NULL,
-      .variant = s->cfg.kb_variant[0] ? s->cfg.kb_variant : NULL,
-      .options = s->cfg.kb_options[0] ? s->cfg.kb_options : NULL,
+      .layout = s->cfg.keyboard.kb_layout[0] ? s->cfg.keyboard.kb_layout : NULL,
+      .variant =
+          s->cfg.keyboard.kb_variant[0] ? s->cfg.keyboard.kb_variant : NULL,
+      .options =
+          s->cfg.keyboard.kb_options[0] ? s->cfg.keyboard.kb_options : NULL,
   };
   struct xkb_keymap *keymap =
       xkb_keymap_new_from_names(ctx, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
   wlr_keyboard_set_keymap(wlr_kb, keymap);
   xkb_keymap_unref(keymap);
   xkb_context_unref(ctx);
-  wlr_keyboard_set_repeat_info(wlr_kb, s->cfg.repeat_rate, s->cfg.repeat_delay);
+  wlr_keyboard_set_repeat_info(wlr_kb, s->cfg.keyboard.repeat_rate,
+                               s->cfg.keyboard.repeat_delay);
   kb->modifiers.notify = keyboard_handle_modifiers;
   wl_signal_add(&wlr_kb->events.modifiers, &kb->modifiers);
   kb->key.notify = keyboard_handle_key;
@@ -1213,12 +1259,38 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
   TrixieServer *s = CONTAINER_OF(listener, TrixieServer, cursor_button);
   struct wlr_pointer_button_event *ev = data;
   server_reset_idle(s);
+  bool pressed = (ev->state == WL_POINTER_BUTTON_STATE_PRESSED);
+
+  /* Lua button bindings get first crack (without modifier → global binds) */
+  uint32_t mods = 0;
+  TrixieKeyboard *kb;
+  wl_list_for_each(kb, &s->keyboards, link) mods |=
+      wlr_keyboard_get_modifiers(kb->wlr_keyboard);
+  /* Convert wlr mods */
+  uint32_t lmods = 0;
+  if (mods & WLR_MODIFIER_LOGO)
+    lmods |= MOD_SUPER;
+  if (mods & WLR_MODIFIER_CTRL)
+    lmods |= MOD_CTRL;
+  if (mods & WLR_MODIFIER_ALT)
+    lmods |= MOD_ALT;
+  if (mods & WLR_MODIFIER_SHIFT)
+    lmods |= MOD_SHIFT;
+  /* Map wlr button codes to 1/2/3 */
+  uint32_t btn = ev->button == BTN_LEFT     ? 1
+                 : ev->button == BTN_MIDDLE ? 2
+                 : ev->button == BTN_RIGHT  ? 3
+                                            : ev->button;
+  if (lua_dispatch_button(s, lmods, btn, pressed))
+    return;
+
   wlr_seat_pointer_notify_button(s->seat, ev->time_msec, ev->button, ev->state);
-  if (ev->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+  if (!pressed) {
     s->drag_mode = DRAG_NONE;
     s->drag_pane = 0;
     return;
   }
+
   bool held = super_is_held(s);
   PaneId pid = pane_at_cursor(s, s->cursor->x, s->cursor->y);
   if (pid) {

@@ -5,17 +5,29 @@
  *   trixie.disconnect_signal(name, fn)
  *   trixie.emit_signal(name, ...)
  *
- * ── CLIENT OBJECT  (passed to signals, returned from queries)
+ * ── CLIENT OBJECT
  *   c.id, c.title, c.app_id, c.workspace      (read)
- *   c.floating, c.fullscreen, c.ontop         (read/write)
+ *   c.floating, c.fullscreen, c.ontop         (read/write → fires property::*)
+ *   c.minimized, c.sticky                     (read/write → fires property::*)
+ *   c.x, c.y, c.width, c.height               (read/write → auto-floats)
  *   c.border_width, c.border_color            (read/write)
  *   c.opacity                                 (read/write)
  *   c.focused                                 (read)
- *   c.rect  → {x,y,w,h}                       (read)
+ *   c.rect → {x,y,w,h}                        (read)
  *   c:kill()  c:focus()  c:raise()
+ *   c:geometry() → {x,y,width,height}
+ *   c:geometry({x,y,width,height})            (write — auto-floats)
+ *   c:minimize()  c:unminimize()
  *   c:move_to_workspace(n)
  *   c:connect_signal(name, fn)
  *   c:emit_signal(name, ...)
+ *
+ * ── SIGNALS FIRED ON CLIENT PROPERTY WRITES
+ *   property::floating, property::fullscreen, property::ontop
+ *   property::minimized, property::sticky, property::opacity
+ *   property::border_width, property::border_color
+ *   property::workspace, property::geometry
+ *   property::title (fired by compositor on title change)
  *
  * ── SCREEN OBJECT
  *   s.index, s.geometry, s.workarea           (read)
@@ -29,8 +41,12 @@
  *   trixie.workspace.count
  *   trixie.workspace.layout       current layout enum value
  *
- * ── KEYBINDS
+ * ── INPUT BINDINGS
  *   trixie.key({mods}, key, fn [, fn_release])
+ *   trixie.button({mods}, btn, fn [, fn_release])   btn=1/2/3
+ *   trixie.gesture(spec, fn)
+ *     spec: "swipe:3:left" | "swipe:3:right" | "swipe:3:up" | "swipe:3:down"
+ *           "swipe:4:left" etc. | "pinch:2:in" | "pinch:2:out"
  *
  * ── RULES
  *   trixie.rules.rules = { {rule={app_id=,name=}, properties={...}}, ... }
@@ -40,17 +56,25 @@
  * ── LAYOUTS
  *   trixie.layout.dwindle / columns / rows / threecol / monocle
  *   trixie.layout.set(layout)   trixie.layout.next()   trixie.layout.prev()
+ *   trixie.layout.register(name, fn)
+ *     fn(clients, geometry) called at reflow
+ *     clients = array of client objects for the workspace
+ *     geometry = {x, y, width, height, gap}
+ *     fn writes c.x/y/width/height on each client to position it
  *
  * ── WIBOX
  *   local wb = trixie.wibox({screen, x, y, width, height, position})
  *   wb:set_draw(function(canvas) ... end)  wb:redraw()  wb.visible
- *   canvas:fill_rect(x,y,w,h, argb)   canvas:draw_text(x,y,text, argb) → width
- *   canvas:clear(argb)   canvas:measure(text) → int
- *   canvas:width()   canvas:height()   canvas:font_height()
- * canvas:font_ascender()
+ *   canvas:fill_rect(x,y,w,h, argb)
+ *   canvas:draw_text(x,y,text, argb) → width
+ *   canvas:clear(argb)
+ *   canvas:measure(text) → int
+ *   canvas:width()   canvas:height()
+ *   canvas:font_height()   canvas:font_ascender()
  *
  * ── ACTIONS
  *   trixie.spawn(cmd)
+ *   trixie.exec_once(cmd)                    (deduped across reloads)
  *   trixie.focus("left"|"right"|"up"|"down")
  *   trixie.close()   trixie.float()   trixie.fullscreen()
  *   trixie.scratchpad(name)
@@ -62,7 +86,7 @@
  *   trixie.dpms(true|false|"on"|"off")
  *   trixie.notify(summary [, body])
  *
- * ── SCRATCHPAD REGISTRATION
+ * ── SCRATCHPAD
  *   trixie.register_scratchpad(name, {app_id, exec, width, height})
  *
  * ── CONFIG
@@ -71,8 +95,9 @@
  *     inactive_border, background, font, font_size, smart_gaps,
  *     cursor_size, cursor_theme, kb_layout, kb_variant, kb_options,
  *     repeat_rate, repeat_delay, workspaces, xwayland, saturation,
- *     theme, idle_timeout
- *   trixie.get(key) → value   (reads back current config values)
+ *     idle_timeout, theme,
+ *     monitor = {name, width, height, refresh, scale, x, y}
+ *   trixie.get(key) → value
  *
  * ── QUERIES
  *   trixie.focused()        → client or nil
@@ -84,15 +109,15 @@
  *   t:cancel()
  *
  * ── SIGNALS EMITTED BY THE COMPOSITOR
- *   "startup"            on first start
- *   "reload"             after hot-reload completes
- *   "manage"    (c)      new window mapped
- *   "unmanage"  (c)      window closed
- *   "focus"     (c)      focus changed (c may be nil)
- *   "title_changed" (c)  window title updated
+ *   "startup"                on first start
+ *   "reload"                 after hot-reload completes
+ *   "manage"       (c)       new window mapped
+ *   "unmanage"     (c)       window closed
+ *   "focus"        (c)       focus changed
+ *   "title_changed"(c)       window title updated
  *   "workspace_changed" (n, count)
- *   "screen_added"  (s)  new output connected
- *   "screen_removed"(s)  output disconnected
+ *   "screen_added" (s)       new output connected
+ *   "screen_removed"(s)      output disconnected
  *
  * ── LOGGING
  *   trixie.log(msg)   trixie.warn(msg)
@@ -417,6 +442,35 @@ static int client_index(lua_State *L) {
     lua_pushboolean(L, twm_focused_id(&s->twm) == ud->id);
     return 1;
   }
+  /* geometry shortcuts */
+  if (!strcmp(k, "x")) {
+    lua_pushinteger(L, p->rect.x);
+    return 1;
+  }
+  if (!strcmp(k, "y")) {
+    lua_pushinteger(L, p->rect.y);
+    return 1;
+  }
+  if (!strcmp(k, "width")) {
+    lua_pushinteger(L, p->rect.w);
+    return 1;
+  }
+  if (!strcmp(k, "height")) {
+    lua_pushinteger(L, p->rect.h);
+    return 1;
+  }
+  if (!strcmp(k, "minimized")) {
+    lua_pushboolean(L, p->minimized);
+    return 1;
+  }
+  if (!strcmp(k, "sticky")) {
+    lua_pushboolean(L, p->sticky);
+    return 1;
+  }
+  if (!strcmp(k, "above")) {
+    lua_pushboolean(L, p->ontop);
+    return 1;
+  }
 
   /* Methods — look up in metatable */
   luaL_getmetatable(L, MT_CLIENT);
@@ -439,29 +493,45 @@ static int client_newindex(lua_State *L) {
       twm_set_focused(&s->twm, ud->id);
       server_float_toggle(s);
     }
+    lua_emit_property(s, ud->id, "floating");
     return 0;
   }
   if (!strcmp(k, "fullscreen")) {
-    p->fullscreen = lua_toboolean(L, 3);
-    twm_reflow(&s->twm);
-    server_sync_windows(s);
-    server_request_redraw(s);
+    bool want = lua_toboolean(L, 3);
+    if (p->fullscreen != want) {
+      p->fullscreen = want;
+      TrixieView *v = view_from_pane(s, ud->id);
+      if (v) {
+        struct wlr_scene_tree *tgt =
+            want ? s->layer_floating : s->layer_windows;
+        wlr_scene_node_reparent(&v->scene_tree->node, tgt);
+        if (!v->is_xwayland && v->xdg_toplevel)
+          wlr_xdg_toplevel_set_fullscreen(v->xdg_toplevel, want);
+      }
+      twm_reflow(&s->twm);
+      server_sync_windows(s);
+      server_request_redraw(s);
+    }
+    lua_emit_property(s, ud->id, "fullscreen");
     return 0;
   }
   if (!strcmp(k, "opacity")) {
     p->rule_opacity = (float)luaL_checknumber(L, 3);
     server_sync_windows(s);
+    lua_emit_property(s, ud->id, "opacity");
     return 0;
   }
   if (!strcmp(k, "border_width")) {
     s->cfg.border_width = s->twm.border_w = (int)luaL_checkinteger(L, 3);
     server_sync_windows(s);
+    lua_emit_property(s, ud->id, "border_width");
     return 0;
   }
   if (!strcmp(k, "border_color")) {
     Color c = argb_to_color((uint32_t)luaL_checkinteger(L, 3));
     s->cfg.colors.active_border = c;
     server_request_redraw(s);
+    lua_emit_property(s, ud->id, "border_color");
     return 0;
   }
   if (!strcmp(k, "workspace")) {
@@ -469,6 +539,61 @@ static int client_newindex(lua_State *L) {
     twm_set_focused(&s->twm, ud->id);
     twm_move_to_ws(&s->twm, n - 1);
     server_sync_windows(s);
+    lua_emit_property(s, ud->id, "workspace");
+    return 0;
+  }
+  if (!strcmp(k, "ontop") || !strcmp(k, "above")) {
+    p->ontop = lua_toboolean(L, 3);
+    TrixieView *v = view_from_pane(s, ud->id);
+    if (v && p->ontop)
+      wlr_scene_node_raise_to_top(&v->scene_tree->node);
+    server_request_redraw(s);
+    lua_emit_property(s, ud->id, "ontop");
+    return 0;
+  }
+  /* geometry: absolute float position/size */
+  if (!strcmp(k, "x") || !strcmp(k, "y") || !strcmp(k, "width") ||
+      !strcmp(k, "height")) {
+    if (!p->floating) {
+      /* auto-float on geometry write, AwesomeWM behaviour */
+      twm_set_focused(&s->twm, ud->id);
+      if (!p->floating)
+        server_float_toggle(s);
+    }
+    if (!strcmp(k, "x")) {
+      p->float_rect.x = (int)luaL_checkinteger(L, 3);
+    }
+    if (!strcmp(k, "y")) {
+      p->float_rect.y = (int)luaL_checkinteger(L, 3);
+    }
+    if (!strcmp(k, "width")) {
+      p->float_rect.w = (int)luaL_checkinteger(L, 3);
+    }
+    if (!strcmp(k, "height")) {
+      p->float_rect.h = (int)luaL_checkinteger(L, 3);
+    }
+    p->rect = p->float_rect;
+    TrixieView *v = view_from_pane(s, ud->id);
+    if (v)
+      view_apply_geom_pub(s, v, p);
+    server_sync_windows(s);
+    lua_emit_property(s, ud->id, "geometry");
+    return 0;
+  }
+  if (!strcmp(k, "minimized")) {
+    p->minimized = lua_toboolean(L, 3);
+    TrixieView *v = view_from_pane(s, ud->id);
+    if (v)
+      wlr_scene_node_set_enabled(&v->scene_tree->node, !p->minimized);
+    server_request_redraw(s);
+    lua_emit_property(s, ud->id, "minimized");
+    return 0;
+  }
+  if (!strcmp(k, "sticky")) {
+    p->sticky = lua_toboolean(L, 3);
+    /* sticky: window appears on all workspaces — sync_windows checks this */
+    server_sync_windows(s);
+    lua_emit_property(s, ud->id, "sticky");
     return 0;
   }
   return 0;
@@ -519,6 +644,89 @@ static int client_raise(lua_State *L) {
   TrixieView *v = view_from_pane(s, ud->id);
   if (v)
     wlr_scene_node_raise_to_top(&v->scene_tree->node);
+  return 0;
+}
+
+/* c:geometry() → {x,y,width,height}
+ * c:geometry({x,y,width,height}) → set (auto-floats if tiled) */
+static int client_geometry(lua_State *L) {
+  ClientUD *ud = client_check(L, 1);
+  TrixieServer *s = get_server(L);
+  Pane *p = twm_pane_by_id(&s->twm, ud->id);
+  if (!p) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (lua_istable(L, 2)) {
+    /* write mode */
+    if (!p->floating) {
+      twm_set_focused(&s->twm, ud->id);
+      server_float_toggle(s);
+    }
+    lua_getfield(L, 2, "x");
+    if (lua_isnumber(L, -1))
+      p->float_rect.x = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "y");
+    if (lua_isnumber(L, -1))
+      p->float_rect.y = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "width");
+    if (lua_isnumber(L, -1))
+      p->float_rect.w = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "height");
+    if (lua_isnumber(L, -1))
+      p->float_rect.h = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    p->rect = p->float_rect;
+    TrixieView *v = view_from_pane(s, ud->id);
+    if (v)
+      view_apply_geom_pub(s, v, p);
+    server_sync_windows(s);
+    lua_emit_property(s, ud->id, "geometry");
+    return 0;
+  }
+  /* read mode */
+  lua_createtable(L, 0, 4);
+  lua_pushinteger(L, p->rect.x);
+  lua_setfield(L, -2, "x");
+  lua_pushinteger(L, p->rect.y);
+  lua_setfield(L, -2, "y");
+  lua_pushinteger(L, p->rect.w);
+  lua_setfield(L, -2, "width");
+  lua_pushinteger(L, p->rect.h);
+  lua_setfield(L, -2, "height");
+  return 1;
+}
+
+static int client_minimize(lua_State *L) {
+  ClientUD *ud = client_check(L, 1);
+  TrixieServer *s = get_server(L);
+  Pane *p = twm_pane_by_id(&s->twm, ud->id);
+  if (!p)
+    return 0;
+  p->minimized = true;
+  TrixieView *v = view_from_pane(s, ud->id);
+  if (v)
+    wlr_scene_node_set_enabled(&v->scene_tree->node, false);
+  server_request_redraw(s);
+  lua_emit_property(s, ud->id, "minimized");
+  return 0;
+}
+
+static int client_unminimize(lua_State *L) {
+  ClientUD *ud = client_check(L, 1);
+  TrixieServer *s = get_server(L);
+  Pane *p = twm_pane_by_id(&s->twm, ud->id);
+  if (!p)
+    return 0;
+  p->minimized = false;
+  TrixieView *v = view_from_pane(s, ud->id);
+  if (v)
+    wlr_scene_node_set_enabled(&v->scene_tree->node, true);
+  server_request_redraw(s);
+  lua_emit_property(s, ud->id, "minimized");
   return 0;
 }
 
@@ -618,6 +826,9 @@ static const luaL_Reg client_methods[] = {
     {"kill", client_kill},
     {"focus", client_focus},
     {"raise", client_raise},
+    {"geometry", client_geometry},
+    {"minimize", client_minimize},
+    {"unminimize", client_unminimize},
     {"move_to_workspace", client_move_to_workspace},
     {"connect_signal", client_connect_signal},
     {"disconnect_signal", client_disconnect_signal},
@@ -1139,6 +1350,227 @@ static int l_float_resize(lua_State *L) {
   }
   return 0;
 }
+/* ── trixie.layout.register(name, fn) ──────────────────────────────────────
+ * Register a custom Lua layout.  fn(clients, geometry) is called at reflow.
+ * We store it in the registry under "trixie_layouts" table. */
+#define REG_LAYOUTS "trixie_layouts"
+
+static int l_layout_register(lua_State *L) {
+  const char *name = luaL_checkstring(L, 1);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  /* Ensure the layout registry table exists */
+  lua_getfield(L, LUA_REGISTRYINDEX, REG_LAYOUTS);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, REG_LAYOUTS);
+  }
+  lua_pushvalue(L, 2);
+  lua_setfield(L, -2, name);
+  lua_pop(L, 1);
+  wlr_log(WLR_INFO, "[lua] registered layout '%s'", name);
+  return 0;
+}
+
+/* Called from twm/layout C code when layout name matches a Lua layout.
+ * Returns true if a Lua layout handled it. */
+bool lua_call_layout(TrixieServer *s, const char *name, PaneId *panes,
+                     int npanes, Rect area, int gap) {
+  if (!s->L || !name)
+    return false;
+  lua_getfield(s->L, LUA_REGISTRYINDEX, REG_LAYOUTS);
+  if (!lua_istable(s->L, -1)) {
+    lua_pop(s->L, 1);
+    return false;
+  }
+  lua_getfield(s->L, -1, name);
+  if (!lua_isfunction(s->L, -1)) {
+    lua_pop(s->L, 2);
+    return false;
+  }
+  /* Push clients array */
+  lua_createtable(s->L, npanes, 0);
+  for (int i = 0; i < npanes; i++) {
+    push_client(s->L, panes[i]);
+    lua_rawseti(s->L, -2, i + 1);
+  }
+  /* Push geometry */
+  lua_createtable(s->L, 0, 5);
+  lua_pushinteger(s->L, area.x);
+  lua_setfield(s->L, -2, "x");
+  lua_pushinteger(s->L, area.y);
+  lua_setfield(s->L, -2, "y");
+  lua_pushinteger(s->L, area.w);
+  lua_setfield(s->L, -2, "width");
+  lua_pushinteger(s->L, area.h);
+  lua_setfield(s->L, -2, "height");
+  lua_pushinteger(s->L, gap);
+  lua_setfield(s->L, -2, "gap");
+  if (lua_pcall(s->L, 2, 0, 0) != LUA_OK) {
+    wlr_log(WLR_ERROR, "[lua] layout '%s': %s", name, lua_tostring(s->L, -1));
+    lua_pop(s->L, 1);
+  }
+  lua_pop(s->L, 1); /* layouts table */
+  return true;
+}
+
+/* ── trixie.button({mods}, btn, fn [, fn_release]) ─────────────────────────
+ * Global mouse button binding.  btn = 1/2/3 (left/middle/right).
+ * Stored in registry REG_BUTTONS table alongside key binds. */
+#define REG_BUTTONS "trixie_buttons"
+#define MAX_BUTTONS 128
+
+static int l_button(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  int btn = (int)luaL_checkinteger(L, 2);
+  luaL_checktype(L, 3, LUA_TFUNCTION);
+  TrixieServer *s = get_server(L);
+  uint32_t mods = mods_from_table(L, 1);
+  /* Store in server lua_binds-style array via registry table */
+  lua_getfield(L, LUA_REGISTRYINDEX, REG_BUTTONS);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, REG_BUTTONS);
+  }
+  int n = (int)lua_objlen(L, -1);
+  lua_createtable(L, 0, 4);
+  lua_pushinteger(L, (lua_Integer)mods);
+  lua_setfield(L, -2, "mods");
+  lua_pushinteger(L, btn);
+  lua_setfield(L, -2, "btn");
+  lua_pushvalue(L, 3);
+  lua_setfield(L, -2, "fn");
+  if (lua_isfunction(L, 4)) {
+    lua_pushvalue(L, 4);
+    lua_setfield(L, -2, "fn_release");
+  }
+  lua_rawseti(L, -2, n + 1);
+  lua_pop(L, 1);
+  (void)s;
+  return 0;
+}
+
+/* Dispatch a button press from main.c cursor_button handler.
+ * Returns true if consumed. */
+bool lua_dispatch_button(TrixieServer *s, uint32_t mods, uint32_t btn,
+                         bool pressed) {
+  if (!s->L)
+    return false;
+  lua_getfield(s->L, LUA_REGISTRYINDEX, REG_BUTTONS);
+  if (!lua_istable(s->L, -1)) {
+    lua_pop(s->L, 1);
+    return false;
+  }
+  int n = (int)lua_objlen(s->L, -1);
+  bool handled = false;
+  for (int i = 1; i <= n; i++) {
+    lua_rawgeti(s->L, -1, i);
+    lua_getfield(s->L, -1, "mods");
+    uint32_t bmods = (uint32_t)lua_tointeger(s->L, -1);
+    lua_pop(s->L, 1);
+    lua_getfield(s->L, -1, "btn");
+    uint32_t bbtn = (uint32_t)lua_tointeger(s->L, -1);
+    lua_pop(s->L, 1);
+    if (bmods == mods && bbtn == btn) {
+      const char *fnkey = pressed ? "fn" : "fn_release";
+      lua_getfield(s->L, -1, fnkey);
+      if (lua_isfunction(s->L, -1)) {
+        if (lua_pcall(s->L, 0, 0, 0) != LUA_OK) {
+          wlr_log(WLR_ERROR, "[lua] button: %s", lua_tostring(s->L, -1));
+          lua_pop(s->L, 1);
+        }
+        handled = true;
+      } else {
+        lua_pop(s->L, 1);
+      }
+    }
+    lua_pop(s->L, 1);
+    if (handled)
+      break;
+  }
+  lua_pop(s->L, 1);
+  return handled;
+}
+
+/* ── trixie.gesture(spec, fn) ───────────────────────────────────────────────
+ * spec = "swipe:3:left" | "swipe:3:right" | "swipe:3:up" | "swipe:3:down"
+ *        "pinch:in" | "pinch:out"
+ * Stored in registry; dispatched from gesture.c callbacks via
+ * lua_dispatch_gesture. */
+#define REG_GESTURES "trixie_gestures"
+
+static int l_gesture(lua_State *L) {
+  const char *spec = luaL_checkstring(L, 1);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_getfield(L, LUA_REGISTRYINDEX, REG_GESTURES);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, REG_GESTURES);
+  }
+  lua_pushvalue(L, 2);
+  lua_setfield(L, -2, spec);
+  lua_pop(L, 1);
+  return 0;
+}
+
+bool lua_dispatch_gesture(TrixieServer *s, const char *spec) {
+  if (!s->L || !spec)
+    return false;
+  lua_getfield(s->L, LUA_REGISTRYINDEX, REG_GESTURES);
+  if (!lua_istable(s->L, -1)) {
+    lua_pop(s->L, 1);
+    return false;
+  }
+  lua_getfield(s->L, -1, spec);
+  bool handled = false;
+  if (lua_isfunction(s->L, -1)) {
+    if (lua_pcall(s->L, 0, 0, 0) != LUA_OK) {
+      wlr_log(WLR_ERROR, "[lua] gesture '%s': %s", spec,
+              lua_tostring(s->L, -1));
+      lua_pop(s->L, 1);
+    } else {
+      handled = true;
+    }
+  } else {
+    lua_pop(s->L, 1);
+  }
+  lua_pop(s->L, 1);
+  return handled;
+}
+
+/* ── trixie.exec_once(cmd) ──────────────────────────────────────────────────
+ * Spawn cmd once per compositor session — deduplicates across reloads.
+ * Uses a registry set so reloads don't re-run autostart commands. */
+#define REG_EXEC_ONCE "trixie_exec_once"
+
+static int l_exec_once(lua_State *L) {
+  const char *cmd = luaL_checkstring(L, 1);
+  TrixieServer *s = get_server(L);
+  lua_getfield(L, LUA_REGISTRYINDEX, REG_EXEC_ONCE);
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_setfield(L, LUA_REGISTRYINDEX, REG_EXEC_ONCE);
+  }
+  /* Check if already run */
+  lua_getfield(L, -1, cmd);
+  bool already = lua_toboolean(L, -1);
+  lua_pop(L, 1);
+  if (!already) {
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, cmd);
+    server_spawn(s, cmd);
+  }
+  lua_pop(L, 1);
+  return 0;
+}
+
 static int l_reload(lua_State *L) {
   TrixieServer *s = get_server(L);
   server_schedule_reload(s);
@@ -1232,15 +1664,15 @@ static int l_get(lua_State *L) {
     return 1;
   }
   if (!strcmp(key, "kb_layout")) {
-    lua_pushstring(L, c->kb_layout);
+    lua_pushstring(L, c->keyboard.kb_layout);
     return 1;
   }
   if (!strcmp(key, "repeat_rate")) {
-    lua_pushinteger(L, c->repeat_rate);
+    lua_pushinteger(L, c->keyboard.repeat_rate);
     return 1;
   }
   if (!strcmp(key, "repeat_delay")) {
-    lua_pushinteger(L, c->repeat_delay);
+    lua_pushinteger(L, c->keyboard.repeat_delay);
     return 1;
   }
   if (!strcmp(key, "active_workspace")) {
@@ -1322,9 +1754,12 @@ static int l_dec_master(lua_State *L) {
 /* ── Workspace ─────────────────────────────────────────────────────────── */
 
 static int l_workspace(lua_State *L) {
-  /* trixie.workspace(n) → switch */
-  if (lua_isnumber(L, 1)) {
-    int n = (int)lua_tointeger(L, 1);
+  /* Called as trixie.workspace(n) via __call metamethod.
+   * __call passes the table as arg 1, so n is at arg 2.
+   * Also handle direct call style where n is at arg 1 (e.g. from ws_index). */
+  int arg = lua_isnumber(L, 1) ? 1 : (lua_isnumber(L, 2) ? 2 : 0);
+  if (arg) {
+    int n = (int)lua_tointeger(L, arg);
     TrixieServer *s = get_server(L);
     int old = s->twm.active_ws;
     twm_switch_ws(&s->twm, n - 1);
@@ -1514,9 +1949,13 @@ static int l_set(lua_State *L) {
     twm_reflow(&s->twm);
     server_sync_windows(s);
   } else if (!strcmp(key, "font") || !strcmp(key, "font_family")) {
-    strncpy(c->font_path, luaL_checkstring(L, 2), sizeof(c->font_path) - 1);
-    canvas_font_reload(c->font_path, c->font_path_bold, c->font_path_italic,
-                       c->font_size);
+    const char *name = luaL_checkstring(L, 2);
+    /* Store the query name — canvas_font_reload resolves via fontconfig */
+    strncpy(c->font_path, name, sizeof(c->font_path) - 1);
+    bool ok = canvas_font_reload(c->font_path, c->font_path_bold,
+                                 c->font_path_italic, c->font_size);
+    if (!ok)
+      wlr_log(WLR_ERROR, "[lua] trixie.set font: could not load '%s'", name);
     server_request_redraw(s);
   } else if (!strcmp(key, "font_size")) {
     c->font_size = (float)luaL_checknumber(L, 2);
@@ -1568,15 +2007,18 @@ static int l_set(lua_State *L) {
     if (s->xcursor_mgr)
       wlr_xcursor_manager_load(s->xcursor_mgr, c->cursor_size);
   } else if (!strcmp(key, "kb_layout")) {
-    strncpy(c->kb_layout, luaL_checkstring(L, 2), sizeof(c->kb_layout) - 1);
+    strncpy(c->keyboard.kb_layout, luaL_checkstring(L, 2),
+            sizeof(c->keyboard.kb_layout) - 1);
   } else if (!strcmp(key, "kb_variant")) {
-    strncpy(c->kb_variant, luaL_checkstring(L, 2), sizeof(c->kb_variant) - 1);
+    strncpy(c->keyboard.kb_variant, luaL_checkstring(L, 2),
+            sizeof(c->keyboard.kb_variant) - 1);
   } else if (!strcmp(key, "kb_options")) {
-    strncpy(c->kb_options, luaL_checkstring(L, 2), sizeof(c->kb_options) - 1);
+    strncpy(c->keyboard.kb_options, luaL_checkstring(L, 2),
+            sizeof(c->keyboard.kb_options) - 1);
   } else if (!strcmp(key, "repeat_rate")) {
-    c->repeat_rate = (int)luaL_checkinteger(L, 2);
+    c->keyboard.repeat_rate = (int)luaL_checkinteger(L, 2);
   } else if (!strcmp(key, "repeat_delay")) {
-    c->repeat_delay = (int)luaL_checkinteger(L, 2);
+    c->keyboard.repeat_delay = (int)luaL_checkinteger(L, 2);
   } else if (!strcmp(key, "xwayland")) {
     luaL_checktype(L, 2, LUA_TBOOLEAN);
     c->xwayland = lua_toboolean(L, 2);
@@ -1587,6 +2029,76 @@ static int l_set(lua_State *L) {
             sizeof(c->cursor_theme) - 1);
     if (s->xcursor_mgr)
       wlr_xcursor_manager_load(s->xcursor_mgr, c->cursor_size);
+  } else if (!strcmp(key, "saturation")) {
+    c->saturation = (float)luaL_checknumber(L, 2);
+  } else if (!strcmp(key, "idle_timeout")) {
+    c->idle_timeout = (int)luaL_checkinteger(L, 2);
+    if (s->idle_timer) {
+      s->idle_timeout_ms = c->idle_timeout * 1000;
+      wl_event_source_timer_update(
+          s->idle_timer, s->idle_timeout_ms > 0 ? s->idle_timeout_ms : 0);
+    }
+  } else if (!strcmp(key, "monitor")) {
+    /* trixie.set("monitor", {name="DP-1", width=2560, height=1440,
+     *                         refresh=144, scale=1.0, x=0, y=0}) */
+    luaL_checktype(L, 2, LUA_TTABLE);
+    char mon_name[64] = {0};
+    int mw = 0, mh = 0, mr = 0, mx = 0, my = 0;
+    float mscale = 1.0f;
+    lua_getfield(L, 2, "name");
+    if (lua_isstring(L, -1))
+      strncpy(mon_name, lua_tostring(L, -1), sizeof(mon_name) - 1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "width");
+    if (lua_isnumber(L, -1))
+      mw = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "height");
+    if (lua_isnumber(L, -1))
+      mh = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "refresh");
+    if (lua_isnumber(L, -1))
+      mr = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "scale");
+    if (lua_isnumber(L, -1))
+      mscale = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "x");
+    if (lua_isnumber(L, -1))
+      mx = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 2, "y");
+    if (lua_isnumber(L, -1))
+      my = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    TrixieOutput *o;
+    wl_list_for_each(o, &s->outputs, link) {
+      if (!mon_name[0] || !strcmp(o->wlr_output->name, mon_name)) {
+        struct wlr_output_state st;
+        wlr_output_state_init(&st);
+        if (mw > 0 && mh > 0) {
+          struct wlr_output_mode *m;
+          wl_list_for_each(m, &o->wlr_output->modes, link) {
+            int r_mhz = mr > 0 ? mr * 1000 : 0;
+            if (m->width == mw && m->height == mh &&
+                (r_mhz == 0 || abs(m->refresh - r_mhz) < 500)) {
+              wlr_output_state_set_mode(&st, m);
+              break;
+            }
+          }
+        }
+        if (mscale > 0.1f)
+          wlr_output_state_set_scale(&st, mscale);
+        wlr_output_commit_state(o->wlr_output, &st);
+        wlr_output_state_finish(&st);
+        if (mx != 0 || my != 0)
+          wlr_output_layout_add(s->output_layout, o->wlr_output, mx, my);
+        wlr_log(WLR_INFO, "[lua] monitor '%s' configured", o->wlr_output->name);
+        break;
+      }
+    }
   } else {
     wlr_log(WLR_ERROR, "[lua] trixie.set: unknown key '%s'", key);
   }
@@ -1791,10 +2303,13 @@ static const luaL_Reg trixie_lib[] = {
     {"quit", l_quit},
     {"dpms", l_dpms},
     {"notify", l_notify},
-    /* Scratchpad registration */
+    {"exec_once", l_exec_once},
+    /* Scratchpad */
     {"register_scratchpad", l_register_scratchpad},
-    /* Keybinds */
+    /* Input bindings */
     {"key", l_key},
+    {"button", l_button},
+    {"gesture", l_gesture},
     /* Config */
     {"set", l_set},
     {"get", l_get},
@@ -1802,7 +2317,7 @@ static const luaL_Reg trixie_lib[] = {
     {"focused", l_focused},
     {"clients", l_clients},
     {"clients_all", l_clients_all},
-    /* Constructor */
+    /* Constructors */
     {"wibox", l_wibox},
     {"timer", l_timer},
     /* Logging */
@@ -1847,6 +2362,8 @@ static int luaopen_trixie(lua_State *L) {
   lua_setfield(L, -2, "next");
   lua_pushcfunction(L, l_layout_prev);
   lua_setfield(L, -2, "prev");
+  lua_pushcfunction(L, l_layout_register);
+  lua_setfield(L, -2, "register");
   lua_setfield(L, -2, "layout");
 
   /* trixie.screen — table with __index for .focused / .count / [n] */
@@ -2138,7 +2655,6 @@ void lua_init(TrixieServer *s) {
   s->L = L;
 
   lua_signal_init(&s->signals);
-  lua_register_reload(s);
 
   /* Store server pointer */
   lua_pushstring(L, REG_SERVER);
@@ -2294,8 +2810,18 @@ void lua_destroy(TrixieServer *s) {
   LuaTimer *t = g_timers;
   while (t) {
     LuaTimer *nx = t->next;
-    if (t->src)
+    /* Null the Lua userdata's pointer BEFORE freeing so lua_close __gc
+     * runs ltimer_cancel → sees *ud == NULL → returns immediately.
+     * Without this, lua_close GC double-frees and calls wl_event_source_remove
+     * on a dangling pointer → SIGSEGV. */
+    if (t->ud_ptr) {
+      *t->ud_ptr = NULL;
+      t->ud_ptr = NULL;
+    }
+    if (t->src) {
       wl_event_source_remove(t->src);
+      t->src = NULL;
+    }
     luaL_unref(L, LUA_REGISTRYINDEX, t->fn_ref);
     free(t);
     t = nx;
