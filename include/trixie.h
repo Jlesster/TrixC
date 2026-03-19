@@ -1,6 +1,8 @@
 /* trixie.h — Wayland compositor with AwesomeWM-style Lua scripting */
 #pragma once
+#ifndef WLR_USE_UNSTABLE
 #define WLR_USE_UNSTABLE
+#endif
 #define _POSIX_C_SOURCE 200809L
 
 #include <pthread.h>
