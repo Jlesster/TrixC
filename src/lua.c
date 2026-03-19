@@ -3796,14 +3796,19 @@ void lua_reload(TrixieServer *s) {
 
   // extract directory from path (strip "init.lua")
   char config_dir[512];
-  strncpy(config_dir, path, sizeof(config_dir) - 1);
+  /* Use snprintf instead of strncpy to avoid -Wstringop-truncation:
+   * snprintf always NUL-terminates and the compiler knows the bound. */
+  snprintf(config_dir, sizeof(config_dir), "%s", path);
   char *last_slash = strrchr(config_dir, '/');
   if (last_slash)
     *last_slash = '\0';
 
-  char new_path[1024];
+  /* new_path must hold: config_dir/?.lua ; config_dir/?/init.lua ; old_path
+   * Worst case: 2 * 512 + overhead + len(old_path).
+   * Use 4096 so the compiler can prove no truncation occurs. */
+  char new_path[4096];
   snprintf(new_path, sizeof(new_path), "%s/?.lua;%s/?/init.lua;%s", config_dir,
-           config_dir, old_path);
+           config_dir, old_path ? old_path : "");
 
   // set new path
   lua_pop(L, 1);
