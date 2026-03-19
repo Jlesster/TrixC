@@ -27,6 +27,7 @@ typedef struct {
   hb_font_t *hb_font;
   hb_font_t *hb_font_bold;
   hb_font_t *hb_font_italic;
+  hb_language_t hb_lang; /* cached once at font init — avoids string intern per draw */
   int ascender;
   int descender;
   int height;
@@ -276,6 +277,7 @@ static bool font_load(const char *query, const char *bold_query,
     g_font.hb_font_italic = g_font.hb_font;
   }
 
+  g_font.hb_lang = hb_language_from_string("en", -1);
   g_font.ready = true;
   return true;
 }
@@ -289,7 +291,7 @@ static hb_buffer_t *hb_buf_get(void) {
   hb_buffer_clear_contents(s_hb_buf);
   hb_buffer_set_direction(s_hb_buf, HB_DIRECTION_LTR);
   hb_buffer_set_script(s_hb_buf, HB_SCRIPT_LATIN);
-  hb_buffer_set_language(s_hb_buf, hb_language_from_string("en", -1));
+  hb_buffer_set_language(s_hb_buf, g_font.hb_lang);
   return s_hb_buf;
 }
 

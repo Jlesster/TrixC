@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Trixie
+Comment=wlroots Wayland compositor with LuaJIT scripting
+Exec=trixie
+Type=Application
+DesktopNames=trixie:wlroots

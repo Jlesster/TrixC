@@ -14,5 +14,29 @@
       "install_rpath": null,
       "build_rpaths": []
     }
+  },
+  "data": {
+    "/home/jless/Code/c-cpp/c/Trixie/data/trixie.desktop": {
+      "destination": "{datadir}/wayland-sessions/trixie.desktop",
+      "tag": null,
+      "subproject": null
+    }
+  },
+  "man": {
+    "/home/jless/Code/c-cpp/c/Trixie/man/trixie.1": {
+      "destination": "{mandir}/man1/trixie.1",
+      "tag": "man",
+      "subproject": null
+    },
+    "/home/jless/Code/c-cpp/c/Trixie/man/trixiectl.1": {
+      "destination": "{mandir}/man1/trixiectl.1",
+      "tag": "man",
+      "subproject": null
+    },
+    "/home/jless/Code/c-cpp/c/Trixie/man/trixie.5": {
+      "destination": "share/man/man5/trixie.5",
+      "tag": "man",
+      "subproject": null
+    }
   }
 }

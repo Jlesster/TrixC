@@ -1,5 +1,5 @@
 project('trixie', 'c',
-  version: '0.4.0',
+  version: '0.5.0',
   default_options: [
     'c_std=c11',
     'warning_level=1',
@@ -254,3 +254,21 @@ executable('trixiectl',
   'src/trixiectl.c',
   install: true,
 )
+
+# ── Desktop session entry ──────────────────────────────────────────────────────
+# Installs data/trixie.desktop into <prefix>/share/wayland-sessions/ so that
+# display managers (greetd, GDM, SDDM) and the NixOS
+# services.displayManager.sessionPackages mechanism can find the session.
+install_data(
+  'data/trixie.desktop',
+  install_dir: join_paths(get_option('datadir'), 'wayland-sessions'),
+)
+
+# ── Man pages ──────────────────────────────────────────────────────────────────
+if fs.exists('man/trixie.1')
+  install_man('man/trixie.1')
+  install_man('man/trixiectl.1')
+  install_man('man/trixie.5',
+    install_dir: join_paths(get_option('mandir'), 'man5'),
+  )
+endif

@@ -1,4 +1,8 @@
 {
   "/home/jless/Code/c-cpp/c/Trixie/build/trixie": "/usr/local/bin/trixie",
-  "/home/jless/Code/c-cpp/c/Trixie/build/trixiectl": "/usr/local/bin/trixiectl"
+  "/home/jless/Code/c-cpp/c/Trixie/build/trixiectl": "/usr/local/bin/trixiectl",
+  "/home/jless/Code/c-cpp/c/Trixie/data/trixie.desktop": "/usr/local/share/wayland-sessions/trixie.desktop",
+  "/home/jless/Code/c-cpp/c/Trixie/man/trixie.1": "/usr/local/share/man/man1/trixie.1",
+  "/home/jless/Code/c-cpp/c/Trixie/man/trixiectl.1": "/usr/local/share/man/man1/trixiectl.1",
+  "/home/jless/Code/c-cpp/c/Trixie/man/trixie.5": "/usr/local/share/man/man5/trixie.5"
 }

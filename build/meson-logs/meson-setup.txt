@@ -4,7 +4,7 @@ Source dir: /home/jless/Code/c-cpp/c/Trixie
 Build dir: /home/jless/Code/c-cpp/c/Trixie/build
 Build type: native build
 Project name: trixie
-Project version: 0.4.0
+Project version: 0.5.0
 C compiler for the host machine: gcc (gcc 15.2.0 "gcc (GCC) 15.2.0")
 C linker for the host machine: gcc ld.bfd 2.44
 Host machine cpu family: x86_64
