@@ -24,6 +24,16 @@
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_export_dmabuf_v1.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
+#if __has_include(<wlr/types/wlr_alpha_modifier_v1.h>)
+#include <wlr/types/wlr_alpha_modifier_v1.h>
+#define HAVE_ALPHA_MODIFIER 1
+#endif
+#if __has_include(<wlr/types/wlr_linux_drm_syncobj_v1.h>)
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
+#define HAVE_DRM_SYNCOBJ 1
+#endif
+#include "shader.h"
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
@@ -1438,9 +1448,9 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
     if (!wb->dirty)
       continue;
     if (wb->lua_draw_ref != LUA_NOREF)
-      wibox_lua_draw(wb, s->L); /* draw fn marks dirty=true then commits */
+      wibox_lua_draw(wb, s->L);
     else
-      wibox_commit(wb); /* manual canvas path */
+      wibox_commit(wb);
     bar_dirty = true;
   }
 
@@ -1450,10 +1460,21 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
   }
   deco_update(o->deco, &s->twm, &s->anim, &s->cfg);
 
-  wlr_scene_output_commit(o->scene_output, NULL);
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  wlr_scene_output_send_frame_done(o->scene_output, &now);
+  /* Use saturation shader pipeline when enabled and GLES2 is available,
+   * otherwise fall back to a plain scene commit. */
+  float sat = s->cfg.saturation;
+  bool use_shader = s->cfg.shader_enabled && sat != 1.0f &&
+                    wlr_renderer_is_gles2(s->renderer) && o->shader.ready;
+  if (use_shader) {
+    shader_render_frame(&o->shader, s->renderer, o->scene_output, o->wlr_output,
+                        sat);
+  } else {
+    wlr_scene_output_commit(o->scene_output, NULL);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    wlr_scene_output_send_frame_done(o->scene_output, &now);
+  }
+
   if (s->running && (still_animating || bar_dirty))
     wlr_output_schedule_frame(o->wlr_output);
 }
@@ -1463,6 +1484,11 @@ static void output_handle_request_state(struct wl_listener *listener,
   TrixieOutput *o = CONTAINER_OF(listener, TrixieOutput, request_state);
   struct wlr_output_event_request_state *ev = data;
   wlr_output_commit_state(o->wlr_output, ev->state);
+  /* Resize shader intermediate FBO if dimensions changed. */
+  int nw = o->wlr_output->width;
+  int nh = o->wlr_output->height;
+  if (nw > 0 && nh > 0 && (nw != o->shader.width || nh != o->shader.height))
+    shader_output_resize(&o->shader, nw, nh);
 }
 
 static void output_handle_destroy(struct wl_listener *listener, void *data) {
@@ -1481,6 +1507,7 @@ static void output_handle_destroy(struct wl_listener *listener, void *data) {
   o->wibox_count = 0;
   if (o->deco)
     deco_destroy(o->deco);
+  shader_output_finish(&o->shader);
   free(o);
   if (!wl_list_empty(&s->outputs)) {
     TrixieOutput *next = wl_container_of(s->outputs.next, next, link);
@@ -1538,6 +1565,10 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
   o->deco = deco_create(s->layer_chrome, s->layer_chrome_floating);
   if (s->bg_rect)
     wlr_scene_rect_set_size(s->bg_rect, ow, oh);
+
+  /* Init per-output saturation shader pipeline */
+  if (s->cfg.shader_enabled && wlr_renderer_is_gles2(s->renderer))
+    shader_output_init(&o->shader, s->renderer, ow, oh);
 
   wlr_log(WLR_INFO, "new output: %s %dx%d", wlr_output->name, ow, oh);
   /* Apply any monitor config that was written via trixie.set("monitor", ...)
@@ -1846,6 +1877,19 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
   TrixieServer *s = v->server;
   v->mapped = true;
   struct wlr_xwayland_surface *xs = v->xwayland_surface;
+  /* xs->surface is guaranteed non-NULL by the time map fires. */
+  if (!xs->surface) {
+    wlr_log(WLR_ERROR, "xwayland_handle_map: surface is NULL for %s",
+            xs->class ? xs->class : "(unknown)");
+    v->mapped = false;
+    return;
+  }
+  /* Attach the wlr_surface to the scene tree now that it exists. */
+  wlr_scene_surface_create(v->scene_tree, xs->surface);
+  /* Wire the per-surface commit listener (safe now that surface != NULL). */
+  if (v->commit.link.next == NULL) {
+    wl_signal_add(&xs->surface->events.commit, &v->commit);
+  }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (!p)
     return;
@@ -1866,6 +1910,13 @@ static void xwayland_handle_unmap(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, unmap);
   TrixieServer *s = v->server;
   v->mapped = false;
+  /* Detach the surface-level commit listener; surface may go NULL after unmap.
+   */
+  if (v->commit.link.next != NULL) {
+    wl_list_remove(&v->commit.link);
+    v->commit.link.next = NULL;
+    v->commit.link.prev = NULL;
+  }
   if (v->foreign_handle) {
     wlr_foreign_toplevel_handle_v1_destroy(v->foreign_handle);
     v->foreign_handle = NULL;
@@ -1971,7 +2022,9 @@ static void handle_new_xwayland_surface(struct wl_listener *listener,
   v->scene_tree = xs->override_redirect
                       ? wlr_scene_tree_create(s->layer_floating)
                       : wlr_scene_tree_create(s->layer_windows);
-  wlr_scene_surface_create(v->scene_tree, xs->surface);
+  /* Do NOT call wlr_scene_surface_create here — xs->surface may be NULL
+   * until the associate event fires (wlroots 0.18+).  Surface attachment
+   * is deferred to xwayland_handle_map where surface is guaranteed valid. */
   wlr_scene_node_set_enabled(&v->scene_tree->node, false);
   v->map.notify = xwayland_handle_map;
   v->unmap.notify = xwayland_handle_unmap;
@@ -1980,10 +2033,10 @@ static void handle_new_xwayland_surface(struct wl_listener *listener,
   v->request_fullscreen.notify = xwayland_handle_request_fullscreen;
   v->set_title.notify = xwayland_handle_set_title;
   v->set_app_id.notify = xwayland_handle_set_class;
-  wl_signal_add(&xs->surface->events.map, &v->map);
-  wl_signal_add(&xs->surface->events.unmap, &v->unmap);
+  /* wlroots 0.18: map/unmap live on the toplevel events, not the surface. */
+  wl_signal_add(&xs->events.map, &v->map);
+  wl_signal_add(&xs->events.unmap, &v->unmap);
   wl_signal_add(&xs->events.destroy, &v->destroy);
-  wl_signal_add(&xs->surface->events.commit, &v->commit);
   wl_signal_add(&xs->events.request_fullscreen, &v->request_fullscreen);
   wl_signal_add(&xs->events.set_title, &v->set_title);
   wl_signal_add(&xs->events.set_class, &v->set_app_id);
@@ -2250,6 +2303,21 @@ int main(int argc, char *argv[]) {
   s->foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(s->display);
   s->screencopy_mgr = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
+  /* linux-dmabuf: zero-copy GPU buffer import/export.
+   * Required for Firefox/Chromium/Electron to use hardware-accelerated
+   * rendering without falling back to CPU-side shm copies. */
+  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 4, s->renderer);
+#ifdef HAVE_ALPHA_MODIFIER
+  wlr_alpha_modifier_v1_create(s->display);
+#endif
+#ifdef HAVE_DRM_SYNCOBJ
+  /* Explicit GPU synchronisation — eliminates tearing/corruption on Nvidia. */
+  if (wlr_backend_is_drm(s->backend)) {
+    int drm_fd = wlr_backend_get_drm_fd(s->backend);
+    if (drm_fd >= 0)
+      wlr_linux_drm_syncobj_manager_v1_create(s->display, 1, drm_fd);
+  }
+#endif
   wlr_gamma_control_manager_v1_create(s->display);
 
   s->idle_inhibit_mgr = wlr_idle_inhibit_v1_create(s->display);
@@ -2347,27 +2415,61 @@ int main(int argc, char *argv[]) {
     wlr_log(WLR_ERROR, "failed to create Wayland socket");
     return 1;
   }
+
+  /* Set environment *before* wlr_backend_start so that any process spawned
+   * by autostart, systemd user session activation, or a login manager (ly,
+   * greetd) that reacts to the socket being published already has the full
+   * Wayland environment.  Use false for vars that the user may have set
+   * intentionally in their session (WLR_NO_HARDWARE_CURSORS, WLR_RENDERER). */
+  setenv("WAYLAND_DISPLAY", socket, true);
+  setenv("XDG_SESSION_TYPE", "wayland", true);
+  setenv("XDG_CURRENT_DESKTOP", "trixie:wlroots", true);
+
+  /* Qt */
+  setenv("QT_QPA_PLATFORM", "wayland;xcb", true);
+  setenv("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1", true);
+  setenv("QT_AUTO_SCREEN_SCALE_FACTOR", "1", false);
+
+  /* GTK */
+  setenv("GDK_BACKEND", "wayland,x11", true);
+
+  /* SDL */
+  setenv("SDL_VIDEODRIVER", "wayland,x11", true);
+
+  /* Java */
+  setenv("_JAVA_AWT_WM_NONREPARENTING", "1", true);
+
+  /* Mozilla Firefox — all three are needed for stable Wayland+EGL.
+   * MOZ_ENABLE_WAYLAND:  activates the Wayland backend in Firefox/Thunderbird.
+   * MOZ_DBUS_REMOTE:     replaces X11 remote protocol with D-Bus (no DISPLAY).
+   * MOZ_USE_XINPUT2:     better pointer/touch handling when XWayland is used.
+   * MOZ_WEBRENDER_FORCE: skip the GPU blocklist check (safe on RTX 4050). */
+  setenv("MOZ_ENABLE_WAYLAND", "1", true);
+  setenv("MOZ_DBUS_REMOTE", "1", true);
+  setenv("MOZ_USE_XINPUT2", "1", false);
+  setenv("MOZ_WEBRENDER_FORCE", "1", false);
+
+  /* Chromium / Electron */
+  setenv("OZONE_PLATFORM", "wayland", true);
+  setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
+
+  /* NixOS ozone hint (consumed by nixpkgs wrappers) */
+  setenv("NIXOS_OZONE_WL", "1", true);
+
+  /* EGL platform — must be wayland so EGL chooses GBM/Wayland display.
+   * Setting this to "wayland" without WAYLAND_DISPLAY already published
+   * was the previous cause of Firefox failing to initialise its GL context. */
+  setenv("EGL_PLATFORM", "wayland", true);
+
+  /* Nvidia: disable HW cursors by default (can be overridden by user). */
+  setenv("WLR_NO_HARDWARE_CURSORS", "1", false);
+
+  wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket);
+
   if (!wlr_backend_start(s->backend)) {
     wlr_log(WLR_ERROR, "failed to start backend");
     return 1;
   }
-
-  setenv("WAYLAND_DISPLAY", socket, true);
-  setenv("XDG_SESSION_TYPE", "wayland", true);
-  setenv("XDG_CURRENT_DESKTOP", "trixie:wlroots", true);
-  setenv("QT_QPA_PLATFORM", "wayland;xcb", true);
-  setenv("QT_WAYLAND_DISABLE_WINDOWDECORATION", "1", true);
-  setenv("GDK_BACKEND", "wayland,x11", true);
-  setenv("SDL_VIDEODRIVER", "wayland,x11", true);
-  setenv("_JAVA_AWT_WM_NONREPARENTING", "1", true);
-  setenv("MOZ_ENABLE_WAYLAND", "1", true);
-  setenv("OZONE_PLATFORM", "wayland", true);
-  setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
-  setenv("NIXOS_OZONE_WL", "1", true);
-  setenv("EGL_PLATFORM", "wayland", true);
-  setenv("WLR_NO_HARDWARE_CURSORS", "1", false);
-
-  wlr_log(WLR_INFO, "WAYLAND_DISPLAY=%s", socket);
   g_server = s;
 
   server_init_ipc(s);

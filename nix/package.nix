@@ -34,6 +34,7 @@ stdenv.mkDerivation (finalAttrs: {
     ninja
     pkg-config
     wayland-scanner
+    wayland-protocols # needed for linux-dmabuf-unstable-v1, alpha-modifier, etc.
   ];
 
   buildInputs = [
@@ -58,6 +59,9 @@ stdenv.mkDerivation (finalAttrs: {
 
   mesonFlags = [
     "--wipe"
+    # Enable wlr_gles2_renderer_get_buffer_fbo (added in wlroots 0.18.2).
+    # The shader.c code guards on HAVE_WLR_GLES2_FBO; meson.build should set it.
+    "-Dwlr_gles2_fbo=enabled"
   ];
 
   postInstall = ''

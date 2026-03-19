@@ -321,6 +321,9 @@ typedef struct {
 /* ── Gesture ───────────────────────────────────────────────────────────── */
 #include "gesture.h"
 
+/* ── Shader pipeline ───────────────────────────────────────────────────── */
+#include "shader.h"
+
 /* ── Keyboard config ───────────────────────────────────────────────────── */
 typedef struct {
   char kb_layout[64], kb_variant[64], kb_options[128];
@@ -466,6 +469,8 @@ typedef struct {
   TrixieWibox *wiboxes[MAX_WIBOXES];
   int wibox_count;
   bool was_animating, deco_dirty;
+  /* per-output saturation shader pipeline */
+  TrixieShader shader;
   /* per-output Lua signal table ref */
   int lua_signals_ref;
 } TrixieOutput;

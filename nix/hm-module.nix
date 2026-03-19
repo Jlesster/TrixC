@@ -198,7 +198,32 @@ in
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
 
+    # Publish the Wayland/Firefox environment into the systemd user session and
+    # PAM environment so that applications launched by ly (or any other DM)
+    # inherit the correct variables even before the compositor sets them.
+    home.sessionVariables = {
+      MOZ_ENABLE_WAYLAND = "1";
+      MOZ_DBUS_REMOTE = "1";
+      MOZ_WEBRENDER_FORCE = "1";
+      EGL_PLATFORM = "wayland";
+      NIXOS_OZONE_WL = "1";
+      ELECTRON_OZONE_PLATFORM_HINT = "wayland";
+      OZONE_PLATFORM = "wayland";
+    };
+
+    # Also emit into environment.d so systemd --user picks them up at
+    # login (before the first graphical unit starts).
     xdg.configFile = {
+      "environment.d/trixie-wayland.conf".text = ''
+        MOZ_ENABLE_WAYLAND=1
+        MOZ_DBUS_REMOTE=1
+        MOZ_WEBRENDER_FORCE=1
+        EGL_PLATFORM=wayland
+        NIXOS_OZONE_WL=1
+        ELECTRON_OZONE_PLATFORM_HINT=wayland
+        OZONE_PLATFORM=wayland
+      '';
+
       "trixie/_hm_generated.lua".text = generatedInitLua;
     }
     // {
