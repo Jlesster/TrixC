@@ -568,10 +568,6 @@ void server_sync_windows(TrixieServer *s) {
       } else
 #endif
           if (v->xdg_toplevel) {
-        /* Guard: don't configure before the first ack_configure.
-         * Dolphin and other Qt/KDE apps emit map before their initial
-         * ack_configure; scheduling a configure on an uninitialized
-         * xdg_surface crashes wlroots 0.18. */
         if (!v->xdg_toplevel->base->initial_commit) {
           struct wlr_box cur;
           wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &cur);
@@ -1922,16 +1918,15 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
     v->xw_scene_attached = true;
   }
   /* Wire surface-level listeners that were deferred because xs->surface was
-   * NULL in handle_new_xwayland_surface (Firefox, multi-process clients). */
+   * NULL in handle_new_xwayland_surface (Firefox GPU process, multi-process
+   * X11 clients).  xs->surface is guaranteed non-NULL here — we returned
+   * early above if it weren't. */
   if (v->xw_surface_listeners_pending) {
     wl_signal_add(&xs->surface->events.map, &v->map);
     wl_signal_add(&xs->surface->events.unmap, &v->unmap);
     wl_signal_add(&xs->surface->events.commit, &v->commit);
     v->xw_commit_connected = true;
     v->xw_surface_listeners_pending = false;
-  } else if (!v->xw_commit_connected) {
-    wl_signal_add(&xs->surface->events.commit, &v->commit);
-    v->xw_commit_connected = true;
   }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (!p)
@@ -1989,13 +1984,19 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieServer *s = v->server;
   if (v->pane_id)
     twm_close(&s->twm, v->pane_id);
-  wl_list_remove(&v->map.link);
-  wl_list_remove(&v->unmap.link);
   wl_list_remove(&v->destroy.link);
-  wl_list_remove(&v->commit.link);
   wl_list_remove(&v->request_fullscreen.link);
   wl_list_remove(&v->set_title.link);
   wl_list_remove(&v->set_app_id.link);
+  /* map/unmap/commit live on xs->surface->events and are only wired when
+   * xs->surface was non-NULL at registration time.  Removing an unwired
+   * list node is UB — guard with the tracking flags. */
+  if (!v->xw_surface_listeners_pending) {
+    wl_list_remove(&v->map.link);
+    wl_list_remove(&v->unmap.link);
+  }
+  if (v->xw_commit_connected)
+    wl_list_remove(&v->commit.link);
   wl_list_remove(&v->link);
   free(v);
   server_request_redraw(s);
@@ -2077,10 +2078,10 @@ static void handle_new_xwayland_surface(struct wl_listener *listener,
   wl_signal_add(&xs->events.request_fullscreen, &v->request_fullscreen);
   wl_signal_add(&xs->events.set_title, &v->set_title);
   wl_signal_add(&xs->events.set_class, &v->set_app_id);
-  /* xs->surface->events.{map,unmap,commit} require xs->surface non-NULL.
-   * Most apps have it ready here; Firefox and other multi-process clients
-   * associate their wl_surface later.  When NULL, set a flag so
-   * xwayland_handle_map wires the remaining listeners on first call. */
+  /* xs->surface can be NULL when the X11 client hasn't associated a
+   * wl_surface yet (Firefox GPU/socket process, multi-process apps).
+   * Guard all three surface-level signal adds; xwayland_handle_map will
+   * wire them once xs->surface is guaranteed non-NULL. */
   if (xs->surface) {
     wl_signal_add(&xs->surface->events.map, &v->map);
     wl_signal_add(&xs->surface->events.unmap, &v->unmap);
