@@ -13,13 +13,13 @@
   libinput,
   pixman,
   mesa,
+  libglvnd,
   freetype,
   harfbuzz,
   fontconfig,
   luajit,
   xwayland,
   xcbutilwm,
-  libGL,
   withXwayland ? true,
 }:
 
@@ -45,7 +45,7 @@ stdenv.mkDerivation (finalAttrs: {
     libinput
     pixman
     mesa
-    libGL
+    libglvnd.dev # provides egl.pc and glesv2.pc
     freetype
     harfbuzz
     fontconfig
@@ -61,15 +61,10 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.mesonBool "xwayland" withXwayland)
   ];
 
-  env.NIX_CFLAGS_COMPILE = "-DHAVE_WLR_GLES2_FBO";
-
   postInstall = ''
     install -Dm755 trixiectl $out/bin/trixiectl
   '';
 
-  # ── Required by services.displayManager.sessionPackages ─────────────────
-  # NixOS reads this to know what session names the package provides.
-  # Must match the Name= field in the .desktop file exactly.
   passthru.providedSessions = [ "trixie" ];
 
   meta = {
@@ -77,7 +72,6 @@ stdenv.mkDerivation (finalAttrs: {
     homepage = "https://github.com/Jlesster/TrixC";
     license = lib.licenses.mit;
     maintainers = [ ];
-    # Use stdenv.hostPlatform.system instead of the deprecated `system`
     platforms = [
       "x86_64-linux"
       "aarch64-linux"

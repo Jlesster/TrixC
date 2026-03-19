@@ -452,6 +452,7 @@ void server_sync_focus(TrixieServer *s) {
 /* ── Window sync ────────────────────────────────────────────────────────────
  */
 void server_sync_windows(TrixieServer *s) {
+  Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
   int incoming_x = anim_ws_incoming_x(&s->anim);
   PaneId focused_id = twm_focused_id(&s->twm);
   TrixieView *v;
@@ -463,7 +464,11 @@ void server_sync_windows(TrixieServer *s) {
       continue;
     bool on_ws = p->sticky; /* sticky = visible everywhere */
     if (!on_ws)
-      on_ws = (p->ws_idx == s->twm.active_ws);
+      for (int i = 0; i < ws->pane_count; i++)
+        if (ws->panes[i] == v->pane_id) {
+          on_ws = true;
+          break;
+        }
     bool is_closing = anim_is_closing(&s->anim, v->pane_id);
     if (!on_ws && !is_closing) {
       wlr_scene_node_set_enabled(&v->scene_tree->node, false);
@@ -1533,9 +1538,6 @@ static void handle_new_output(struct wl_listener *listener, void *data) {
     wlr_scene_rect_set_size(s->bg_rect, ow, oh);
 
   wlr_log(WLR_INFO, "new output: %s %dx%d", wlr_output->name, ow, oh);
-  /* Apply any monitor config that was written via trixie.set("monitor", ...)
-   * before wlr_backend_start enumerated outputs. */
-  lua_apply_pending_monitor(s, o);
   lua_emit_screen_added(s, o);
 }
 

@@ -74,10 +74,10 @@ typedef struct {
   Rect last_rect;
   float last_top[4];
   float last_side[4];
+  int last_bw;
   bool last_focused;
   bool last_enabled;
   char last_text[320]; /* cached label string for dirty check */
-  int last_tw;         /* cached bar_measure_text result — avoids reshaping unchanged text */
   int last_label_x;    /* cached label node position for animation tracking */
   int last_label_y;
 } DecoEntry;
@@ -176,9 +176,11 @@ static void position_rects(DecoEntry *e, Rect r, int bw, float tc[4],
   bool gs = r.x == e->last_rect.x && r.y == e->last_rect.y &&
             r.w == e->last_rect.w && r.h == e->last_rect.h;
   bool cs = color_eq(tc, e->last_top) && color_eq(sc, e->last_side);
-  if (gs && cs && e->last_enabled)
+  bool bws = (bw == e->last_bw);
+  if (gs && cs && bws && e->last_enabled)
     return;
   e->last_rect = r;
+  e->last_bw = bw;
   memcpy(e->last_top, tc, sizeof(e->last_top));
   memcpy(e->last_side, sc, sizeof(e->last_side));
   e->last_enabled = true;
@@ -224,21 +226,12 @@ static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
   const char *shape = floating ? "~" : ws_shapes[ws_i];
   snprintf(text, sizeof(text), "[%s %s]", name, shape);
 
-  /* Measure — buffer is exactly this wide.
-   * Reuse cached width if text hasn't changed — avoids a full HarfBuzz
-   * shape pass on every label update when only position/focus changed. */
-  int tw;
+  /* Measure — buffer is exactly this wide */
+  int tw = bar_measure_text(text);
+  if (tw <= 0)
+    return;
+
   bool changed = strcmp(text, e->last_text) != 0 || focused != e->last_focused;
-  if (changed) {
-    tw = bar_measure_text(text);
-    if (tw <= 0)
-      return;
-    e->last_tw = tw;
-  } else {
-    tw = e->last_tw;
-    if (tw <= 0)
-      return;
-  }
 
   /* Compute label position first so we can check it independently */
   int lx = r.x + LABEL_PAD_H;
@@ -322,12 +315,12 @@ void deco_complete_update(TrixieDeco *d, TwmState *twm, AnimSet *anim,
   for (int i = 0; i < d->count; i++) {
     DecoEntry *e = &d->entries[i];
 
-    /* Force geometry update */
+    /* Force geometry + border-width update */
     e->last_rect = (Rect){0};
+    e->last_bw = -1;
 
     /* Force label redraw */
     e->last_text[0] = '\0';
-    e->last_tw      = 0;
     e->last_label_x = -1;
     e->last_label_y = -1;
 

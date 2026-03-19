@@ -687,28 +687,23 @@ void layout_compute(Layout l, Rect area, int n, float ratio, int gap, Rect *out)
     Layout l;
     int    n, x, y, w, h, gap;
     float  ratio;
-    bool   valid;
-    Rect   cache[MAX_PANES];
-  } Slot;
-  /* One slot per layout kind — switching between workspaces with different
-   * layouts no longer evicts each other's cached result. */
-  static Slot s_slots[LAYOUT_COUNT];
+  } Key;
+  static Key  s_key;
+  static Rect s_cache[MAX_PANES];
+  static int  s_n = 0;
 
   if(n <= 0) return;
 
-  int li = (int)l;
-  if(li < 0 || li >= LAYOUT_COUNT) li = 0;
-  Slot *sl = &s_slots[li];
-
-  if(sl->valid && sl->n == n && sl->x == area.x && sl->y == area.y &&
-     sl->w == area.w && sl->h == area.h && sl->gap == gap &&
-     sl->ratio == ratio) {
-    memcpy(out, sl->cache, (size_t)n * sizeof(Rect));
+  Key k = { l, n, area.x, area.y, area.w, area.h, gap, ratio };
+  if(n == s_n && memcmp(&k, &s_key, sizeof k) == 0) {
+    memcpy(out, s_cache, (size_t)n * sizeof(Rect));
     return;
   }
 
   switch(l) {
     case LAYOUT_DWINDLE:
+      /* Flat fallback only. The real BSP path is driven from twm.c via
+       * dwindle_recompute() + dwindle_get_rect(). */
       dwindle_flat(area, n, gap, 0, out);
       break;
     case LAYOUT_COLUMNS: columns(area, n, gap, out); break;
@@ -718,14 +713,7 @@ void layout_compute(Layout l, Rect area, int n, float ratio, int gap, Rect *out)
     default: dwindle_flat(area, n, gap, 0, out); break;
   }
 
-  sl->l     = l;
-  sl->n     = n;
-  sl->x     = area.x;
-  sl->y     = area.y;
-  sl->w     = area.w;
-  sl->h     = area.h;
-  sl->gap   = gap;
-  sl->ratio = ratio;
-  sl->valid = true;
-  memcpy(sl->cache, out, (size_t)n * sizeof(Rect));
+  s_key = k;
+  s_n   = n;
+  memcpy(s_cache, out, (size_t)n * sizeof(Rect));
 }

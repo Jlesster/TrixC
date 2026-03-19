@@ -11,12 +11,11 @@ static void reload_fonts(TrixieServer *s) {
 }
 
 static void recompute_layouts(TrixieServer *s) {
-  /* Rebuild dwindle BSP trees for all workspaces with the new content_rect.
-   * Do NOT call twm_reflow here — server_apply_config_reload already did. */
   for (int i = 0; i < s->twm.ws_count; i++) {
     Workspace *ws = &s->twm.workspaces[i];
     dwindle_recompute(&ws->dwindle, s->twm.content_rect, s->twm.gap);
   }
+  twm_reflow(&s->twm);
 }
 
 static void refresh_ui(TrixieServer *s) {

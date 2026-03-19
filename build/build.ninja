@@ -245,13 +245,13 @@ build meson-internal__clean: CUSTOM_COMMAND PHONY | clean-ctlist
  COMMAND = /nix/store/4siii6hvzs9ymbq37k04vcpx6xnybz21-ninja-1.13.2/bin/ninja -t clean
  description = Cleaning
 
-build build.ninja: REGENERATE_BUILD ../meson.build /nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9/bin/bash meson-private/coredata.dat
+build build.ninja: REGENERATE_BUILD ../meson.build /home/jless/Code/c-cpp/c/Trixie/meson_options.txt /nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9/bin/bash meson-private/coredata.dat
  pool = console
 
 build reconfigure: REGENERATE_BUILD PHONY
  pool = console
 
-build ../meson.build /nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9/bin/bash meson-private/coredata.dat: phony 
+build ../meson.build /home/jless/Code/c-cpp/c/Trixie/meson_options.txt /nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9/bin/bash meson-private/coredata.dat: phony 
 
 default all
 

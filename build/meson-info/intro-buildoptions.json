@@ -628,6 +628,14 @@
     "description": "Sysconf data directory"
   },
   {
+    "name": "xwayland",
+    "value": true,
+    "section": "user",
+    "machine": "any",
+    "type": "boolean",
+    "description": "Enable XWayland support for running X11 applications"
+  },
+  {
     "name": "errorlogs",
     "value": true,
     "section": "test",
