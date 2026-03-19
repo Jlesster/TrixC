@@ -428,6 +428,37 @@ void canvas_clear(Canvas *c, Color col) {
   canvas_fill_rect(c, 0, 0, c->w, c->h, col);
 }
 
+/* ── canvas_draw_image ─────────────────────────────────────────────────────
+ * Blit a pre-decoded ARGB pixel buffer (0xAARRGGBB, row-major) into the
+ * canvas at (dx, dy), scaled to (dw x dh).
+ * src_px   – caller-owned pixel array
+ * src_w/h  – source dimensions
+ * dx,dy    – destination top-left in canvas coords
+ * dw,dh    – destination size (nearest-neighbour scale) */
+void canvas_draw_image(Canvas *c, const uint32_t *src_px, int src_w, int src_h,
+                       int dx, int dy, int dw, int dh) {
+  if (!src_px || src_w <= 0 || src_h <= 0 || dw <= 0 || dh <= 0)
+    return;
+  for (int row = 0; row < dh; row++) {
+    int cy = dy + row;
+    if (cy < 0 || cy >= c->h)
+      continue;
+    int sy = (row * src_h) / dh;
+    for (int col = 0; col < dw; col++) {
+      int cx = dx + col;
+      if (cx < 0 || cx >= c->w)
+        continue;
+      int sx = (col * src_w) / dw;
+      uint32_t spx = src_px[sy * src_w + sx];
+      uint8_t a = (spx >> 24) & 0xff;
+      uint8_t r = (spx >> 16) & 0xff;
+      uint8_t g = (spx >> 8) & 0xff;
+      uint8_t b = spx & 0xff;
+      blend_px(&c->px[cy * c->stride + cx], a, r, g, b);
+    }
+  }
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
  * §3  wlr_buffer wrapper
  * ══════════════════════════════════════════════════════════════════════════ */

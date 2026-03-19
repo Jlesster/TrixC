@@ -1030,9 +1030,59 @@ static int lcanvas_font_ascender(lua_State *L) {
   return 1;
 }
 
+/* canvas:draw_image(pixels, src_w, src_h, dx, dy, dw, dh)
+ *   pixels — a Lua string of raw ARGB bytes (4 bytes per pixel, 0xAARRGGBB)
+ *            OR a flat Lua table of 0xAARRGGBB integers
+ *   src_w, src_h — source dimensions
+ *   dx, dy       — destination position on canvas
+ *   dw, dh       — destination size (nearest-neighbour scale, use src_w/h for
+ * 1:1)
+ *
+ * Loading a PNG/JPEG from Lua is done outside (e.g. via io.open + a pure-Lua
+ * decoder, or write a .argb sidecar with imagemagick).  The C side only blits.
+ */
+static int lcanvas_draw_image(lua_State *L) {
+  CanvasUD *ud = canvas_check(L, 1);
+  int src_w = (int)luaL_checkinteger(L, 3);
+  int src_h = (int)luaL_checkinteger(L, 4);
+  int dx = (int)luaL_checkinteger(L, 5);
+  int dy = (int)luaL_checkinteger(L, 6);
+  int dw = lua_isnumber(L, 7) ? (int)lua_tointeger(L, 7) : src_w;
+  int dh = lua_isnumber(L, 8) ? (int)lua_tointeger(L, 8) : src_h;
+
+  if (lua_type(L, 2) == LUA_TSTRING) {
+    /* Raw binary string: 4 bytes per pixel ARGB */
+    size_t len;
+    const char *raw = lua_tolstring(L, 2, &len);
+    int needed = src_w * src_h * 4;
+    if ((int)len < needed)
+      return luaL_error(L, "draw_image: string too short (%d bytes, need %d)",
+                        (int)len, needed);
+    canvas_draw_image(ud->c, (const uint32_t *)raw, src_w, src_h, dx, dy, dw,
+                      dh);
+  } else if (lua_type(L, 2) == LUA_TTABLE) {
+    /* Flat table of 0xAARRGGBB integers — allocate temp buffer */
+    int n = src_w * src_h;
+    uint32_t *buf = (uint32_t *)malloc((size_t)n * 4);
+    if (!buf)
+      return luaL_error(L, "draw_image: out of memory");
+    for (int i = 0; i < n; i++) {
+      lua_rawgeti(L, 2, i + 1);
+      buf[i] = (uint32_t)lua_tointeger(L, -1);
+      lua_pop(L, 1);
+    }
+    canvas_draw_image(ud->c, buf, src_w, src_h, dx, dy, dw, dh);
+    free(buf);
+  } else {
+    return luaL_error(L, "draw_image: arg 2 must be string or table");
+  }
+  return 0;
+}
+
 static const luaL_Reg canvas_methods[] = {
     {"fill_rect", lcanvas_fill_rect},
     {"draw_text", lcanvas_draw_text},
+    {"draw_image", lcanvas_draw_image},
     {"clear", lcanvas_clear},
     {"measure", lcanvas_measure},
     {"width", lcanvas_width},

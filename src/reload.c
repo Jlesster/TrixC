@@ -4,25 +4,12 @@
 #include <string.h>
 #include <unistd.h>
 
-/* ── Helpers ───────────────────────────────────────────────────────────── */
-
-/* Reload canvas fonts and reset wiboxes for all outputs */
 static void reload_fonts(TrixieServer *s) {
   canvas_font_reload(s->cfg.font_path, s->cfg.font_path_bold,
                      s->cfg.font_path_italic, s->cfg.font_size);
-
-  TrixieOutput *o;
-  wl_list_for_each(o, &s->outputs, link) {
-    for (int i = 0; i < o->wibox_count; i++) {
-      if (!o->wiboxes[i])
-        continue;
-      wibox_clear_output(o);
-      wibox_reset_output(o, s->L);
-    }
-  }
+  /* wibox reset handled by lua_reload step 0 before init.lua runs */
 }
 
-/* Recompute dwindle trees and layouts for all workspaces */
 static void recompute_layouts(TrixieServer *s) {
   for (int i = 0; i < s->twm.ws_count; i++) {
     Workspace *ws = &s->twm.workspaces[i];
@@ -31,7 +18,6 @@ static void recompute_layouts(TrixieServer *s) {
   twm_reflow(&s->twm);
 }
 
-/* Refresh bars and wiboxes */
 static void refresh_ui(TrixieServer *s) {
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) {
@@ -44,23 +30,26 @@ static void refresh_ui(TrixieServer *s) {
   }
 }
 
-/* ── Public reload function ────────────────────────────────────────────── */
 void reload_config(TrixieServer *s) {
-  lua_reload(s);
+  /* 1. Reset cfg defaults, run lua_reload (init.lua writes new values into
+   *    s->cfg via trixie.set), reflow windows. */
+  server_apply_config_reload(s);
 
+  /* 2. Bust all deco cache fields (last_rect, last_text, last_top/side) so
+   *    every entry unconditionally redraws on the next frame. */
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) {
-    if (o->deco) {
+    if (o->deco)
       deco_complete_update(o->deco, &s->twm, &s->anim, &s->cfg);
-    }
   }
+
+  /* 3. Mark deco dirty on all outputs so the render loop re-runs deco_update
+   *    on the next frame with the live s->cfg — this is what actually pushes
+   *    the new border colours/widths into the scene graph. */
+  server_mark_deco_dirty(s);
 
   reload_fonts(s);
   recompute_layouts(s);
   refresh_ui(s);
   server_request_redraw(s);
-
-  fprintf(
-      stderr,
-      "[reload] configuration reloaded — UI, decorations, and bars updated\n");
 }

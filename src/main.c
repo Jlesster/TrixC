@@ -78,7 +78,7 @@ static void keyboard_handle_key(struct wl_listener *, void *);
 static void keyboard_handle_modifiers(struct wl_listener *, void *);
 static void keyboard_handle_destroy(struct wl_listener *, void *);
 static void server_reflow_with_morph(TrixieServer *s);
-static void server_mark_deco_dirty(TrixieServer *s);
+void server_mark_deco_dirty(TrixieServer *s);
 
 /* ── Bar inset statics ───────────────────────────────────────────────────────
  */
@@ -413,7 +413,7 @@ void server_focus_pane(TrixieServer *s, PaneId id) {
   }
 }
 
-static void server_mark_deco_dirty(TrixieServer *s) {
+void server_mark_deco_dirty(TrixieServer *s) {
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) o->deco_dirty = true;
   server_request_redraw(s);

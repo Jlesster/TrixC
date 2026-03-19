@@ -707,6 +707,8 @@ int canvas_font_ascender(void);
 int canvas_font_height(void);
 void canvas_fill_rect(Canvas *c, int x, int y, int w, int h, Color col);
 void canvas_clear(Canvas *c, Color col);
+void canvas_draw_image(Canvas *c, const uint32_t *src_px, int src_w, int src_h,
+                       int dx, int dy, int dw, int dh);
 
 /* ── Wibox ─────────────────────────────────────────────────────────────── */
 TrixieWibox *wibox_create(TrixieServer *s, TrixieOutput *o, int x, int y, int w,
@@ -785,6 +787,7 @@ void server_dispatch_action(TrixieServer *, Action *);
 void server_sync_focus(TrixieServer *);
 void server_sync_windows(TrixieServer *);
 void server_request_redraw(TrixieServer *);
+void server_mark_deco_dirty(TrixieServer *);
 void server_focus_pane(TrixieServer *, PaneId);
 void server_float_toggle(TrixieServer *);
 void server_scratch_toggle(TrixieServer *, const char *name);
