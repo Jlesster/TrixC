@@ -94,20 +94,5 @@ in
     #    when seat0 is active, but explicit here for clarity)
     services.udev.packages = [ pkgs.libinput ];
 
-    # ── Environment variables set for every Trixie session ──────────────────
-    # Written into /etc/environment so greetd / getty sessions see them.
-    # Most of these are also set by trixie's own main.c setenv() calls,
-    # but having them in PAM env means child processes inherit them correctly
-    # even before the compositor's setenv() runs.
-    environment.sessionVariables = {
-      XDG_CURRENT_DESKTOP = "trixie:wlroots";
-      XDG_SESSION_TYPE = "wayland";
-      QT_QPA_PLATFORM = "wayland;xcb";
-      QT_WAYLAND_DISABLE_WINDOWDECORATION = "1";
-      GDK_BACKEND = "wayland,x11";
-      MOZ_ENABLE_WAYLAND = "1";
-      CLUTTER_BACKEND = "wayland";
-      EGL_PLATFORM = "wayland";
-    };
   };
 }
