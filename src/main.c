@@ -35,6 +35,7 @@
 #define HAVE_DRM_SYNCOBJ 1
 #endif
 #include "shader.h"
+#include <wlr/render/gles2.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>

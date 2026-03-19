@@ -60,19 +60,20 @@ static bool fc_resolve(const char *q, int weight, int slant, char *out,
 
 static void resolve_fonts(Config *c) {
   char raw[256];
-  strncpy(raw, c->font_path, sizeof(raw) - 1);
+  snprintf(raw, sizeof(raw), "%s", c->font_path);
   char resolved[256] = {0};
   if (fc_resolve(raw, FC_WEIGHT_REGULAR, FC_SLANT_ROMAN, resolved,
                  sizeof(resolved)))
-    strncpy(c->font_path, resolved, sizeof(c->font_path) - 1);
+    snprintf(c->font_path, sizeof(c->font_path), "%s", resolved);
   else
     wlr_log(WLR_ERROR, "config: could not resolve font '%s'", raw);
   if (!fc_resolve(raw, FC_WEIGHT_BOLD, FC_SLANT_ROMAN, c->font_path_bold,
                   sizeof(c->font_path_bold)))
-    strncpy(c->font_path_bold, c->font_path, sizeof(c->font_path_bold) - 1);
+    snprintf(c->font_path_bold, sizeof(c->font_path_bold), "%s", c->font_path);
   if (!fc_resolve(raw, FC_WEIGHT_REGULAR, FC_SLANT_ITALIC, c->font_path_italic,
                   sizeof(c->font_path_italic)))
-    strncpy(c->font_path_italic, c->font_path, sizeof(c->font_path_italic) - 1);
+    snprintf(c->font_path_italic, sizeof(c->font_path_italic), "%s",
+             c->font_path);
 }
 
 void config_defaults(Config *c) {

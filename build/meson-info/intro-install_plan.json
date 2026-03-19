@@ -16,8 +16,8 @@
     }
   },
   "data": {
-    "/home/jless/Code/c-cpp/c/Trixie/data/trixie.desktop": {
-      "destination": "{datadir}/wayland-sessions/trixie.desktop",
+    "/home/jless/Code/c-cpp/c/Trixie/data/Trixie.desktop": {
+      "destination": "{datadir}/wayland-sessions/Trixie.desktop",
       "tag": null,
       "subproject": null
     }
