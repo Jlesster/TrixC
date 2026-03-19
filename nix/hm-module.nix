@@ -198,30 +198,24 @@ in
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
 
-    # Publish the Wayland/Firefox environment into the systemd user session and
-    # PAM environment so that applications launched by ly (or any other DM)
-    # inherit the correct variables even before the compositor sets them.
-    home.sessionVariables = {
-      MOZ_ENABLE_WAYLAND = "1";
-      MOZ_DBUS_REMOTE = "1";
-      MOZ_WEBRENDER_FORCE = "1";
-      EGL_PLATFORM = "wayland";
-      NIXOS_OZONE_WL = "1";
-      ELECTRON_OZONE_PLATFORM_HINT = "wayland";
-      OZONE_PLATFORM = "wayland";
-    };
-
-    # Also emit into environment.d so systemd --user picks them up at
-    # login (before the first graphical unit starts).
+    # Wayland-only hints are written to environment.d so systemd --user
+    # picks them up only for the graphical Wayland session.  They are
+    # intentionally NOT in home.sessionVariables (which goes into ~/.profile
+    # and is sourced by AwesomeWM/X11 sessions too — MOZ_ENABLE_WAYLAND=1
+    # and GDK_BACKEND=wayland break Firefox and GTK apps under X11).
     xdg.configFile = {
       "environment.d/trixie-wayland.conf".text = ''
         MOZ_ENABLE_WAYLAND=1
         MOZ_DBUS_REMOTE=1
         MOZ_WEBRENDER_FORCE=1
-        EGL_PLATFORM=wayland
         NIXOS_OZONE_WL=1
         ELECTRON_OZONE_PLATFORM_HINT=wayland
         OZONE_PLATFORM=wayland
+        GDK_BACKEND=wayland,x11
+        SDL_VIDEODRIVER=wayland,x11
+        QT_QPA_PLATFORM=wayland;xcb
+        QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+        QT_AUTO_SCREEN_SCALE_FACTOR=1
       '';
 
       "trixie/_hm_generated.lua".text = generatedInitLua;
