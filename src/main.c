@@ -34,16 +34,54 @@
 #include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #define HAVE_DRM_SYNCOBJ 1
 #endif
+#if __has_include(<wlr/types/wlr_text_input_v3.h>)
+#include <wlr/types/wlr_text_input_v3.h>
+#define HAVE_TEXT_INPUT_V3 1
+#endif
+#if __has_include(<wlr/types/wlr_input_method_v2.h>)
+#include <wlr/types/wlr_input_method_v2.h>
+#define HAVE_INPUT_METHOD_V2 1
+#endif
+#if __has_include(<wlr/types/wlr_output_management_v1.h>)
+#include <wlr/types/wlr_output_management_v1.h>
+#define HAVE_OUTPUT_MANAGEMENT_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_output_power_management_v1.h>)
+#include <wlr/types/wlr_output_power_management_v1.h>
+#define HAVE_OUTPUT_POWER_MGMT_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_ext_idle_notify_v1.h>)
+#include <wlr/types/wlr_ext_idle_notify_v1.h>
+#define HAVE_EXT_IDLE_NOTIFY_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_security_context_v1.h>)
+#include <wlr/types/wlr_security_context_v1.h>
+#define HAVE_SECURITY_CONTEXT_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_virtual_keyboard_v1.h>)
+#include <wlr/types/wlr_virtual_keyboard_v1.h>
+#define HAVE_VIRTUAL_KEYBOARD_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_virtual_pointer_v1.h>)
+#include <wlr/types/wlr_virtual_pointer_v1.h>
+#define HAVE_VIRTUAL_POINTER_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_session_lock_manager_v1.h>)
+#include <wlr/types/wlr_session_lock_manager_v1.h>
+#define HAVE_SESSION_LOCK_V1 1
+#endif
+#if __has_include(<wlr/types/wlr_xdg_foreign_registry.h>)
+#include <wlr/types/wlr_xdg_foreign_registry.h>
+#include <wlr/types/wlr_xdg_foreign_v1.h>
+#include <wlr/types/wlr_xdg_foreign_v2.h>
+#define HAVE_XDG_FOREIGN 1
+#endif
 #include "shader.h"
 #include <wlr/render/gles2.h>
-#include <wlr/types/wlr_ext_idle_notify_v1.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
-#include <wlr/types/wlr_input_method_v2.h>
-#include <wlr/types/wlr_output_management_v1.h>
-#include <wlr/types/wlr_output_power_management_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
@@ -51,19 +89,11 @@
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_screencopy_v1.h>
-#include <wlr/types/wlr_security_context_v1.h>
-#include <wlr/types/wlr_session_lock_manager_v1.h>
 #include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_tearing_control_v1.h>
-#include <wlr/types/wlr_text_input_v3.h>
 #include <wlr/types/wlr_viewporter.h>
-#include <wlr/types/wlr_virtual_keyboard_v1.h>
-#include <wlr/types/wlr_virtual_pointer_v1.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
-#include <wlr/types/wlr_xdg_foreign_registry.h>
-#include <wlr/types/wlr_xdg_foreign_v1.h>
-#include <wlr/types/wlr_xdg_foreign_v2.h>
 #include <wlr/types/wlr_xdg_shell.h>
 
 #define CONTAINER_OF(ptr, type, member)                                        \
@@ -2388,20 +2418,38 @@ int main(int argc, char *argv[]) {
    * virtual_pointer_v1: warpd, xdotool Wayland mode
    * session_lock_manager_v1: swaylock, hyprlock
    * xdg_foreign_v1/v2: GTK4 portal / cross-surface parenting */
+#ifdef HAVE_TEXT_INPUT_V3
   wlr_text_input_manager_v3_create(s->display);
+#endif
+#ifdef HAVE_INPUT_METHOD_V2
   wlr_input_method_manager_v2_create(s->display);
+#endif
+#ifdef HAVE_OUTPUT_POWER_MGMT_V1
   wlr_output_power_manager_v1_create(s->display);
+#endif
+#ifdef HAVE_EXT_IDLE_NOTIFY_V1
   wlr_ext_idle_notifier_v1_create(s->display);
+#endif
+#ifdef HAVE_SECURITY_CONTEXT_V1
   wlr_security_context_manager_v1_create(s->display);
+#endif
+#ifdef HAVE_VIRTUAL_KEYBOARD_V1
   wlr_virtual_keyboard_manager_v1_create(s->display);
+#endif
+#ifdef HAVE_VIRTUAL_POINTER_V1
   wlr_virtual_pointer_manager_v1_create(s->display);
+#endif
+#ifdef HAVE_SESSION_LOCK_V1
   wlr_session_lock_manager_v1_create(s->display);
+#endif
+#ifdef HAVE_XDG_FOREIGN
   {
     struct wlr_xdg_foreign_registry *foreign_reg =
         wlr_xdg_foreign_registry_create(s->display);
     wlr_xdg_foreign_v1_create(s->display, foreign_reg);
     wlr_xdg_foreign_v2_create(s->display, foreign_reg);
   }
+#endif
 
   s->output_layout = wlr_output_layout_create(s->display);
   s->scene = wlr_scene_create();
@@ -2435,7 +2483,9 @@ int main(int argc, char *argv[]) {
 
   s->output_mgr =
       wlr_xdg_output_manager_v1_create(s->display, s->output_layout);
+#ifdef HAVE_OUTPUT_MANAGEMENT_V1
   wlr_output_manager_v1_create(s->display, s->output_layout);
+#endif
 
   s->deco_mgr = wlr_xdg_decoration_manager_v1_create(s->display);
   s->new_deco.notify = handle_new_deco;
