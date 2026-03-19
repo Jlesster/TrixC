@@ -452,6 +452,7 @@ void server_sync_focus(TrixieServer *s) {
 /* ── Window sync ────────────────────────────────────────────────────────────
  */
 void server_sync_windows(TrixieServer *s) {
+  Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
   int incoming_x = anim_ws_incoming_x(&s->anim);
   PaneId focused_id = twm_focused_id(&s->twm);
   TrixieView *v;
@@ -461,9 +462,16 @@ void server_sync_windows(TrixieServer *s) {
     Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
     if (!p)
       continue;
-    bool on_ws = p->sticky; /* sticky = visible everywhere */
+
+    /* Check if this pane is on the active workspace */
+    bool on_ws = p->sticky;
     if (!on_ws)
-      on_ws = (p->ws_idx == s->twm.active_ws);
+      for (int i = 0; i < ws->pane_count; i++)
+        if (ws->panes[i] == v->pane_id) {
+          on_ws = true;
+          break;
+        }
+
     bool is_closing = anim_is_closing(&s->anim, v->pane_id);
     if (!on_ws && !is_closing) {
       wlr_scene_node_set_enabled(&v->scene_tree->node, false);
@@ -473,7 +481,6 @@ void server_sync_windows(TrixieServer *s) {
 #endif
       continue;
     }
-    /* minimized windows are logically on the workspace but visually hidden */
     if (p->minimized) {
       wlr_scene_node_set_enabled(&v->scene_tree->node, false);
       continue;
@@ -489,7 +496,7 @@ void server_sync_windows(TrixieServer *s) {
     if (win_h < 1)
       win_h = 1;
     wlr_scene_node_set_position(&v->scene_tree->node, win_x, win_y);
-    /* Opacity: unfocused tiled windows get a subtle dimming */
+
     bool is_focused = (v->pane_id == focused_id);
     float opacity = (p->rule_opacity > 0.f) ? p->rule_opacity : 1.0f;
     if (opacity >= 1.0f && !is_focused && !p->floating && !p->fullscreen)
