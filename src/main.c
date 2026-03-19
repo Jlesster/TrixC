@@ -2410,6 +2410,12 @@ int main(int argc, char *argv[]) {
   setenv("MOZ_DBUS_REMOTE", "1", true);
   setenv("MOZ_USE_XINPUT2", "1", false);
   setenv("MOZ_WEBRENDER_FORCE", "1", false);
+  /* MOZ_X11_EGL=1: force Firefox's glxtest probe subprocess to use X11 EGL
+   * instead of EGL-Wayland.  glxtest is forked without a wl_display/event-loop
+   * so libnvidia-egl-wayland crashes in wl_proxy_create_wrapper when it tries
+   * to use the inherited Wayland socket.  The main Firefox process still uses
+   * the full Wayland backend — only the GPU capability probe uses X11 EGL. */
+  setenv("MOZ_X11_EGL", "1", false);
   setenv("OZONE_PLATFORM", "wayland", true);
   setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
   setenv("NIXOS_OZONE_WL", "1", true);
