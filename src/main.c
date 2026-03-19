@@ -36,10 +36,14 @@
 #endif
 #include "shader.h"
 #include <wlr/render/gles2.h>
+#include <wlr/types/wlr_ext_idle_notify_v1.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_input_method_v2.h>
+#include <wlr/types/wlr_output_management_v1.h>
+#include <wlr/types/wlr_output_power_management_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
@@ -47,11 +51,19 @@
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_screencopy_v1.h>
+#include <wlr/types/wlr_security_context_v1.h>
+#include <wlr/types/wlr_session_lock_manager_v1.h>
 #include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_tearing_control_v1.h>
+#include <wlr/types/wlr_text_input_v3.h>
 #include <wlr/types/wlr_viewporter.h>
+#include <wlr/types/wlr_virtual_keyboard_v1.h>
+#include <wlr/types/wlr_virtual_pointer_v1.h>
 #include <wlr/types/wlr_xdg_activation_v1.h>
+#include <wlr/types/wlr_xdg_foreign_registry.h>
+#include <wlr/types/wlr_xdg_foreign_v1.h>
+#include <wlr/types/wlr_xdg_foreign_v2.h>
 #include <wlr/types/wlr_xdg_shell.h>
 
 #define CONTAINER_OF(ptr, type, member)                                        \
@@ -2365,6 +2377,32 @@ int main(int argc, char *argv[]) {
   wlr_content_type_manager_v1_create(s->display, 1);
   wlr_tearing_control_manager_v1_create(s->display, 1);
 
+  /* ── Additional protocols for full app compatibility ─────────────────────
+   * text_input_v3: GTK4, Qt6, Electron keyboard input
+   * input_method_v2: fcitx5, ibus CJK input
+   * output_management_v1: kanshi, wdisplays monitor config
+   * output_power_management_v1: DPMS via wlopm/swayidle
+   * ext_idle_notify_v1: modern swayidle (zwp_idle is deprecated)
+   * security_context_v1: sandboxed Flatpak/Electron access
+   * virtual_keyboard_v1: ydotool, screen keyboards
+   * virtual_pointer_v1: warpd, xdotool Wayland mode
+   * session_lock_manager_v1: swaylock, hyprlock
+   * xdg_foreign_v1/v2: GTK4 portal / cross-surface parenting */
+  wlr_text_input_manager_v3_create(s->display);
+  wlr_input_method_manager_v2_create(s->display);
+  wlr_output_power_manager_v1_create(s->display);
+  wlr_ext_idle_notifier_v1_create(s->display);
+  wlr_security_context_manager_v1_create(s->display);
+  wlr_virtual_keyboard_manager_v1_create(s->display);
+  wlr_virtual_pointer_manager_v1_create(s->display);
+  wlr_session_lock_manager_v1_create(s->display);
+  {
+    struct wlr_xdg_foreign_registry *foreign_reg =
+        wlr_xdg_foreign_registry_create(s->display);
+    wlr_xdg_foreign_v1_create(s->display, foreign_reg);
+    wlr_xdg_foreign_v2_create(s->display, foreign_reg);
+  }
+
   s->output_layout = wlr_output_layout_create(s->display);
   s->scene = wlr_scene_create();
   s->scene_layout = wlr_scene_attach_output_layout(s->scene, s->output_layout);
@@ -2397,6 +2435,7 @@ int main(int argc, char *argv[]) {
 
   s->output_mgr =
       wlr_xdg_output_manager_v1_create(s->display, s->output_layout);
+  wlr_output_manager_v1_create(s->display, s->output_layout);
 
   s->deco_mgr = wlr_xdg_decoration_manager_v1_create(s->display);
   s->new_deco.notify = handle_new_deco;
