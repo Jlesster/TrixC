@@ -1,0 +1,6 @@
+option(
+  'xwayland',
+  type: 'boolean',
+  value: true,
+  description: 'Enable XWayland support for running X11 applications',
+)
