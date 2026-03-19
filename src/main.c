@@ -1893,6 +1893,11 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
     v->mapped = false;
     return;
   }
+  /* Ensure the wlr_surface is attached to our scene tree.  This is
+   * always safe to call — if the surface node was already created in
+   * handle_new_xwayland_surface it is a no-op; if xs->surface was NULL
+   * at that point (common on wlroots 0.18) this creates it now. */
+  wlr_scene_surface_create(v->scene_tree, xs->surface);
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (!p)
     return;
