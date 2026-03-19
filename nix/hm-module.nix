@@ -136,6 +136,17 @@ in
       default = { };
       description = "Extra Lua files installed into ~/.config/trixie/modules/.";
     };
+
+    # ── Compatibility stub ───────────────────────────────────────────────────
+    # Home Manager's way-displays.nix unconditionally injects a `systemd`
+    # sub-option into every wayland.windowManager.* attrset.  Without this
+    # stub the module system errors with "option does not exist".
+    systemd = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      internal = true;
+      description = "Stub to satisfy way-displays.nix systemd injection.";
+    };
   };
 
   # ── Implementation ──────────────────────────────────────────────────────────
