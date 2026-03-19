@@ -7,20 +7,19 @@
   wayland,
   wayland-protocols,
   wayland-scanner,
-  wlroots_0_18, # trixie targets wlroots 0.18.x
+  wlroots_0_18,
   libdrm,
   libxkbcommon,
   libinput,
   pixman,
-  mesa, # provides libEGL + libGLESv2
+  mesa,
   freetype,
   harfbuzz,
   fontconfig,
   luajit,
   xwayland,
-  xcbutilwm, # xcb-icccm, needed by wlroots xwayland
+  xcbutilwm,
   libGL,
-  # Optional — set to null to disable
   withXwayland ? true,
 }:
 
@@ -45,7 +44,7 @@ stdenv.mkDerivation (finalAttrs: {
     libxkbcommon
     libinput
     pixman
-    mesa # EGL + GLES2
+    mesa
     libGL
     freetype
     harfbuzz
@@ -61,20 +60,23 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.mesonBool "xwayland" withXwayland)
   ];
 
-  # wlroots 0.18 exposes wlr_gles2_renderer_get_buffer_fbo — enable the
-  # saturation shader path.
   env.NIX_CFLAGS_COMPILE = "-DHAVE_WLR_GLES2_FBO";
 
   postInstall = ''
-    # Install the trixiectl IPC client alongside the compositor
     install -Dm755 trixiectl $out/bin/trixiectl
   '';
 
+  # ── Required by services.displayManager.sessionPackages ─────────────────
+  # NixOS reads this to know what session names the package provides.
+  # Must match the Name= field in the .desktop file exactly.
+  passthru.providedSessions = [ "trixie" ];
+
   meta = {
     description = "wlroots Wayland compositor with LuaJIT scripting";
-    homepage = "https://github.com/yourname/trixie";
+    homepage = "https://github.com/Jlesster/TrixC";
     license = lib.licenses.mit;
     maintainers = [ ];
+    # Use stdenv.hostPlatform.system instead of the deprecated `system`
     platforms = [
       "x86_64-linux"
       "aarch64-linux"
