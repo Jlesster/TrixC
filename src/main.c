@@ -2313,6 +2313,7 @@ int main(int argc, char *argv[]) {
   wlr_renderer_init_wl_display(s->renderer, s->display);
   s->allocator = wlr_allocator_autocreate(s->backend, s->renderer);
   s->compositor = wlr_compositor_create(s->display, 6, s->renderer);
+  wlr_subcompositor_create(s->display);
   wlr_data_device_manager_create(s->display);
   wlr_data_control_manager_v1_create(s->display);
   wlr_primary_selection_v1_device_manager_create(s->display);
