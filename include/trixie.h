@@ -501,6 +501,7 @@ typedef struct TrixieView {
   struct wl_listener foreign_request_activate, foreign_request_close;
   struct wl_list link;
   bool is_xwayland;
+  bool xw_scene_attached; /* true once wlr_scene_surface_create has run */
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else

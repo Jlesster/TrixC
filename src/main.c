@@ -1896,11 +1896,15 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
     v->mapped = false;
     return;
   }
-  /* Ensure the wlr_surface is attached to our scene tree.  This is
-   * always safe to call — if the surface node was already created in
-   * handle_new_xwayland_surface it is a no-op; if xs->surface was NULL
-   * at that point (common on wlroots 0.18) this creates it now. */
-  wlr_scene_surface_create(v->scene_tree, xs->surface);
+  /* Ensure the wlr_surface is attached to our scene tree.  Only do this
+   * once — if handle_new_xwayland_surface already created the node (when
+   * xs->surface was non-NULL at that point) skip it.  Calling
+   * wlr_scene_surface_create twice on the same tree creates a second
+   * orphaned node and corrupts the scene graph, causing compositor crashes. */
+  if (!v->xw_scene_attached) {
+    wlr_scene_surface_create(v->scene_tree, xs->surface);
+    v->xw_scene_attached = true;
+  }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (!p)
     return;
@@ -2029,8 +2033,10 @@ static void handle_new_xwayland_surface(struct wl_listener *listener,
   /* xs->surface may be NULL until the X11 client associates a surface.
    * Only create the scene surface node if it's already available here;
    * otherwise xwayland_handle_map will do it once surface is guaranteed. */
-  if (xs->surface)
+  if (xs->surface) {
     wlr_scene_surface_create(v->scene_tree, xs->surface);
+    v->xw_scene_attached = true;
+  }
   wlr_scene_node_set_enabled(&v->scene_tree->node, false);
   v->map.notify = xwayland_handle_map;
   v->unmap.notify = xwayland_handle_unmap;
