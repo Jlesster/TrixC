@@ -11,12 +11,12 @@
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/types/wlr_scene.h>
 
-/* ── bar font bridge ────────────────────────────────────────────────────── */
-int bar_measure_text(const char *text);
-int bar_draw_text_pub(uint32_t *px, int stride, int x, int y, const char *text,
-                      Color fg, int clip_w, int clip_h);
-int bar_font_ascender(void);
-int bar_font_height(void);
+/* ── canvas font bridge ─────────────────────────────────────────────────── */
+/* canvas_* are defined in bar.c and declared in trixie.h. Use them directly
+ * rather than the private bar_* names that were never exported. */
+static inline int deco_font_height(void) { return canvas_font_height(); }
+static inline int deco_font_ascender(void) { return canvas_font_ascender(); }
+static inline int deco_measure_text(const char *t) { return canvas_measure(t); }
 
 /* ── minimal wlr_buffer ─────────────────────────────────────────────────── */
 struct TBuf {
@@ -77,8 +77,9 @@ typedef struct {
   bool last_focused;
   bool last_enabled;
   char last_text[320]; /* cached label string for dirty check */
-  int last_tw;         /* cached bar_measure_text result — avoids reshaping unchanged text */
-  int last_label_x;    /* cached label node position for animation tracking */
+  int last_tw; /* cached bar_measure_text result — avoids reshaping unchanged
+                  text */
+  int last_label_x; /* cached label node position for animation tracking */
   int last_label_y;
 } DecoEntry;
 
@@ -209,7 +210,7 @@ static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
 static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
                          int bw, int ws_idx, bool focused, bool floating,
                          const Config *cfg, const Pane *p) {
-  int fh = bar_font_height();
+  int fh = deco_font_height();
   if (fh <= 0)
     return; /* font not ready */
 
@@ -224,13 +225,11 @@ static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
   const char *shape = floating ? "~" : ws_shapes[ws_i];
   snprintf(text, sizeof(text), "[%s %s]", name, shape);
 
-  /* Measure — buffer is exactly this wide.
-   * Reuse cached width if text hasn't changed — avoids a full HarfBuzz
-   * shape pass on every label update when only position/focus changed. */
+  /* Measure — reuse cached width if text unchanged to avoid re-shaping. */
   int tw;
   bool changed = strcmp(text, e->last_text) != 0 || focused != e->last_focused;
   if (changed) {
-    tw = bar_measure_text(text);
+    tw = deco_measure_text(text);
     if (tw <= 0)
       return;
     e->last_tw = tw;
@@ -240,7 +239,7 @@ static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
       return;
   }
 
-  /* Compute label position first so we can check it independently */
+  /* Compute label position */
   int lx = r.x + LABEL_PAD_H;
   int ly = r.y - (fh - bw) / 2;
   bool moved = (lx != e->last_label_x || ly != e->last_label_y);
@@ -249,7 +248,11 @@ static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
     return;
 
   if (changed) {
-    strncpy(e->last_text, text, sizeof(e->last_text) - 1);
+    size_t tlen = strlen(text) + 1;
+    if (tlen > sizeof(e->last_text))
+      tlen = sizeof(e->last_text);
+    memcpy(e->last_text, text, tlen);
+    e->last_text[sizeof(e->last_text) - 1] = '\0';
     e->last_focused = focused;
   }
 
@@ -259,25 +262,25 @@ static void update_label(DecoEntry *e, struct wlr_scene_tree *layer, Rect r,
 
   if (changed) {
     Color pb = cfg->colors.background;
-    Color fg =
+    Color fg_col =
         focused ? cfg->colors.active_border : cfg->colors.inactive_border;
 
     struct TBuf *tb = tbuf_create(tw, fh);
-    /* Fill with pane_bg — punches cleanly through border colour */
+    /* Fill with pane_bg so label punches cleanly through border colour */
     uint32_t bg32 =
         (0xffu << 24) | ((uint32_t)pb.r << 16) | ((uint32_t)pb.g << 8) | pb.b;
     for (int i = 0; i < tw * fh; i++)
       tb->data[i] = bg32;
 
-    int asc = bar_font_ascender();
-    bar_draw_text_pub(tb->data, tw, 0, asc, text, fg, tw, fh);
+    /* Draw text using the public canvas API (canvas_draw_text takes Canvas*) */
+    Canvas cv = {.px = tb->data, .w = tw, .h = fh, .stride = tw};
+    int asc = deco_font_ascender();
+    canvas_draw_text(&cv, 0, asc, text, fg_col);
 
     wlr_scene_buffer_set_buffer(e->label, &tb->base);
     wlr_buffer_drop(&tb->base);
   }
 
-  /* Center vertically on the top border line — always reposition to follow
-   * anims */
   e->last_label_x = lx;
   e->last_label_y = ly;
   wlr_scene_node_set_position(&e->label->node, lx, ly);
@@ -327,7 +330,7 @@ void deco_complete_update(TrixieDeco *d, TwmState *twm, AnimSet *anim,
 
     /* Force label redraw */
     e->last_text[0] = '\0';
-    e->last_tw      = 0;
+    e->last_tw = 0;
     e->last_label_x = -1;
     e->last_label_y = -1;
 
@@ -472,7 +475,7 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim,
 
     /* Reposition label — content unchanged, just move the node. */
     if (e->label && false) {
-      int fh = bar_font_height();
+      int fh = deco_font_height();
       int lx = shifted.x + LABEL_PAD_H;
       int ly = shifted.y - (fh - fbw) / 2;
       e->last_label_x = lx;

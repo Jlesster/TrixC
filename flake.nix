@@ -33,7 +33,9 @@
     {
       # ── Overlay ─────────────────────────────────────────────────────────────
       overlays.default = final: prev: {
-        trixie = final.callPackage ./nix/package.nix { };
+        trixie = final.callPackage ./nix/package.nix {
+          inherit (final) grim slurp wl-clipboard;
+        };
       };
 
       # ── Package ─────────────────────────────────────────────────────────────

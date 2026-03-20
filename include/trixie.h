@@ -555,7 +555,9 @@ struct TrixieServer {
   struct wlr_scene_tree *layer_chrome;
   struct wlr_scene_tree *layer_floating;
   struct wlr_scene_tree *layer_chrome_floating;
+  struct wlr_scene_tree *layer_top; /* ZWLR_LAYER_SHELL_V1_LAYER_TOP */
   struct wlr_scene_tree *layer_overlay;
+  struct wlr_scene_tree *layer_lock; /* session-lock: always topmost */
 
   struct wl_listener new_output, new_input, new_xdg_surface, new_xdg_popup;
   struct wl_listener new_layer_surface, new_deco;
@@ -566,11 +568,32 @@ struct TrixieServer {
   struct wl_listener seat_request_start_drag, seat_start_drag;
   struct wl_listener new_pointer_constraint, xdg_activation_request;
   struct wl_listener cursor_shape_request;
-  struct wl_listener swipe_begin, swipe_update, swipe_end;
-  struct wl_listener pinch_begin, pinch_update, pinch_end;
   struct wl_listener idle_inhibit_new;
 
-  struct wl_list outputs, views, keyboards, layer_surfaces;
+  /* output management v1 — kanshi/wdisplays */
+#if __has_include(<wlr/types/wlr_output_management_v1.h>)
+  struct wlr_output_manager_v1 *output_manager_v1;
+  struct wl_listener output_mgr_apply;
+  struct wl_listener output_mgr_test;
+#endif
+
+  /* session lock — swaylock / hyprlock */
+#if __has_include(<wlr/types/wlr_session_lock_manager_v1.h>)
+  struct wlr_session_lock_manager_v1 *session_lock_mgr;
+  struct wlr_session_lock_v1 *session_lock;
+  struct wl_listener session_lock_new_lock;
+  struct wl_listener session_lock_lock_destroy;
+  bool locked;
+#endif
+
+  struct wl_list outputs, views, keyboards, layer_surfaces, pointers;
+
+  /* Per-output layer exclusive zones (replaces static s_bar_top/bot_h) */
+  int layer_excl_top, layer_excl_bottom;
+
+  /* Focus history ring for sane focus-on-close */
+  PaneId focus_history[16];
+  int focus_history_head;
 
   TwmState twm;
   AnimSet anim;
@@ -699,6 +722,8 @@ Rect anim_get_rect(AnimSet *, PaneId, Rect fallback);
 float anim_get_opacity(AnimSet *, PaneId, float fallback);
 bool anim_is_closing(AnimSet *, PaneId);
 bool anim_any(AnimSet *);
+bool anim_any_for_pane(AnimSet *,
+                       PaneId); /* true if any anim active for this pane */
 int anim_ws_incoming_x(AnimSet *);
 int anim_ws_outgoing_x(AnimSet *);
 void anim_workspace_transition(AnimSet *, WsDir);

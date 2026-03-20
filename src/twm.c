@@ -707,17 +707,20 @@ static bool scratch_pattern_matches(const ScratchPattern *sp, const Pane *p) {
  */
 
 static Rect scratch_rect(TwmState *t, Scratchpad *sp) {
-  int w = (int)(t->screen_w * sp->width_pct);
-  int h = (int)(t->screen_h * sp->height_pct);
-  if (w > t->screen_w)
-    w = t->screen_w;
-  if (h > t->screen_h)
-    h = t->screen_h;
+  /* Use content_rect as the reference area so scratchpads are centered
+   * within the usable screen space and never overlap the bar. */
+  Rect cr = t->content_rect;
+  int w = (int)(cr.w * sp->width_pct);
+  int h = (int)(cr.h * sp->height_pct);
+  if (w > cr.w)
+    w = cr.w;
+  if (h > cr.h)
+    h = cr.h;
   if (w < 80)
     w = 80;
   if (h < 60)
     h = 60;
-  return (Rect){(t->screen_w - w) / 2, (t->screen_h - h) / 2, w, h};
+  return (Rect){cr.x + (cr.w - w) / 2, cr.y + (cr.h - h) / 2, w, h};
 }
 
 /* ── Internal: claim a pane for a scratchpad slot ─────────────────────────────
@@ -949,15 +952,46 @@ int ipc_scratch_json(TwmState *t, char *buf, size_t bufsz) {
   len += snprintf(buf + len, bufsz - len, ",\"scratchpads\":[");
   for (int i = 0; i < t->scratch_count; i++) {
     Scratchpad *sp = &t->scratchpads[i];
-    if (len >= (int)bufsz - 128)
+    if (len >= (int)bufsz - 256)
       break;
+    /* Escape fields that may contain user-controlled content */
+    char en[64] = {0}, ea[128] = {0}, ee[256] = {0};
+    /* Simple JSON escape inline — same logic as ipc.c json_escape */
+    const char *src;
+    char *dst;
+    size_t dsz;
+#define JESCAPE(s, d, z)                                                       \
+  src = (s);                                                                   \
+  dst = (d);                                                                   \
+  dsz = (z);                                                                   \
+  {                                                                            \
+    size_t _i = 0;                                                             \
+    while (*src && _i + 2 < dsz) {                                             \
+      unsigned char _c = (unsigned char)*src++;                                \
+      if (_c == '"' || _c == '\\') {                                           \
+        dst[_i++] = '\\';                                                      \
+        if (_i + 1 < dsz)                                                      \
+          dst[_i++] = (char)_c;                                                \
+      } else if (_c == '\n') {                                                 \
+        dst[_i++] = '\\';                                                      \
+        if (_i + 1 < dsz)                                                      \
+          dst[_i++] = 'n';                                                     \
+      } else if (_c >= 0x20) {                                                 \
+        dst[_i++] = (char)_c;                                                  \
+      }                                                                        \
+    }                                                                          \
+    dst[_i] = '\0';                                                            \
+  }
+    JESCAPE(sp->name, en, sizeof(en))
+    JESCAPE(sp->app_id, ea, sizeof(ea))
+    JESCAPE(sp->exec, ee, sizeof(ee))
+#undef JESCAPE
     len += snprintf(buf + len, bufsz - len,
                     "%s{\"name\":\"%s\",\"app_id\":\"%s\","
                     "\"has_pane\":%s,\"visible\":%s,\"pane_id\":%u,"
                     "\"exec\":\"%s\"}",
-                    i > 0 ? "," : "", sp->name, sp->app_id,
-                    sp->has_pane ? "true" : "false",
-                    sp->visible ? "true" : "false", sp->pane_id, sp->exec);
+                    i > 0 ? "," : "", en, ea, sp->has_pane ? "true" : "false",
+                    sp->visible ? "true" : "false", sp->pane_id, ee);
   }
   len += snprintf(buf + len, bufsz - len, "]");
   return len;

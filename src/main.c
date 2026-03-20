@@ -76,6 +76,10 @@
 #include <wlr/types/wlr_xdg_foreign_v2.h>
 #define HAVE_XDG_FOREIGN 1
 #endif
+#if __has_include(<wlr/types/wlr_drm_lease_v1.h>)
+#include <wlr/types/wlr_drm_lease_v1.h>
+#define HAVE_DRM_LEASE_V1 1
+#endif
 #include "shader.h"
 #include <wlr/render/gles2.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
@@ -98,6 +102,16 @@
 
 #define CONTAINER_OF(ptr, type, member)                                        \
   ((type *)((char *)(ptr) - offsetof(type, member)))
+
+/* ── Per-pointer device (gesture listeners must be per-device, not global) ── */
+typedef struct TrixiePointer {
+  TrixieServer *server;
+  struct wlr_pointer *wlr_pointer;
+  struct wl_listener swipe_begin, swipe_update, swipe_end;
+  struct wl_listener pinch_begin, pinch_update, pinch_end;
+  struct wl_listener destroy;
+  struct wl_list link;
+} TrixiePointer;
 
 TrixieServer *g_server = NULL;
 
@@ -132,55 +146,49 @@ static void output_handle_destroy(struct wl_listener *, void *);
 static void keyboard_handle_key(struct wl_listener *, void *);
 static void keyboard_handle_modifiers(struct wl_listener *, void *);
 static void keyboard_handle_destroy(struct wl_listener *, void *);
+static void pointer_handle_destroy(struct wl_listener *, void *);
 static void server_reflow_with_morph(TrixieServer *s);
 void server_mark_deco_dirty(TrixieServer *s);
 
-/* ── Bar inset statics ───────────────────────────────────────────────────────
- */
-static int s_bar_top_h = 0;
-static int s_bar_bot_h = 0;
+/* Bar inset now tracked per-server in s->layer_excl_top / layer_excl_bottom */
 
-/* ── Gesture handlers ───────────────────────────────────────────────────────
- */
-static double s_swipe_dx = 0, s_swipe_dy = 0;
-static int s_swipe_fingers = 0;
-static double s_pinch_scale = 1.0;
-static int s_pinch_fingers = 0;
+/* Gesture state is now tracked per-pointer in TrixiePointer */
 
 static void handle_swipe_begin(struct wl_listener *l, void *data) {
-  TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_begin);
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, swipe_begin);
+  TrixieServer *s = ptr->server;
   struct wlr_pointer_swipe_begin_event *ev = data;
-  s_swipe_dx = 0;
-  s_swipe_dy = 0;
-  s_swipe_fingers = (int)ev->fingers;
+  ptr->server->gesture.dx = 0; ptr->server->gesture.dy = 0;
+  ptr->server->gesture.fingers = (int)ev->fingers;
   gesture_swipe_begin(&s->gesture, &s->cfg.gestures, s, (int)ev->fingers);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_swipe_begin(s->pointer_gestures, s->seat,
                                              ev->time_msec, ev->fingers);
 }
 static void handle_swipe_update(struct wl_listener *l, void *data) {
-  TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_update);
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, swipe_update);
+  TrixieServer *s = ptr->server;
   struct wlr_pointer_swipe_update_event *ev = data;
-  s_swipe_dx += ev->dx;
-  s_swipe_dy += ev->dy;
+  s->gesture.dx += ev->dx;
+  s->gesture.dy += ev->dy;
   gesture_swipe_update(&s->gesture, &s->cfg.gestures, s, ev->dx, ev->dy);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_swipe_update(s->pointer_gestures, s->seat,
                                               ev->time_msec, ev->dx, ev->dy);
 }
 static void handle_swipe_end(struct wl_listener *l, void *data) {
-  TrixieServer *s = CONTAINER_OF(l, TrixieServer, swipe_end);
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, swipe_end);
+  TrixieServer *s = ptr->server;
   struct wlr_pointer_swipe_end_event *ev = data;
   gesture_swipe_end(&s->gesture, &s->cfg.gestures, s, ev->cancelled);
-  if (!ev->cancelled && (s_swipe_dx != 0.0 || s_swipe_dy != 0.0)) {
-    /* Determine dominant direction */
+  if (!ev->cancelled && (s->gesture.dx != 0.0 || s->gesture.dy != 0.0)) {
     const char *dir;
-    if (fabs(s_swipe_dx) >= fabs(s_swipe_dy))
-      dir = s_swipe_dx > 0 ? "right" : "left";
+    if (fabs(s->gesture.dx) >= fabs(s->gesture.dy))
+      dir = s->gesture.dx > 0 ? "right" : "left";
     else
-      dir = s_swipe_dy > 0 ? "down" : "up";
+      dir = s->gesture.dy > 0 ? "down" : "up";
     char spec[64];
-    snprintf(spec, sizeof(spec), "swipe:%d:%s", s_swipe_fingers, dir);
+    snprintf(spec, sizeof(spec), "swipe:%d:%s", s->gesture.fingers, dir);
     lua_dispatch_gesture(s, spec);
   }
   if (s->pointer_gestures)
@@ -188,19 +196,21 @@ static void handle_swipe_end(struct wl_listener *l, void *data) {
                                            ev->time_msec, ev->cancelled);
 }
 static void handle_pinch_begin(struct wl_listener *l, void *data) {
-  TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_begin);
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, pinch_begin);
+  TrixieServer *s = ptr->server;
   struct wlr_pointer_pinch_begin_event *ev = data;
-  s_pinch_scale = 1.0;
-  s_pinch_fingers = (int)ev->fingers;
+  s->gesture.scale_accum = 1.0;
+  s->gesture.fingers = (int)ev->fingers;
   gesture_pinch_begin(&s->gesture, &s->cfg.gestures, s, (int)ev->fingers);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_pinch_begin(s->pointer_gestures, s->seat,
                                              ev->time_msec, ev->fingers);
 }
 static void handle_pinch_update(struct wl_listener *l, void *data) {
-  TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_update);
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, pinch_update);
+  TrixieServer *s = ptr->server;
   struct wlr_pointer_pinch_update_event *ev = data;
-  s_pinch_scale = ev->scale;
+  s->gesture.scale_accum = ev->scale;
   gesture_pinch_update(&s->gesture, &s->cfg.gestures, s, ev->scale);
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_pinch_update(s->pointer_gestures, s->seat,
@@ -208,18 +218,32 @@ static void handle_pinch_update(struct wl_listener *l, void *data) {
                                               ev->scale, ev->rotation);
 }
 static void handle_pinch_end(struct wl_listener *l, void *data) {
-  TrixieServer *s = CONTAINER_OF(l, TrixieServer, pinch_end);
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, pinch_end);
+  TrixieServer *s = ptr->server;
   struct wlr_pointer_pinch_end_event *ev = data;
   gesture_pinch_end(&s->gesture, &s->cfg.gestures, s, ev->cancelled);
   if (!ev->cancelled) {
     char spec[64];
-    snprintf(spec, sizeof(spec), "pinch:%d:%s", s_pinch_fingers,
-             s_pinch_scale < 0.9 ? "in" : "out");
+    snprintf(spec, sizeof(spec), "pinch:%d:%s", s->gesture.fingers,
+             s->gesture.scale_accum < 0.9 ? "in" : "out");
     lua_dispatch_gesture(s, spec);
   }
   if (s->pointer_gestures)
     wlr_pointer_gestures_v1_send_pinch_end(s->pointer_gestures, s->seat,
                                            ev->time_msec, ev->cancelled);
+}
+static void pointer_handle_destroy(struct wl_listener *l, void *data) {
+  (void)data;
+  TrixiePointer *ptr = CONTAINER_OF(l, TrixiePointer, destroy);
+  wl_list_remove(&ptr->swipe_begin.link);
+  wl_list_remove(&ptr->swipe_update.link);
+  wl_list_remove(&ptr->swipe_end.link);
+  wl_list_remove(&ptr->pinch_begin.link);
+  wl_list_remove(&ptr->pinch_update.link);
+  wl_list_remove(&ptr->pinch_end.link);
+  wl_list_remove(&ptr->destroy.link);
+  wl_list_remove(&ptr->link);
+  free(ptr);
 }
 
 /* ── Protocol handlers ──────────────────────────────────────────────────────
@@ -365,7 +389,8 @@ static int idle_timer_cb(void *data) {
     struct wlr_output_state st;
     wlr_output_state_init(&st);
     wlr_output_state_set_enabled(&st, false);
-    wlr_output_commit_state(o->wlr_output, &st);
+    if (wlr_output_test_state(o->wlr_output, &st))
+      wlr_output_commit_state(o->wlr_output, &st);
     wlr_output_state_finish(&st);
   }
   return 0;
@@ -506,10 +531,10 @@ void server_mark_deco_dirty(TrixieServer *s) {
 /* ── Bar inset ──────────────────────────────────────────────────────────────
  */
 static void server_apply_bar_insets(TrixieServer *s) {
-  if (s_bar_bot_h > 0)
-    twm_set_bar_height(&s->twm, s_bar_bot_h, true);
-  else if (s_bar_top_h > 0)
-    twm_set_bar_height(&s->twm, s_bar_top_h, false);
+  if (s->layer_excl_bottom > 0)
+    twm_set_bar_height(&s->twm, s->layer_excl_bottom, true);
+  else if (s->layer_excl_top > 0)
+    twm_set_bar_height(&s->twm, s->layer_excl_top, false);
   else
     twm_set_bar_height(&s->twm, 0, false);
   server_sync_windows(s);
@@ -518,14 +543,19 @@ static void server_apply_bar_insets(TrixieServer *s) {
 
 void server_set_bar_inset(TrixieServer *s, int h, bool at_bottom) {
   if (at_bottom)
-    s_bar_bot_h = h;
+    s->layer_excl_bottom = h;
   else
-    s_bar_top_h = h;
+    s->layer_excl_top = h;
   server_apply_bar_insets(s);
 }
 
 void server_sync_focus(TrixieServer *s) {
   PaneId id = twm_focused_id(&s->twm);
+  /* Push onto history ring so unmap can restore the previous focus */
+  if (id && id != s->focus_history[s->focus_history_head]) {
+    s->focus_history_head = (s->focus_history_head + 1) % 16;
+    s->focus_history[s->focus_history_head] = id;
+  }
   if (id)
     server_focus_pane(s, id);
   ipc_push_focus_changed(s);
@@ -544,7 +574,6 @@ static void set_buffer_opacity_cb(struct wlr_scene_buffer *buf, int sx, int sy,
 void server_sync_windows(TrixieServer *s) {
   Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
   int incoming_x = anim_ws_incoming_x(&s->anim);
-  PaneId focused_id = twm_focused_id(&s->twm);
   TrixieView *v;
   wl_list_for_each(v, &s->views, link) {
     if (!v->mapped)
@@ -608,14 +637,20 @@ void server_sync_windows(TrixieServer *s) {
 #ifdef HAS_XWAYLAND
       if (v->is_xwayland && v->xwayland_surface) {
         struct wlr_xwayland_surface *xs = v->xwayland_surface;
-        if (xs->width != cw || xs->height != ch)
-          wlr_xwayland_surface_configure(xs, (int16_t)(p->rect.x + bw),
-                                         (int16_t)(p->rect.y + bw),
-                                         (uint16_t)cw, (uint16_t)ch);
+        /* Skip configure during animations to avoid spamming X11 apps */
+        if (!anim_any_for_pane(&s->anim, v->pane_id)) {
+          if (xs->width != cw || xs->height != ch)
+            wlr_xwayland_surface_configure(xs, (int16_t)(p->rect.x + bw),
+                                           (int16_t)(p->rect.y + bw),
+                                           (uint16_t)cw, (uint16_t)ch);
+        }
       } else
 #endif
           if (v->xdg_toplevel) {
-        if (!v->xdg_toplevel->base->initial_commit) {
+        /* Only send resize when no animation is running for this pane —
+         * prevents configure spam every frame during morph/open animations */
+        if (!anim_any_for_pane(&s->anim, v->pane_id) &&
+            !v->xdg_toplevel->base->initial_commit) {
           struct wlr_box cur;
           wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &cur);
           if (cur.width != cw || cur.height != ch)
@@ -754,8 +789,8 @@ void server_dispatch_action(TrixieServer *s, Action *a) {
   case ACTION_TOGGLE_BAR:
     s->twm.bar_visible = !s->twm.bar_visible;
     {
-      int h = (s_bar_bot_h > 0) ? s_bar_bot_h : s_bar_top_h;
-      bool bot = (s_bar_bot_h > 0);
+      int h = (s->layer_excl_bottom > 0) ? s->layer_excl_bottom : s->layer_excl_top;
+      bool bot = (s->layer_excl_bottom > 0);
       server_set_bar_inset(s, s->twm.bar_visible ? h : 0, bot);
     }
     {
@@ -975,9 +1010,9 @@ void server_apply_config_reload(TrixieServer *s) {
         s->idle_timer, s->idle_timeout_ms > 0 ? s->idle_timeout_ms : 0);
   }
 
-  /* Reset bar insets — l_wibox re-registers from scratch */
-  s_bar_top_h = 0;
-  s_bar_bot_h = 0;
+  /* Reset bar insets — wibox re-registers from scratch on reload */
+  s->layer_excl_top = 0;
+  s->layer_excl_bottom = 0;
 
   /* Run init.lua — all trixie.set() and trixie.wibox() calls happen here */
   lua_reload(s);
@@ -1122,6 +1157,17 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
   struct wlr_keyboard_key_event *event = data;
   server_reset_idle(s);
 
+  /* While screen is locked, pass all input directly to the lock surface
+   * and skip Lua key dispatch entirely — no key leaks to apps behind it. */
+#if __has_include(<wlr/types/wlr_session_lock_manager_v1.h>)
+  if (s->locked) {
+    wlr_seat_set_keyboard(s->seat, kb->wlr_keyboard);
+    wlr_seat_keyboard_notify_key(s->seat, event->time_msec,
+                                 event->keycode, event->state);
+    return;
+  }
+#endif
+
   uint32_t keycode = event->keycode + 8;
   const xkb_keysym_t *syms;
   int nsyms =
@@ -1219,18 +1265,30 @@ static void server_new_pointer(TrixieServer *s, struct wlr_input_device *dev) {
     libinput_device_config_tap_set_button_map(li, LIBINPUT_CONFIG_TAP_MAP_LMR);
   }
   struct wlr_pointer *ptr = wlr_pointer_from_input_device(dev);
-  s->swipe_begin.notify = handle_swipe_begin;
-  wl_signal_add(&ptr->events.swipe_begin, &s->swipe_begin);
-  s->swipe_update.notify = handle_swipe_update;
-  wl_signal_add(&ptr->events.swipe_update, &s->swipe_update);
-  s->swipe_end.notify = handle_swipe_end;
-  wl_signal_add(&ptr->events.swipe_end, &s->swipe_end);
-  s->pinch_begin.notify = handle_pinch_begin;
-  wl_signal_add(&ptr->events.pinch_begin, &s->pinch_begin);
-  s->pinch_update.notify = handle_pinch_update;
-  wl_signal_add(&ptr->events.pinch_update, &s->pinch_update);
-  s->pinch_end.notify = handle_pinch_end;
-  wl_signal_add(&ptr->events.pinch_end, &s->pinch_end);
+
+  /* Allocate per-pointer struct so gesture listeners are never double-registered.
+   * Wiring swipe/pinch directly on TrixieServer fields caused UB when a second
+   * pointer device was connected (e.g. USB mouse + touchpad). */
+  TrixiePointer *tptr = calloc(1, sizeof(*tptr));
+  if (!tptr) return;
+  tptr->server = s;
+  tptr->wlr_pointer = ptr;
+
+  tptr->swipe_begin.notify = handle_swipe_begin;
+  wl_signal_add(&ptr->events.swipe_begin, &tptr->swipe_begin);
+  tptr->swipe_update.notify = handle_swipe_update;
+  wl_signal_add(&ptr->events.swipe_update, &tptr->swipe_update);
+  tptr->swipe_end.notify = handle_swipe_end;
+  wl_signal_add(&ptr->events.swipe_end, &tptr->swipe_end);
+  tptr->pinch_begin.notify = handle_pinch_begin;
+  wl_signal_add(&ptr->events.pinch_begin, &tptr->pinch_begin);
+  tptr->pinch_update.notify = handle_pinch_update;
+  wl_signal_add(&ptr->events.pinch_update, &tptr->pinch_update);
+  tptr->pinch_end.notify = handle_pinch_end;
+  wl_signal_add(&ptr->events.pinch_end, &tptr->pinch_end);
+  tptr->destroy.notify = pointer_handle_destroy;
+  wl_signal_add(&dev->events.destroy, &tptr->destroy);
+  wl_list_insert(&s->pointers, &tptr->link);
 }
 
 static void handle_new_input(struct wl_listener *listener, void *data) {
@@ -1242,6 +1300,15 @@ static void handle_new_input(struct wl_listener *listener, void *data) {
     break;
   case WLR_INPUT_DEVICE_POINTER:
     server_new_pointer(s, dev);
+    break;
+  case WLR_INPUT_DEVICE_TOUCH:
+    /* Map touch events through the cursor as pointer events.
+     * This handles laptop touchscreens and most drawing tablets. */
+    wlr_cursor_attach_input_device(s->cursor, dev);
+    break;
+  case WLR_INPUT_DEVICE_TABLET_PAD:
+    /* Tablet pad buttons/rings — attach through cursor for basic pointer use */
+    wlr_cursor_attach_input_device(s->cursor, dev);
     break;
   default:
     break;
@@ -1300,9 +1367,16 @@ static void update_cursor_focus(TrixieServer *s, uint32_t time_msec) {
   if (under) {
     wlr_seat_pointer_notify_enter(s->seat, under, sx, sy);
     wlr_seat_pointer_notify_motion(s->seat, time_msec, sx, sy);
-  } else {
-    wlr_cursor_set_xcursor(s->cursor, s->xcursor_mgr, "default");
-    wlr_seat_pointer_clear_focus(s->seat);
+    /* Scene hit found an exact surface — no need to walk the pane list */
+    return;
+  }
+  /* Pointer is over a gap / empty area — update focus by pane geometry */
+  wlr_cursor_set_xcursor(s->cursor, s->xcursor_mgr, "default");
+  wlr_seat_pointer_clear_focus(s->seat);
+  PaneId under_pane = pane_at_cursor(s, lx, ly);
+  if (under_pane && under_pane != twm_focused_id(&s->twm)) {
+    twm_set_focused(&s->twm, under_pane);
+    server_sync_focus(s);
   }
 }
 
@@ -1331,11 +1405,6 @@ static void handle_cursor_motion(struct wl_listener *listener, void *data) {
     }
   }
   update_cursor_focus(s, ev->time_msec);
-  PaneId under = pane_at_cursor(s, s->cursor->x, s->cursor->y);
-  if (under && under != twm_focused_id(&s->twm)) {
-    twm_set_focused(&s->twm, under);
-    server_sync_focus(s);
-  }
 }
 
 static void handle_cursor_motion_abs(struct wl_listener *listener, void *data) {
@@ -1389,13 +1458,15 @@ static void handle_cursor_button(struct wl_listener *listener, void *data) {
     server_sync_focus(s);
     Pane *p = twm_pane_by_id(&s->twm, pid);
     bool is_float = p && p->floating;
-    if (held && ev->button == BTN_LEFT) {
-      s->drag_mode = is_float ? DRAG_MOVE : DRAG_RESIZE;
+    /* Super+LMB: move floating windows only */
+    if (held && ev->button == BTN_LEFT && is_float) {
+      s->drag_mode = DRAG_MOVE;
       s->drag_pane = pid;
       anim_cancel(&s->anim, pid);
       return;
     }
-    if (held && ev->button == BTN_RIGHT) {
+    /* Super+RMB: resize floating windows only */
+    if (held && ev->button == BTN_RIGHT && is_float) {
       s->drag_mode = DRAG_RESIZE;
       s->drag_pane = pid;
       anim_cancel(&s->anim, pid);
@@ -1638,9 +1709,14 @@ static void output_handle_request_state(struct wl_listener *listener,
       bar_resize(o->bar, nw, nh);
     if (s->bg_rect)
       wlr_scene_rect_set_size(s->bg_rect, nw, nh);
-    /* Reflow windows to new output dimensions */
-    TrixieOutput *primary = wl_container_of(s->outputs.next, primary, link);
-    if (primary == o) {
+
+    /* Determine if this is the primary (first connected) output */
+    bool is_primary = false;
+    if (!wl_list_empty(&s->outputs)) {
+      TrixieOutput *first = wl_container_of(s->outputs.next, first, link);
+      is_primary = (first == o);
+    }
+    if (is_primary) {
       twm_resize(&s->twm, nw, nh);
       anim_set_resize(&s->anim, nw, nh);
       server_sync_windows(s);
@@ -1749,13 +1825,16 @@ static void layer_surface_handle_map(struct wl_listener *listener, void *data) {
   TrixieServer *s = ls->server;
   struct wlr_layer_surface_v1 *wls = ls->wlr_surface;
   int exclusive = wls->current.exclusive_zone;
-  uint32_t anchor = wls->current.anchor;
   if (exclusive <= 0)
     return;
-  bool at_top = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) &&
-                !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
-  bool at_bottom = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) &&
-                   !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+  uint32_t anchor = wls->current.anchor;
+  bool at_top    = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP)
+               && !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
+  bool at_bottom = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)
+               && !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+  /* Track per-anchor exclusive zone so multiple bars don't clobber each other */
+  if (at_top)    s->layer_excl_top    = exclusive;
+  if (at_bottom) s->layer_excl_bottom = exclusive;
   if (at_top || at_bottom)
     server_set_bar_inset(s, exclusive, at_bottom);
 }
@@ -1763,7 +1842,21 @@ static void layer_surface_handle_unmap(struct wl_listener *listener,
                                        void *data) {
   (void)data;
   TrixieLayerSurface *ls = CONTAINER_OF(listener, TrixieLayerSurface, unmap);
-  server_set_bar_inset(ls->server, 0, s_bar_bot_h > 0);
+  TrixieServer *s = ls->server;
+  struct wlr_layer_surface_v1 *wls = ls->wlr_surface;
+  uint32_t anchor = wls->current.anchor;
+  bool at_bottom = (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)
+               && !(anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
+  /* Only clear the zone that this surface owned */
+  if (at_bottom) s->layer_excl_bottom = 0;
+  else           s->layer_excl_top    = 0;
+  /* Re-apply whichever other zone is still active */
+  if (s->layer_excl_bottom > 0)
+    server_set_bar_inset(s, s->layer_excl_bottom, true);
+  else if (s->layer_excl_top > 0)
+    server_set_bar_inset(s, s->layer_excl_top, false);
+  else
+    server_set_bar_inset(s, 0, false);
 }
 static void layer_surface_handle_destroy(struct wl_listener *listener,
                                          void *data) {
@@ -1779,6 +1872,11 @@ static void handle_new_layer_surface(struct wl_listener *listener, void *data) {
   TrixieServer *s = CONTAINER_OF(listener, TrixieServer, new_layer_surface);
   struct wlr_layer_surface_v1 *wls = data;
   struct wlr_scene_tree *layer_tree;
+  /* Correct mapping of the four layer-shell layers to our scene stack:
+   *   BACKGROUND → layer_background  (wallpapers)
+   *   BOTTOM     → layer_windows     (below normal windows)
+   *   TOP        → layer_top         (above windows, below overlay)
+   *   OVERLAY    → layer_overlay     (notifications, drag icons) */
   switch (wls->pending.layer) {
   case ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND:
     layer_tree = s->layer_background;
@@ -1786,7 +1884,10 @@ static void handle_new_layer_surface(struct wl_listener *listener, void *data) {
   case ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM:
     layer_tree = s->layer_windows;
     break;
-  default:
+  case ZWLR_LAYER_SHELL_V1_LAYER_TOP:
+    layer_tree = s->layer_top;
+    break;
+  default: /* OVERLAY */
     layer_tree = s->layer_overlay;
     break;
   }
@@ -1901,11 +2002,25 @@ static void view_handle_unmap(struct wl_listener *listener, void *data) {
     else
       anim_close(&s->anim, v->pane_id, p->rect);
   }
-  TrixieView *next;
-  wl_list_for_each(next, &s->views, link) if (next != v && next->mapped) {
-    server_focus_pane(s, next->pane_id);
-    break;
+  /* Restore focus using history ring — most-recently-focused surviving window */
+  for (int i = 1; i <= 16; i++) {
+    int idx = (s->focus_history_head - i + 16) % 16;
+    PaneId prev = s->focus_history[idx];
+    if (!prev || prev == v->pane_id) continue;
+    TrixieView *nv = view_from_pane(s, prev);
+    if (nv && nv->mapped) {
+      twm_set_focused(&s->twm, prev);
+      server_focus_pane(s, prev);
+      return;
+    }
   }
+  /* Fallback: first other mapped view */
+  TrixieView *next;
+  wl_list_for_each(next, &s->views, link)
+    if (next != v && next->mapped) {
+      server_focus_pane(s, next->pane_id);
+      break;
+    }
 }
 
 static void view_handle_destroy(struct wl_listener *listener, void *data) {
@@ -2027,7 +2142,8 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
 
   wlr_xdg_toplevel_set_wm_capabilities(
       toplevel, WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE |
-                    WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
+                    WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN |
+                    WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE);
   wlr_xdg_toplevel_set_activated(toplevel, false);
   wlr_xdg_toplevel_set_tiled(toplevel, WLR_EDGE_TOP | WLR_EDGE_BOTTOM |
                                            WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
@@ -2041,6 +2157,11 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   v->xwayland_surface = NULL;
 #endif
   v->scene_tree = wlr_scene_xdg_surface_create(s->layer_windows, surface);
+  /* Store the scene tree in the xdg_surface's data pointer so that
+   * handle_new_xdg_popup can find the correct parent tree when building
+   * the popup's scene node. Without this, all popups (menus, dropdowns,
+   * tooltips) fall back to layer_floating and appear at (0,0). */
+  surface->data = v->scene_tree;
   wlr_scene_node_set_enabled(&v->scene_tree->node, false);
 
   v->map.notify = view_handle_map;
@@ -2144,6 +2265,18 @@ static void xwayland_handle_unmap(struct wl_listener *listener, void *data) {
     else
       anim_close(&s->anim, v->pane_id, p->rect);
   }
+  /* Restore focus using history ring */
+  for (int i = 1; i <= 16; i++) {
+    int idx = (s->focus_history_head - i + 16) % 16;
+    PaneId prev = s->focus_history[idx];
+    if (!prev || prev == v->pane_id) continue;
+    TrixieView *nv = view_from_pane(s, prev);
+    if (nv && nv->mapped) {
+      twm_set_focused(&s->twm, prev);
+      server_focus_pane(s, prev);
+      return;
+    }
+  }
   TrixieView *next;
   wl_list_for_each(next, &s->views, link) if (next != v && next->mapped) {
     server_focus_pane(s, next->pane_id);
@@ -2174,6 +2307,11 @@ static void xwayland_handle_commit(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, commit);
   TrixieServer *s = v->server;
   if (!v->xwayland_surface || !v->xwayland_surface->surface)
+    return;
+  /* Override-redirect windows are unmanaged popups/tooltips — skip the
+   * output enter/leave and fractional-scale notifications entirely to
+   * avoid sending spurious scale events they never asked for. */
+  if (v->xwayland_surface->override_redirect)
     return;
   struct wlr_surface *surf = v->xwayland_surface->surface;
   /* Send enter/leave so X11 apps get correct output scale and refresh. */
@@ -2293,8 +2431,186 @@ static void handle_xwayland_ready(struct wl_listener *listener, void *data) {
 }
 #endif
 
-/* ── IPC socket ─────────────────────────────────────────────────────────────
+/* ── Session lock (swaylock / hyprlock) ─────────────────────────────────────
  */
+#if __has_include(<wlr/types/wlr_session_lock_manager_v1.h>)
+
+typedef struct {
+  TrixieServer *server;
+  struct wlr_session_lock_surface_v1 *wlr_surface;
+  struct wlr_scene_tree *scene_tree;
+  struct wl_listener map, destroy;
+  struct wl_list link;
+} TrixieLockSurface;
+
+static void lock_surface_handle_map(struct wl_listener *l, void *data) {
+  (void)data;
+  TrixieLockSurface *ls = wl_container_of(l, ls, map);
+  /* Attach the wlr_surface to the scene tree now that it's guaranteed live */
+  if (!ls->scene_tree) {
+    ls->scene_tree = wlr_scene_tree_create(ls->server->layer_lock);
+  }
+  struct wlr_surface *surf =
+      wlr_session_lock_surface_v1_get_surface(ls->wlr_surface);
+  if (surf && ls->scene_tree)
+    wlr_scene_surface_create(ls->scene_tree, surf);
+  if (ls->scene_tree)
+    wlr_scene_node_set_enabled(&ls->scene_tree->node, true);
+  /* Hand keyboard focus to the lock surface so password entry works */
+  struct wlr_keyboard *kb = wlr_seat_get_keyboard(ls->server->seat);
+  if (surf && kb)
+    wlr_seat_keyboard_notify_enter(ls->server->seat, surf,
+        kb->keycodes, kb->num_keycodes, &kb->modifiers);
+}
+
+static void lock_surface_handle_destroy(struct wl_listener *l, void *data) {
+  (void)data;
+  TrixieLockSurface *ls = wl_container_of(l, ls, destroy);
+  wl_list_remove(&ls->map.link);
+  wl_list_remove(&ls->destroy.link);
+  if (ls->scene_tree)
+    wlr_scene_node_destroy(&ls->scene_tree->node);
+  wl_list_remove(&ls->link);
+  free(ls);
+}
+
+typedef struct {
+  TrixieServer *server;
+  struct wlr_session_lock_v1 *wlr_lock;
+  struct wl_listener new_surface, unlock, destroy;
+  struct wl_list surfaces;
+} TrixieLock;
+
+static TrixieLock *g_lock = NULL;
+
+static void lock_handle_new_surface(struct wl_listener *l, void *data) {
+  TrixieLock *lk = wl_container_of(l, lk, new_surface);
+  struct wlr_session_lock_surface_v1 *wls = data;
+
+  TrixieLockSurface *ls = calloc(1, sizeof(*ls));
+  ls->server = lk->server;
+  ls->wlr_surface = wls;
+  /* scene_tree created at map time once the wlr_surface is guaranteed live */
+  ls->scene_tree = NULL;
+
+  /* Send configure with primary output dimensions so the client can size itself.
+   * Must happen before the surface maps. */
+  TrixieServer *s = lk->server;
+  if (!wl_list_empty(&s->outputs)) {
+    TrixieOutput *o = wl_container_of(s->outputs.next, o, link);
+    wlr_session_lock_surface_v1_configure(wls,
+        (uint32_t)o->width, (uint32_t)o->height);
+  }
+
+  /* Use the protocol-level map event on wls, not the underlying wlr_surface
+   * events.map — the wlr_surface may not exist yet at new_surface time. */
+  ls->map.notify = lock_surface_handle_map;
+  wl_signal_add(&wls->events.map, &ls->map);
+  ls->destroy.notify = lock_surface_handle_destroy;
+  wl_signal_add(&wls->events.destroy, &ls->destroy);
+  wl_list_insert(&lk->surfaces, &ls->link);
+}
+
+static void lock_handle_unlock(struct wl_listener *l, void *data) {
+  (void)data;
+  TrixieLock *lk = wl_container_of(l, lk, unlock);
+  TrixieServer *s = lk->server;
+  s->locked = false;
+  /* Hide all lock surfaces */
+  TrixieLockSurface *ls;
+  wl_list_for_each(ls, &lk->surfaces, link)
+    wlr_scene_node_set_enabled(&ls->scene_tree->node, false);
+  /* Restore focus to previously focused window */
+  PaneId id = twm_focused_id(&s->twm);
+  if (id) server_focus_pane(s, id);
+}
+
+static void lock_handle_destroy(struct wl_listener *l, void *data) {
+  (void)data;
+  TrixieLock *lk = wl_container_of(l, lk, destroy);
+  lk->server->session_lock = NULL;
+  lk->server->locked = false;
+  wl_list_remove(&lk->new_surface.link);
+  wl_list_remove(&lk->unlock.link);
+  wl_list_remove(&lk->destroy.link);
+  free(lk);
+  g_lock = NULL;
+}
+
+static void handle_session_lock_new_lock(struct wl_listener *l, void *data) {
+  TrixieServer *s = wl_container_of(l, s, session_lock_new_lock);
+  struct wlr_session_lock_v1 *lock = data;
+  if (s->locked) {
+    /* Already locked — reject the new lock attempt */
+    wlr_session_lock_v1_destroy(lock);
+    return;
+  }
+  TrixieLock *lk = calloc(1, sizeof(*lk));
+  lk->server = s;
+  lk->wlr_lock = lock;
+  wl_list_init(&lk->surfaces);
+
+  lk->new_surface.notify = lock_handle_new_surface;
+  wl_signal_add(&lock->events.new_surface, &lk->new_surface);
+  lk->unlock.notify = lock_handle_unlock;
+  wl_signal_add(&lock->events.unlock, &lk->unlock);
+  lk->destroy.notify = lock_handle_destroy;
+  wl_signal_add(&lock->events.destroy, &lk->destroy);
+
+  s->session_lock = lock;
+  s->locked = true;
+  g_lock = lk;
+  wlr_session_lock_v1_send_locked(lock);
+}
+
+static void handle_session_lock_manager_destroy(struct wl_listener *l,
+                                                 void *data) {
+  (void)data;
+  TrixieServer *s = wl_container_of(l, s, session_lock_lock_destroy);
+  s->locked = false;
+  s->session_lock = NULL;
+}
+#endif /* wlr_session_lock_manager_v1.h */
+
+/* ── Output management v1 (kanshi / wdisplays) ──────────────────────────────
+ */
+#ifdef HAVE_OUTPUT_MANAGEMENT_V1
+static void handle_output_mgr_apply(struct wl_listener *l, void *data) {
+  TrixieServer *s = wl_container_of(l, s, output_mgr_apply);
+  struct wlr_output_configuration_v1 *cfg = data;
+  bool ok = true;
+  struct wlr_output_configuration_head_v1 *head;
+  wl_list_for_each(head, &cfg->heads, link) {
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_head_v1_state_apply(&head->state, &state);
+    if (!wlr_output_commit_state(head->state.output, &state))
+      ok = false;
+    wlr_output_state_finish(&state);
+  }
+  if (ok) wlr_output_configuration_v1_send_succeeded(cfg);
+  else    wlr_output_configuration_v1_send_failed(cfg);
+  wlr_output_configuration_v1_destroy(cfg);
+}
+
+static void handle_output_mgr_test(struct wl_listener *l, void *data) {
+  TrixieServer *s = wl_container_of(l, s, output_mgr_test);
+  struct wlr_output_configuration_v1 *cfg = data;
+  bool ok = true;
+  struct wlr_output_configuration_head_v1 *head;
+  wl_list_for_each(head, &cfg->heads, link) {
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_head_v1_state_apply(&head->state, &state);
+    if (!wlr_output_test_state(head->state.output, &state))
+      ok = false;
+    wlr_output_state_finish(&state);
+  }
+  if (ok) wlr_output_configuration_v1_send_succeeded(cfg);
+  else    wlr_output_configuration_v1_send_failed(cfg);
+  wlr_output_configuration_v1_destroy(cfg);
+}
+#endif /* HAVE_OUTPUT_MANAGEMENT_V1 */
 static const char *ipc_socket_path(void) {
   static char buf[256];
   if (buf[0])
@@ -2458,10 +2774,17 @@ void server_init_config_watch(TrixieServer *s) {
 static void crash_handler(int sig) {
   void *bt[64];
   int n = backtrace(bt, 64);
-  fprintf(stderr, "\n=== CRASH sig=%d ===\n", sig);
+  /* backtrace_symbols_fd is async-signal-safe (uses only write(2), no malloc).
+   * Cast write() results to void — warn_unused_result doesn't apply in a
+   * crash handler where we're about to re-raise the signal anyway. */
+  static const char hdr[] = "\n=== TRIXIE CRASH ===\n";
+  (void)!write(STDERR_FILENO, hdr, sizeof(hdr) - 1);
+  char sigbuf[32];
+  int sl = snprintf(sigbuf, sizeof(sigbuf), "signal: %d\n", sig);
+  (void)!write(STDERR_FILENO, sigbuf, (size_t)sl);
   backtrace_symbols_fd(bt, n, STDERR_FILENO);
-  fprintf(stderr, "===================\n");
-  fflush(stderr);
+  static const char ftr[] = "====================\n";
+  (void)!write(STDERR_FILENO, ftr, sizeof(ftr) - 1);
   signal(sig, SIG_DFL);
   raise(sig);
 }
@@ -2481,6 +2804,7 @@ int main(int argc, char *argv[]) {
   wl_list_init(&s->outputs);
   wl_list_init(&s->keyboards);
   wl_list_init(&s->layer_surfaces);
+  wl_list_init(&s->pointers);
   s->running = true;
   s->ipc_fd = -1;
   s->inotify_fd = -1;
@@ -2542,6 +2866,9 @@ int main(int argc, char *argv[]) {
   s->screencopy_mgr = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
   wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer);
+  /* Legacy wl_drm: required by Vulkan apps and older GL clients for buffer
+   * format negotiation (mpv --gpu-api=vulkan, some SDL2 apps). */
+  wlr_drm_create(s->display, s->renderer);
 #ifdef HAVE_ALPHA_MODIFIER
   wlr_alpha_modifier_v1_create(s->display);
 #endif
@@ -2595,9 +2922,6 @@ int main(int argc, char *argv[]) {
 #ifdef HAVE_VIRTUAL_POINTER_V1
   wlr_virtual_pointer_manager_v1_create(s->display);
 #endif
-#ifdef HAVE_SESSION_LOCK_V1
-  wlr_session_lock_manager_v1_create(s->display);
-#endif
 #ifdef HAVE_XDG_FOREIGN
   {
     struct wlr_xdg_foreign_registry *foreign_reg =
@@ -2605,6 +2929,24 @@ int main(int argc, char *argv[]) {
     wlr_xdg_foreign_v1_create(s->display, foreign_reg);
     wlr_xdg_foreign_v2_create(s->display, foreign_reg);
   }
+#endif
+
+  /* wp_drm_lease_v1: direct-mode VR headset access (Monado OpenXR).
+   * Header guard at top of file — call only if header was present. */
+#ifdef HAVE_DRM_LEASE_V1
+  if (wlr_backend_is_drm(s->backend))
+    wlr_drm_lease_v1_manager_create(s->display, s->backend);
+#endif
+
+  /* ext_session_lock_v1: swaylock / hyprlock screen locking */
+#if __has_include(<wlr/types/wlr_session_lock_manager_v1.h>)
+  s->session_lock_mgr = wlr_session_lock_manager_v1_create(s->display);
+  s->session_lock_new_lock.notify = handle_session_lock_new_lock;
+  wl_signal_add(&s->session_lock_mgr->events.new_lock,
+                &s->session_lock_new_lock);
+  s->session_lock_lock_destroy.notify = handle_session_lock_manager_destroy;
+  wl_signal_add(&s->session_lock_mgr->events.destroy,
+                &s->session_lock_lock_destroy);
 #endif
 
   s->output_layout = wlr_output_layout_create(s->display);
@@ -2616,7 +2958,9 @@ int main(int argc, char *argv[]) {
   s->layer_chrome = wlr_scene_tree_create(&s->scene->tree);
   s->layer_floating = wlr_scene_tree_create(&s->scene->tree);
   s->layer_chrome_floating = wlr_scene_tree_create(&s->scene->tree);
-  s->layer_overlay = wlr_scene_tree_create(&s->scene->tree);
+  s->layer_top = wlr_scene_tree_create(&s->scene->tree);     /* LAYER_TOP surfaces */
+  s->layer_overlay = wlr_scene_tree_create(&s->scene->tree); /* LAYER_OVERLAY / drag icons */
+  s->layer_lock = wlr_scene_tree_create(&s->scene->tree);    /* session-lock: always topmost */
 
   s->reload_idle = NULL;
 
@@ -2639,8 +2983,14 @@ int main(int argc, char *argv[]) {
 
   s->output_mgr =
       wlr_xdg_output_manager_v1_create(s->display, s->output_layout);
+
 #ifdef HAVE_OUTPUT_MANAGEMENT_V1
-  wlr_output_manager_v1_create(s->display);
+  /* Wire apply + test so kanshi/wdisplays can actually change monitor config */
+  s->output_manager_v1 = wlr_output_manager_v1_create(s->display);
+  s->output_mgr_apply.notify = handle_output_mgr_apply;
+  wl_signal_add(&s->output_manager_v1->events.apply, &s->output_mgr_apply);
+  s->output_mgr_test.notify = handle_output_mgr_test;
+  wl_signal_add(&s->output_manager_v1->events.test, &s->output_mgr_test);
 #endif
 
   s->deco_mgr = wlr_xdg_decoration_manager_v1_create(s->display);

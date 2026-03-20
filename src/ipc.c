@@ -8,6 +8,50 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#include <wlr/backend/session.h>
+
+/* ── JSON string escaping ───────────────────────────────────────────────── */
+/* Escapes a string for embedding in JSON. Writes at most out_sz-1 bytes.
+ * Handles the characters that appear in window titles: \, ", \n, \r, \t. */
+static void json_escape(const char *src, char *out, size_t out_sz) {
+  size_t i = 0;
+  while (*src && i + 2 < out_sz) {
+    unsigned char c = (unsigned char)*src++;
+    switch (c) {
+    case '"':
+      out[i++] = '\\';
+      if (i + 1 < out_sz)
+        out[i++] = '"';
+      break;
+    case '\\':
+      out[i++] = '\\';
+      if (i + 1 < out_sz)
+        out[i++] = '\\';
+      break;
+    case '\n':
+      out[i++] = '\\';
+      if (i + 1 < out_sz)
+        out[i++] = 'n';
+      break;
+    case '\r':
+      out[i++] = '\\';
+      if (i + 1 < out_sz)
+        out[i++] = 'r';
+      break;
+    case '\t':
+      out[i++] = '\\';
+      if (i + 1 < out_sz)
+        out[i++] = 't';
+      break;
+    default:
+      /* Skip raw control characters (0x00–0x1f) other than the above */
+      if (c >= 0x20)
+        out[i++] = (char)c;
+      break;
+    }
+  }
+  out[i] = '\0';
+}
 
 /* ── Event push helpers ─────────────────────────────────────────────────── */
 
@@ -15,7 +59,7 @@ static void ipc_push_event(TrixieServer *s, const char *buf, size_t len) {
   int live = 0;
   for (int i = 0; i < s->subscriber_count; i++) {
     int fd = s->subscriber_fds[i];
-    size_t n = write(fd, buf, len);
+    ssize_t n = write(fd, buf, len);
     if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
       close(fd);
     else
@@ -30,10 +74,15 @@ void ipc_push_focus_changed(TrixieServer *s) {
   char buf[512];
   PaneId id = twm_focused_id(&s->twm);
   Pane *p = id ? twm_pane_by_id(&s->twm, id) : NULL;
+  char et[256] = {0}, ea[128] = {0};
+  if (p) {
+    json_escape(p->title, et, sizeof(et));
+    json_escape(p->app_id, ea, sizeof(ea));
+  }
   snprintf(buf, sizeof(buf),
            "{\"event\":\"focus_changed\",\"pane_id\":%u,"
            "\"title\":\"%s\",\"app_id\":\"%s\",\"workspace\":%d}\n",
-           id, p ? p->title : "", p ? p->app_id : "", s->twm.active_ws + 1);
+           id, et, ea, s->twm.active_ws + 1);
   ipc_push_event(s, buf, strlen(buf));
 }
 
@@ -54,11 +103,14 @@ void ipc_push_title_changed(TrixieServer *s, PaneId id) {
   Pane *p = twm_pane_by_id(&s->twm, id);
   if (!p)
     return;
+  char et[256] = {0}, ea[128] = {0};
+  json_escape(p->title, et, sizeof(et));
+  json_escape(p->app_id, ea, sizeof(ea));
   char buf[512];
   snprintf(buf, sizeof(buf),
            "{\"event\":\"title_changed\",\"pane_id\":%u,"
            "\"title\":\"%s\",\"app_id\":\"%s\"}\n",
-           id, p->title, p->app_id);
+           id, et, ea);
   ipc_push_event(s, buf, strlen(buf));
 }
 
@@ -96,9 +148,30 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
     REPLY("ok: shutting down");
 
   } else if (!strcmp(cmd, "switch_vt")) {
-    REPLY("err: vt switching not supported");
+    int vt = rest ? atoi(rest) : 0;
+    if (vt >= 1 && s->session) {
+      wlr_session_change_vt(s->session, (unsigned)vt);
+      REPLY("ok: switched to vt %d", vt);
+    } else {
+      REPLY("err: usage: switch_vt <n>");
+    }
 
-    /* Workspace */
+    /* Pane actions */
+  } else if (!strcmp(cmd, "close")) {
+    PaneId id = twm_focused_id(&s->twm);
+    if (id) {
+      TrixieView *v = view_from_pane(s, id);
+      if (v) {
+#ifdef HAS_XWAYLAND
+        if (v->is_xwayland && v->xwayland_surface) {
+          wlr_xwayland_surface_close(v->xwayland_surface);
+        } else
+#endif
+            if (v->xdg_toplevel)
+          wlr_xdg_toplevel_send_close(v->xdg_toplevel);
+      }
+    }
+    REPLY("ok: close sent");
   } else if (!strcmp(cmd, "workspace")) {
     int n = rest ? atoi(rest) : 0;
     if (n >= 1) {
@@ -182,16 +255,6 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
       REPLY("ok: resized (%d,%d)", dw, dh);
     } else
       REPLY("err: no focused window");
-
-    /* Pane actions */
-  } else if (!strcmp(cmd, "close")) {
-    PaneId id = twm_focused_id(&s->twm);
-    if (id) {
-      TrixieView *v = view_from_pane(s, id);
-      if (v)
-        wlr_xdg_toplevel_send_close(v->xdg_toplevel);
-    }
-    REPLY("ok: close sent");
 
   } else if (!strcmp(cmd, "fullscreen")) {
     Action a = {.kind = ACTION_FULLSCREEN};
@@ -290,7 +353,8 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
       struct wlr_output_state st;
       wlr_output_state_init(&st);
       wlr_output_state_set_enabled(&st, on);
-      wlr_output_commit_state(o->wlr_output, &st);
+      if (wlr_output_test_state(o->wlr_output, &st))
+        wlr_output_commit_state(o->wlr_output, &st);
       wlr_output_state_finish(&st);
     }
     REPLY("ok: dpms %s", on ? "on" : "off");
@@ -346,11 +410,14 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
       Workspace *ws = &s->twm.workspaces[i];
       bool is_active = (i == s->twm.active_ws);
       const char *ft = "", *fa = "";
+      char eft[256] = {0}, efa[128] = {0};
       if (ws->has_focused) {
         Pane *fp = twm_pane_by_id(&s->twm, ws->focused);
         if (fp) {
-          ft = fp->title;
-          fa = fp->app_id;
+          json_escape(fp->title, eft, sizeof(eft));
+          json_escape(fp->app_id, efa, sizeof(efa));
+          ft = eft;
+          fa = efa;
         }
       }
       len += snprintf(reply + len, reply_sz - len,
@@ -367,13 +434,15 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
           if (!p)
             continue;
           bool is_focused = ws->has_focused && ws->focused == p->id;
-          len += snprintf(reply + len, reply_sz - len,
-                          "%s{\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
-                          "\"focused\":%s,\"floating\":%s,\"fullscreen\":%s}",
-                          j > 0 ? "," : "", p->id, p->title, p->app_id,
-                          is_focused ? "true" : "false",
-                          p->floating ? "true" : "false",
-                          p->fullscreen ? "true" : "false");
+          char et[256] = {0}, ea[128] = {0};
+          json_escape(p->title, et, sizeof(et));
+          json_escape(p->app_id, ea, sizeof(ea));
+          len += snprintf(
+              reply + len, reply_sz - len,
+              "%s{\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\","
+              "\"focused\":%s,\"floating\":%s,\"fullscreen\":%s}",
+              j > 0 ? "," : "", p->id, et, ea, is_focused ? "true" : "false",
+              p->floating ? "true" : "false", p->fullscreen ? "true" : "false");
           if (len >= (int)reply_sz - 128)
             break;
         }
@@ -419,12 +488,15 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
           if (!p)
             continue;
           bool is_focused = (p->id == focused_id);
+          char et[256] = {0}, ea[128] = {0};
+          json_escape(p->title, et, sizeof(et));
+          json_escape(p->app_id, ea, sizeof(ea));
           len += snprintf(reply + len, reply_sz - len,
                           "%s{\"id\":%u,\"app_id\":\"%s\",\"title\":\"%s\","
                           "\"workspace\":%d,\"floating\":%s,\"fullscreen\":%s,"
                           "\"focused\":%s}",
-                          first ? "" : ",", (unsigned)p->id, p->app_id,
-                          p->title, i + 1, p->floating ? "true" : "false",
+                          first ? "" : ",", (unsigned)p->id, ea, et, i + 1,
+                          p->floating ? "true" : "false",
                           p->fullscreen ? "true" : "false",
                           is_focused ? "true" : "false");
           first = false;
@@ -483,15 +555,19 @@ void ipc_dispatch(TrixieServer *s, const char *line, char *reply,
           break;
         }
       Rect r = anim_get_rect(&s->anim, qid, p->rect);
+      char et[256] = {0}, ea[128] = {0}, esn[64] = {0};
+      json_escape(p->title, et, sizeof(et));
+      json_escape(p->app_id, ea, sizeof(ea));
+      if (in_scratch)
+        json_escape(scratch_name, esn, sizeof(esn));
       REPLY("{\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\",\"workspace\":%d,"
             "\"scratchpad\":\"%s\","
             "\"rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
             "\"anim_rect\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},"
             "\"floating\":%s,\"fullscreen\":%s,\"focused\":%s}",
-            p->id, p->title, p->app_id, ws_idx + 1,
-            in_scratch ? scratch_name : "", p->rect.x, p->rect.y, p->rect.w,
-            p->rect.h, r.x, r.y, r.w, r.h, p->floating ? "true" : "false",
-            p->fullscreen ? "true" : "false",
+            p->id, et, ea, ws_idx + 1, in_scratch ? esn : "", p->rect.x,
+            p->rect.y, p->rect.w, p->rect.h, r.x, r.y, r.w, r.h,
+            p->floating ? "true" : "false", p->fullscreen ? "true" : "false",
             (twm_focused_id(&s->twm) == qid) ? "true" : "false");
     }
 

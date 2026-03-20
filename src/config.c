@@ -59,8 +59,25 @@ static bool fc_resolve(const char *q, int weight, int slant, char *out,
 }
 
 static void resolve_fonts(Config *c) {
+  /* Cache the last resolved family name so repeated reloads with the same font
+   * skip the fontconfig lookup (~50ms on a cold cache). */
+  static char s_last_query[256] = {0};
+  static char s_last_regular[256] = {0};
+  static char s_last_bold[256] = {0};
+  static char s_last_italic[256] = {0};
+
   char raw[256];
   snprintf(raw, sizeof(raw), "%s", c->font_path);
+
+  if (raw[0] && strcmp(raw, s_last_query) == 0) {
+    /* Same family as last time — reuse resolved paths directly */
+    snprintf(c->font_path, sizeof(c->font_path), "%s", s_last_regular);
+    snprintf(c->font_path_bold, sizeof(c->font_path_bold), "%s", s_last_bold);
+    snprintf(c->font_path_italic, sizeof(c->font_path_italic), "%s",
+             s_last_italic);
+    return;
+  }
+
   char resolved[256] = {0};
   if (fc_resolve(raw, FC_WEIGHT_REGULAR, FC_SLANT_ROMAN, resolved,
                  sizeof(resolved)))
@@ -74,6 +91,12 @@ static void resolve_fonts(Config *c) {
                   sizeof(c->font_path_italic)))
     snprintf(c->font_path_italic, sizeof(c->font_path_italic), "%s",
              c->font_path);
+
+  /* Store resolved paths in cache */
+  snprintf(s_last_query, sizeof(s_last_query), "%s", raw);
+  snprintf(s_last_regular, sizeof(s_last_regular), "%s", c->font_path);
+  snprintf(s_last_bold, sizeof(s_last_bold), "%s", c->font_path_bold);
+  snprintf(s_last_italic, sizeof(s_last_italic), "%s", c->font_path_italic);
 }
 
 void config_defaults(Config *c) {

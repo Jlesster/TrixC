@@ -20,7 +20,7 @@ let
     else if lib.isFloat v then
       toString v
     else if lib.isString v then
-      ''"${lib.escape [ ''"'' "\\" ] v}"''
+      "\"${lib.escape [ "\"" "\\" ] v}\""
     else if lib.isList v then
       "{ " + lib.concatMapStringsSep ", " toLua v + " }"
     else if lib.isAttrs v then
@@ -38,6 +38,10 @@ let
       lib.concatStringsSep "\n" (lib.mapAttrsToList setLine cfg.settings)
     )}
 
+    ${lib.optionalString true ''
+      trixie.set("xwayland", ${if cfg.xwayland.enable then "true" else "false"})
+    ''}
+
     ${lib.optionalString (cfg.monitor != null) ''
       if not _G._monitor_configured then
         _G._monitor_configured = true
@@ -53,9 +57,7 @@ let
     )}
 
     ${lib.optionalString (cfg.autostart != [ ]) (
-      lib.concatMapStringsSep "\n" (
-        cmd: ''trixie.exec_once("${lib.escape [ ''"'' ] cmd}")''
-      ) cfg.autostart
+      lib.concatMapStringsSep "\n" (cmd: ''trixie.exec_once("${lib.escape [ "\"" ] cmd}")'') cfg.autostart
     )}
 
     ${lib.optionalString (cfg.rules != [ ]) ''
@@ -76,39 +78,25 @@ in
     settings = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      example = lib.literalExpression ''
-        {
-          gap          = 6;
-          outer_gap    = 9;
-          border_width = 2;
-          smart_gaps   = false;
-          workspaces   = 9;
-          font         = "JetBrainsMono Nerd Font";
-          font_size    = 13;
-          saturation   = 1.0;
-          kb_layout    = "gb";
-          repeat_rate  = 30;
-          repeat_delay = 300;
-        }
-      '';
       description = "Key-value pairs passed to trixie.set() at startup.";
+    };
+
+    xwayland = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Whether to enable XWayland. Emits trixie.set("xwayland", ...) in the
+          generated init.lua. Also requires programs.trixie.xwayland.enable = true
+          in the NixOS module so the XWayland binary is present.
+        '';
+      };
     };
 
     monitor = lib.mkOption {
       type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
       default = null;
-      example = lib.literalExpression ''
-        {
-          name    = "eDP-1";
-          width   = 1920;
-          height  = 1080;
-          refresh = 144;
-          scale   = 1.0;
-          x       = 0;
-          y       = 0;
-        }
-      '';
-      description = "Monitor configuration passed to trixie.set(\"monitor\", ...).";
+      description = "Monitor config passed to trixie.set(\"monitor\", ...).";
     };
 
     keybinds = lib.mkOption {
@@ -122,24 +110,12 @@ in
         }
       );
       default = [ ];
-      example = lib.literalExpression ''
-        [
-          { mods = ["Mod4"]; key = "t"; action = "trixie.spawn(\"kitty\")"; }
-          { mods = ["Mod4"]; key = "q"; action = "trixie.close()"; }
-          { mods = ["Mod4" "Shift"]; key = "q"; action = "trixie.quit()"; }
-        ]
-      '';
       description = "Declarative keybinds. Each entry emits a trixie.key() call.";
     };
 
     autostart = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [
-        "dunst"
-        "swaybg -m fill -c '#1e1e2e'"
-        "nm-applet --indicator"
-      ];
       description = "Commands passed to trixie.exec_once() at startup.";
     };
 
@@ -153,12 +129,6 @@ in
         }
       );
       default = [ ];
-      example = lib.literalExpression ''
-        [
-          { rule.app_id = "pavucontrol"; properties.floating = true; }
-          { rule.app_id = "firefox";     properties.workspace = 3; }
-        ]
-      '';
       description = "Window rules passed to trixie.rules.rules.";
     };
 
@@ -171,19 +141,12 @@ in
     extraConfig = lib.mkOption {
       type = lib.types.lines;
       default = "";
-      description = "Lua code appended after the generated settings block in init.lua.";
+      description = "Lua code appended after the generated settings block.";
     };
 
     extraModules = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = { };
-      example = lib.literalExpression ''
-        {
-          "theme" = ./modules/theme.lua;
-          "binds" = ./modules/binds.lua;
-          "bar"   = ./modules/bar.lua;
-        }
-      '';
       description = "Extra Lua files installed into ~/.config/trixie/modules/.";
     };
 
@@ -191,19 +154,16 @@ in
       type = lib.types.attrsOf lib.types.anything;
       default = { };
       internal = true;
-      description = "Stub to satisfy way-displays.nix systemd injection.";
+      description = "Stub for systemd injection compatibility.";
     };
   };
 
   config = lib.mkIf cfg.enable {
     home.packages = [ cfg.package ];
 
-    # Push compositor environment into systemd --user session so that
-    # xdg-desktop-portal-wlr and other services that gate on
-    # ConditionEnvironment=WAYLAND_DISPLAY can start correctly.
-    # This runs as a systemd user service that Trixie's NixOS module
-    # activates via graphical-session.target, ensuring it fires before
-    # any portal service attempts to start.
+    # Import compositor environment into systemd --user session so that
+    # xdg-desktop-portal-wlr, pipewire, and other session services that gate
+    # on ConditionEnvironment=WAYLAND_DISPLAY start correctly.
     systemd.user.services.trixie-import-environment = {
       Unit = {
         Description = "Import Trixie compositor environment into systemd user session";
@@ -215,21 +175,18 @@ in
         ExecStart = "${pkgs.bash}/bin/bash -c 'systemctl --user import-environment WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DISPLAY && ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DISPLAY'";
         RemainAfterExit = true;
       };
-      Install = {
-        WantedBy = [ "graphical-session.target" ];
-      };
+      Install.WantedBy = [ "graphical-session.target" ];
     };
 
-    # Wayland-only hints are written to environment.d so systemd --user
-    # picks them up only for the graphical Wayland session.  They are
-    # intentionally NOT in home.sessionVariables (which goes into ~/.profile
-    # and is sourced by AwesomeWM/X11 sessions too — MOZ_ENABLE_WAYLAND=1
-    # and GDK_BACKEND=wayland break Firefox and GTK apps under X11).
+    # Wayland-only environment variables via environment.d so systemd --user
+    # picks them up only for graphical Wayland sessions.
+    # NOTE: MOZ_X11_EGL is intentionally absent — it forces the X11 EGL path
+    # in Firefox which conflicts with Wayland EGL on Nvidia and breaks GPU
+    # process startup. MOZ_ENABLE_WAYLAND=1 is sufficient.
     xdg.configFile = {
       "environment.d/trixie-wayland.conf".text = ''
         MOZ_ENABLE_WAYLAND=1
         MOZ_DBUS_REMOTE=1
-        MOZ_X11_EGL=1
         NIXOS_OZONE_WL=1
         ELECTRON_OZONE_PLATFORM_HINT=wayland
         OZONE_PLATFORM=wayland
@@ -249,7 +206,7 @@ in
             text = ''
               -- Injected by home-manager — loads declarative settings first.
               require("_hm_generated")
-              -- User init.lua (symlinked source: ${toString cfg.configFile})
+              -- User init.lua: ${toString cfg.configFile}
             ''
             + builtins.readFile cfg.configFile;
           }
