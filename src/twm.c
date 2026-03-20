@@ -272,6 +272,7 @@ PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating,
   p->id = new_pane_id();
   p->floating = floating;
   p->fullscreen = fullscreen;
+  p->border_w_override = -1; /* -1 = use global border_w; rules may override */
   strncpy(p->app_id, app_id, sizeof(p->app_id) - 1);
   strncpy(p->title, app_id, sizeof(p->title) - 1);
 
@@ -289,6 +290,17 @@ PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating,
 
   Workspace *ws = &t->workspaces[t->active_ws];
 
+  /* Guard: workspace pane array is also MAX_PANES deep — reject before OOB
+   * write. This is distinct from the global t->pane_count check above. */
+  if (ws->pane_count >= MAX_PANES) {
+    wlr_log(WLR_ERROR,
+            "twm_open: workspace %d pane array full (%d/%d), rejecting '%s'",
+            t->active_ws, ws->pane_count, MAX_PANES, app_id);
+    pane_ht_remove(p->id);
+    t->pane_count--;
+    return 0;
+  }
+
   PaneId prev_focused = ws->has_focused ? ws->focused : 0;
 
   ws->panes[ws->pane_count++] = p->id;
@@ -299,6 +311,9 @@ PaneId twm_open_ex(TwmState *t, const char *app_id, bool floating,
   if (!floating && !fullscreen && ws->layout == LAYOUT_DWINDLE)
     dwindle_insert(&ws->dwindle, p->id, prev_focused, t->content_rect, t->gap);
 
+  wlr_log(WLR_DEBUG,
+          "twm_open: pane %u app_id='%s' ws=%d pane_count=%d ws_pane_count=%d",
+          p->id, app_id, t->active_ws, t->pane_count, ws->pane_count);
   twm_reflow(t);
   return p->id;
 }

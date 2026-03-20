@@ -71,6 +71,14 @@ typedef struct {
 } Rect;
 
 static inline bool rect_empty(Rect r) { return r.w <= 0 || r.h <= 0; }
+
+/* Resolve effective border width for a pane. border_w_override >= 0 means
+ * a per-pane rule overrides the global default. Floating/fullscreen = 0. */
+static inline int pane_border_w(const Pane *p, int global_bw) {
+  if (!p) return global_bw;
+  if (p->floating || p->fullscreen) return 0;
+  return (p->border_w_override >= 0) ? p->border_w_override : global_bw;
+}
 static inline bool rect_contains(Rect r, int x, int y) {
   return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
@@ -136,7 +144,7 @@ typedef struct {
 
 typedef uint32_t PaneId;
 
-typedef struct {
+typedef struct Pane {
   PaneId id;
   char app_id[128];
   char title[256];
@@ -148,6 +156,9 @@ typedef struct {
   float rule_opacity;
   int ws_idx;
   int lua_signals_ref;
+  /* Per-pane border width override: -1 = use global s->twm.border_w.
+   * Set by window rules (border_width / noborder properties). */
+  int border_w_override;
 } Pane;
 
 typedef struct {

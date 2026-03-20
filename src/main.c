@@ -378,7 +378,7 @@ static int idle_timer_cb(void *data) {
 
 /* ── Geometry helpers ───────────────────────────────────────────────────── */
 static void view_apply_geom(TrixieServer *s, TrixieView *v, Pane *p) {
-  int bw = (p->floating || p->fullscreen) ? 0 : s->twm.border_w;
+  int bw = pane_border_w(p, s->twm.border_w);
   int cw = p->rect.w - bw * 2; if (cw < 1) cw = 1;
   int ch = p->rect.h - bw * 2; if (ch < 1) ch = 1;
 #ifdef HAS_XWAYLAND
@@ -526,7 +526,17 @@ void server_sync_windows(TrixieServer *s) {
   wl_list_for_each(v, &s->views, link) {
     if (!v->mapped) continue;
     Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
-    if (!p) continue;
+    if (!p) {
+      /* Pane destroyed but view not yet — disable and warn */
+      wlr_log(WLR_ERROR,
+              "server_sync_windows: view has pane_id=%u but pane not found "
+              "(app_id from xdg='%s') — disabling scene node",
+              v->pane_id,
+              (v->xdg_toplevel && v->xdg_toplevel->app_id)
+                  ? v->xdg_toplevel->app_id : "?");
+      wlr_scene_node_set_enabled(&v->scene_tree->node, false);
+      continue;
+    }
 
     bool on_ws = p->sticky;
     if (!on_ws)
@@ -560,7 +570,7 @@ void server_sync_windows(TrixieServer *s) {
       wlr_xdg_toplevel_set_suspended(v->xdg_toplevel, false);
 
     Rect r = anim_get_rect(&s->anim, v->pane_id, p->rect);
-    int bw = (p->floating || p->fullscreen) ? 0 : s->twm.border_w;
+    int bw = pane_border_w(p, s->twm.border_w);
     int win_x = r.x + bw + incoming_x, win_y = r.y + bw;
     int win_w = r.w - bw * 2; if (win_w < 1) win_w = 1;
     int win_h = r.h - bw * 2; if (win_h < 1) win_h = 1;
@@ -1687,6 +1697,12 @@ static void view_do_map(TrixieServer *s, TrixieView *v, Pane *p,
     if (!on_ws)
       for (int i = 0; i < ws->pane_count; i++)
         if (ws->panes[i] == v->pane_id) { on_ws = true; break; }
+    wlr_log(WLR_INFO,
+            "view_do_map: pane=%u app_id='%s' ws_idx=%d active_ws=%d "
+            "on_ws=%d floating=%d fullscreen=%d — scene_node %s",
+            v->pane_id, app_id, p->ws_idx, s->twm.active_ws,
+            on_ws, p->floating, p->fullscreen,
+            (on_ws && !p->minimized) ? "ENABLED" : "kept disabled");
     if (on_ws && !p->minimized)
       wlr_scene_node_set_enabled(&v->scene_tree->node, true);
   }
@@ -1724,9 +1740,21 @@ static void view_handle_map(struct wl_listener *listener, void *data) {
   TrixieServer *s = v->server;
   v->mapped = true;
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
-  if (!p) return;
-  const char *app_id = v->xdg_toplevel->app_id ? v->xdg_toplevel->app_id : "";
-  const char *title  = v->xdg_toplevel->title  ? v->xdg_toplevel->title  : "";
+  if (!p) {
+    wlr_log(WLR_ERROR,
+            "view_handle_map: pane %u not found for app_id='%s' — "
+            "pane was closed before map fired (race). Ignoring.",
+            v->pane_id,
+            (v->xdg_toplevel && v->xdg_toplevel->app_id)
+                ? v->xdg_toplevel->app_id : "?");
+    return;
+  }
+  const char *app_id = (v->xdg_toplevel && v->xdg_toplevel->app_id)
+                           ? v->xdg_toplevel->app_id : "";
+  const char *title  = (v->xdg_toplevel && v->xdg_toplevel->title)
+                           ? v->xdg_toplevel->title  : "";
+  wlr_log(WLR_INFO, "view_handle_map: pane %u app_id='%s' title='%s'",
+          v->pane_id, app_id, title);
   view_do_map(s, v, p, app_id, title);
 }
 
@@ -1734,6 +1762,11 @@ static void view_handle_unmap(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, unmap);
   TrixieServer *s = v->server;
+  wlr_log(WLR_INFO,
+          "view_handle_unmap: pane=%u app_id='%s'",
+          v->pane_id,
+          (v->xdg_toplevel && v->xdg_toplevel->app_id)
+              ? v->xdg_toplevel->app_id : "?");
   v->mapped = false;
   lua_emit_unmanage(s, v->pane_id);
   if (v->foreign_handle) {
@@ -1767,6 +1800,11 @@ static void view_handle_destroy(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, destroy);
   TrixieServer *s = v->server;
+  wlr_log(WLR_INFO,
+          "view_handle_destroy: pane=%u mapped=%d app_id='%s'",
+          v->pane_id, v->mapped,
+          (v->xdg_toplevel && v->xdg_toplevel->app_id)
+              ? v->xdg_toplevel->app_id : "?");
   twm_close(&s->twm, v->pane_id);
   /* For XDG views the scene tree was created with wlr_scene_xdg_surface_create
    * which means wlroots owns it and destroys it when the xdg_surface is
@@ -1807,7 +1845,7 @@ static void view_handle_commit(struct wl_listener *listener, void *data) {
   if (!v->xdg_toplevel->base->initial_commit) {
     Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
     if (p && !p->floating && !p->fullscreen) {
-      int bw = s->twm.border_w;
+      int bw = pane_border_w(p, s->twm.border_w);
       int want_w = p->rect.w - bw * 2; if (want_w < 1) want_w = 1;
       int want_h = p->rect.h - bw * 2; if (want_h < 1) want_h = 1;
       struct wlr_box cur;
@@ -1902,8 +1940,23 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   struct wlr_xdg_surface *surface = toplevel->base;
   const char *app_id = toplevel->app_id ? toplevel->app_id : "";
 
+  wlr_log(WLR_INFO, "new_xdg_toplevel: app_id='%s' title='%s' pane_count=%d",
+          app_id,
+          toplevel->title ? toplevel->title : "",
+          s->twm.pane_count);
+
   PaneId pane_id = twm_open(&s->twm, app_id);
-  if (!pane_id) { wlr_xdg_toplevel_send_close(toplevel); return; }
+  if (!pane_id) {
+    wlr_log(WLR_ERROR,
+            "new_xdg_toplevel: twm_open returned 0 for app_id='%s' "
+            "(pane_count=%d/%d ws_pane_count=%d/%d) — sending close",
+            app_id, s->twm.pane_count, MAX_PANES,
+            s->twm.workspaces[s->twm.active_ws].pane_count, MAX_PANES);
+    wlr_xdg_toplevel_send_close(toplevel); return;
+  }
+
+  wlr_log(WLR_INFO, "new_xdg_toplevel: opened pane %u for app_id='%s'",
+          pane_id, app_id);
 
   wlr_xdg_toplevel_set_wm_capabilities(toplevel,
       WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE |
@@ -1962,24 +2015,42 @@ static void handle_new_deco(struct wl_listener *listener, void *data) {
 
 /* ── XWayland ───────────────────────────────────────────────────────────── */
 #ifdef HAS_XWAYLAND
-/* Forward declarations — xwayland_handle_map references these before their
- * definitions appear in the file. */
+/* Forward declarations */
 static void xwayland_handle_commit(struct wl_listener *, void *);
 static void xwayland_handle_unmap(struct wl_listener *, void *);
-static void xwayland_handle_map(struct wl_listener *listener, void *data) {
-  (void)data;
-  TrixieView *v = CONTAINER_OF(listener, TrixieView, xw_surface_map);
+static void xwayland_handle_map(struct wl_listener *, void *);
+
+/* xwayland_do_map — shared logic for both the xs-level first-map
+ * (v->map wired to xs->events.map) and xs->surface-level remaps
+ * (v->xw_surface_map wired to xs->surface->events.map).
+ *
+ * Previously the single handler used CONTAINER_OF(listener, TrixieView,
+ * xw_surface_map) — but the first-map fires via v->map (a different field),
+ * so the CONTAINER_OF offset was wrong and the handler fetched garbage,
+ * causing every XWayland app except those that happened to remap their
+ * surface (like Vesktop) to either crash or silently vanish. */
+static void xwayland_do_map(TrixieView *v) {
   TrixieServer *s = v->server;
   v->mapped = true;
   struct wlr_xwayland_surface *xs = v->xwayland_surface;
-  if (!xs->surface) { wlr_log(WLR_ERROR, "xwayland_handle_map: surface NULL for %s", xs->class ? xs->class : "(unknown)"); v->mapped = false; return; }
-  if (!v->xw_scene_attached) { wlr_scene_surface_create(v->scene_tree, xs->surface); v->xw_scene_attached = true; }
+  if (!xs->surface) {
+    wlr_log(WLR_ERROR, "xwayland_do_map: surface NULL for class='%s'",
+            xs->class ? xs->class : "(unknown)");
+    v->mapped = false;
+    return;
+  }
+  wlr_log(WLR_INFO,
+          "xwayland_do_map: pane=%u class='%s' title='%s' override_redirect=%d",
+          v->pane_id,
+          xs->class ? xs->class : "",
+          xs->title ? xs->title : "",
+          xs->override_redirect);
+  if (!v->xw_scene_attached) {
+    wlr_scene_surface_create(v->scene_tree, xs->surface);
+    v->xw_scene_attached = true;
+  }
   /* Wire xs->surface->events using dedicated listener fields so the same
-   * wl_listener node is never inserted into two signal lists simultaneously.
-   * The original code reused v->map/v->unmap here — those are already in
-   * xs->surface->events from the first map, so re-adding them on remap
-   * corrupts the wayland list and fires xwayland_handle_map twice per event,
-   * producing two ghost panes per window (the Dolphin ghost-window bug). */
+   * wl_listener node is never inserted into two signal lists simultaneously. */
   if (!v->xw_commit_connected) {
     v->xw_surface_map.notify    = xwayland_handle_map;
     v->xw_surface_unmap.notify  = xwayland_handle_unmap;
@@ -1990,7 +2061,13 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
     v->xw_commit_connected = true;
   }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
-  if (!p) return;
+  if (!p) {
+    wlr_log(WLR_ERROR,
+            "xwayland_do_map: pane %u gone for class='%s' — closing",
+            v->pane_id, xs->class ? xs->class : "");
+    wlr_xwayland_surface_close(xs);
+    return;
+  }
   const char *app_id = xs->class ? xs->class : "";
   const char *title  = xs->title ? xs->title : "";
   twm_set_title(&s->twm, v->pane_id, title);
@@ -2002,6 +2079,20 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
     return;
   }
   view_do_map(s, v, p, app_id, title);
+}
+
+/* First-map fires via v->map wired to xs->events.map in handle_new_xwayland_surface */
+static void xwayland_handle_map_first(struct wl_listener *listener, void *data) {
+  (void)data;
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, map);
+  xwayland_do_map(v);
+}
+
+/* Surface remaps fire via v->xw_surface_map wired to xs->surface->events.map */
+static void xwayland_handle_map(struct wl_listener *listener, void *data) {
+  (void)data;
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, xw_surface_map);
+  xwayland_do_map(v);
 }
 static void xwayland_handle_unmap(struct wl_listener *listener, void *data) {
   (void)data;
@@ -2075,6 +2166,8 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
   wl_list_remove(&v->xw_configure.link);
   wl_list_remove(&v->set_title.link);
   wl_list_remove(&v->set_app_id.link);
+  /* Remove v->map from xs->events.map — wired in handle_new_xwayland_surface */
+  wl_list_remove(&v->map.link);
   if (v->xw_commit_connected) {
     wl_list_remove(&v->xw_surface_map.link);
     wl_list_remove(&v->xw_surface_unmap.link);
@@ -2161,7 +2254,7 @@ static void xwayland_handle_configure(struct wl_listener *listener, void *data) 
     server_sync_windows(s);
   } else if (p) {
     /* Tiled: ack with our geometry so the client stays in place. */
-    int bw = s->twm.border_w;
+    int bw = pane_border_w(p, s->twm.border_w);
     int cw = p->rect.w - bw * 2; if (cw < 1) cw = 1;
     int ch = p->rect.h - bw * 2; if (ch < 1) ch = 1;
     wlr_xwayland_surface_configure(xs,
@@ -2195,16 +2288,36 @@ static void handle_new_xwayland_surface(struct wl_listener *listener, void *data
   TrixieServer *s = CONTAINER_OF(listener, TrixieServer, new_xwayland_surface);
   struct wlr_xwayland_surface *xs = data;
   const char *class = xs->class ? xs->class : "";
+
+  wlr_log(WLR_INFO,
+          "new_xwayland_surface: class='%s' title='%s' override_redirect=%d "
+          "pane_count=%d",
+          class,
+          xs->title ? xs->title : "",
+          xs->override_redirect,
+          s->twm.pane_count);
+
   TrixieView *v = calloc(1, sizeof(*v));
   v->server = s; v->is_xwayland = true; v->xwayland_surface = xs;
   v->pane_id = xs->override_redirect ? 0 : twm_open(&s->twm, class);
-  if (!v->pane_id && !xs->override_redirect) { free(v); wlr_xwayland_surface_close(xs); return; }
+  if (!v->pane_id && !xs->override_redirect) {
+    wlr_log(WLR_ERROR,
+            "new_xwayland_surface: twm_open returned 0 for class='%s' "
+            "(pane_count=%d/%d ws_pane_count=%d/%d) — closing",
+            class, s->twm.pane_count, MAX_PANES,
+            s->twm.workspaces[s->twm.active_ws].pane_count, MAX_PANES);
+    free(v); wlr_xwayland_surface_close(xs); return;
+  }
+  if (v->pane_id)
+    wlr_log(WLR_INFO,
+            "new_xwayland_surface: opened pane %u for class='%s'",
+            v->pane_id, class);
   v->scene_tree = xs->override_redirect
       ? wlr_scene_tree_create(s->layer_floating)
       : wlr_scene_tree_create(s->layer_windows);
   if (xs->surface) { wlr_scene_surface_create(v->scene_tree, xs->surface); v->xw_scene_attached = true; }
   wlr_scene_node_set_enabled(&v->scene_tree->node, false);
-  v->map.notify              = xwayland_handle_map;
+  v->map.notify              = xwayland_handle_map_first; /* xs->events.map — first-map */
   v->unmap.notify            = xwayland_handle_unmap;
   v->destroy.notify          = xwayland_handle_destroy;
   v->commit.notify           = xwayland_handle_commit;

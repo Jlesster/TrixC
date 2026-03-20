@@ -3531,24 +3531,48 @@ void lua_apply_window_rules(TrixieServer *s, Pane *p, const char *app_id,
     }
 
     lua_getfield(L, -1, "rule");
-    bool match = true;
+    bool match = false;
+    bool has_criterion = false;
     if (lua_istable(L, -1)) {
+      /* class: substring match against app_id (Hyprland/sway convention) */
       lua_getfield(L, -1, "class");
-      if (lua_isstring(L, -1) && !strstr(app_id, lua_tostring(L, -1)))
-        match = false;
+      if (lua_isstring(L, -1)) {
+        has_criterion = true;
+        if (strstr(app_id, lua_tostring(L, -1))) match = true;
+      }
       lua_pop(L, 1);
+      /* name: substring match against title */
       lua_getfield(L, -1, "name");
-      if (lua_isstring(L, -1) && !strstr(title, lua_tostring(L, -1)))
-        match = false;
+      if (lua_isstring(L, -1)) {
+        has_criterion = true;
+        if (strstr(title, lua_tostring(L, -1))) match = true;
+      }
       lua_pop(L, 1);
+      /* app_id: substring match against app_id */
       lua_getfield(L, -1, "app_id");
-      if (lua_isstring(L, -1) && !strstr(app_id, lua_tostring(L, -1)))
-        match = false;
+      if (lua_isstring(L, -1)) {
+        has_criterion = true;
+        if (strstr(app_id, lua_tostring(L, -1))) match = true;
+      }
       lua_pop(L, 1);
+      /* title: substring match against title (explicit) */
+      lua_getfield(L, -1, "title");
+      if (lua_isstring(L, -1)) {
+        has_criterion = true;
+        if (strstr(title, lua_tostring(L, -1))) match = true;
+      }
+      lua_pop(L, 1);
+      /* No criteria → catch-all, matches every window */
+      if (!has_criterion) match = true;
+    } else {
+      match = true; /* no rule table → catch-all */
     }
     lua_pop(L, 1); /* rule */
 
     if (match) {
+      wlr_log(WLR_INFO,
+              "window_rule[%d]: MATCH app_id='%s' title='%s' — applying properties",
+              i, app_id, title);
       lua_getfield(L, -1, "properties");
       if (lua_istable(L, -1)) {
         lua_getfield(L, -1, "floating");
@@ -3560,16 +3584,62 @@ void lua_apply_window_rules(TrixieServer *s, Pane *p, const char *app_id,
           p->fullscreen = lua_toboolean(L, -1);
         lua_pop(L, 1);
         lua_getfield(L, -1, "workspace");
-        if (lua_isnumber(L, -1))
-          twm_move_to_ws(&s->twm, (int)lua_tointeger(L, -1) - 1);
+        if (lua_isnumber(L, -1)) {
+          int target_ws = (int)lua_tointeger(L, -1) - 1;
+          /* Move this specific pane to the target workspace.
+           * We cannot use twm_move_to_ws here because that always moves
+           * the *focused* pane — at rule-apply time the new pane may not
+           * be focused yet. Directly transplant the pane. */
+          if (target_ws >= 0 && target_ws < s->twm.ws_count &&
+              target_ws != s->twm.active_ws) {
+            TwmState *t = &s->twm;
+            Workspace *src = &t->workspaces[t->active_ws];
+            Workspace *dst = &t->workspaces[target_ws];
+            PaneId pid = p->id;
+            /* Remove from src */
+            for (int _i = 0; _i < src->pane_count; _i++) {
+              if (src->panes[_i] == pid) {
+                src->panes[_i] = src->panes[--src->pane_count];
+                break;
+              }
+            }
+            if (src->has_focused && src->focused == pid) {
+              src->has_focused = src->pane_count > 0;
+              if (src->has_focused)
+                src->focused = src->panes[src->pane_count - 1];
+            }
+            /* Insert into dst (only if room) */
+            if (dst->pane_count < MAX_PANES) {
+              dst->panes[dst->pane_count++] = pid;
+              p->ws_idx = target_ws;
+              wlr_log(WLR_INFO,
+                      "rule: moved pane %u ('%s') to workspace %d",
+                      pid, p->app_id, target_ws + 1);
+            } else {
+              wlr_log(WLR_ERROR,
+                      "rule: workspace %d full, cannot place pane %u",
+                      target_ws, pid);
+              /* Put it back in src so it isn't lost */
+              if (src->pane_count < MAX_PANES)
+                src->panes[src->pane_count++] = pid;
+            }
+          }
+        }
         lua_pop(L, 1);
         lua_getfield(L, -1, "opacity");
         if (lua_isnumber(L, -1))
           p->rule_opacity = (float)lua_tonumber(L, -1);
         lua_pop(L, 1);
+        /* border_width: store per-pane so it doesn't clobber all windows.
+         * Reads back via p->border_w_override in view_apply_geom / deco.
+         * A value of -1 means "use global default" (set in Pane memset). */
         lua_getfield(L, -1, "border_width");
         if (lua_isnumber(L, -1))
-          s->cfg.border_width = s->twm.border_w = (int)lua_tointeger(L, -1);
+          p->border_w_override = (int)lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "noborder");
+        if (lua_isboolean(L, -1) && lua_toboolean(L, -1))
+          p->border_w_override = 0;
         lua_pop(L, 1);
         lua_getfield(L, -1, "callback");
         if (lua_isfunction(L, -1)) {
