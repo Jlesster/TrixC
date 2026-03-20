@@ -2485,7 +2485,12 @@ int main(int argc, char *argv[]) {
   if (!s->backend) { wlr_log(WLR_ERROR, "failed to create backend"); return 1; }
 
   s->renderer  = wlr_renderer_autocreate(s->backend);
-  wlr_renderer_init_wl_display(s->renderer, s->display);
+  /* Use wlr_renderer_init_wl_shm instead of wlr_renderer_init_wl_display so
+   * we control dmabuf creation ourselves and can integrate it with the scene
+   * graph via wlr_scene_set_linux_dmabuf_v1.  Calling init_wl_display would
+   * create a dmabuf global automatically at whatever version wlroots picks,
+   * then our manual create below would add a second conflicting global. */
+  wlr_renderer_init_wl_shm(s->renderer, s->display);
   s->allocator = wlr_allocator_autocreate(s->backend, s->renderer);
   s->compositor = wlr_compositor_create(s->display, 6, s->renderer);
   wlr_subcompositor_create(s->display);
@@ -2513,11 +2518,6 @@ int main(int argc, char *argv[]) {
   s->foreign_toplevel_mgr  = wlr_foreign_toplevel_manager_v1_create(s->display);
   s->screencopy_mgr        = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
-  /* zwp_linux_dmabuf_v1 version 4: supports feedback protocol without the
-   * per-surface feedback path that crashed on v5 with nvidia+wlroots 0.18.
-   * v3 disabled dmabuf entirely — Firefox then couldn't allocate GPU buffers
-   * for WebRender and failed to render anything. v4 is the correct middle ground. */
-  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 4, s->renderer);
   wlr_drm_create(s->display, s->renderer);
 #ifdef HAVE_ALPHA_MODIFIER
   wlr_alpha_modifier_v1_create(s->display);
@@ -2593,6 +2593,15 @@ int main(int argc, char *argv[]) {
   s->layer_top             = wlr_scene_tree_create(&s->scene->tree);
   s->layer_overlay         = wlr_scene_tree_create(&s->scene->tree);
   s->layer_lock            = wlr_scene_tree_create(&s->scene->tree);
+
+  /* Integrate dmabuf with the scene graph so wlroots tracks buffer lifetimes.
+   * Must be called AFTER scene creation and BEFORE backend start.
+   * Guard with wlr_renderer_get_texture_formats so we only advertise dmabuf
+   * if the renderer actually supports it — matches somewm lines 5108-5112. */
+  if (wlr_renderer_get_texture_formats(s->renderer, WLR_BUFFER_CAP_DMABUF)) {
+    wlr_scene_set_linux_dmabuf_v1(s->scene,
+        wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer));
+  }
 
   s->reload_idle = NULL;
 
