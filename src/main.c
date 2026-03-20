@@ -1746,15 +1746,14 @@ static void view_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, destroy);
   TrixieServer *s = v->server;
   twm_close(&s->twm, v->pane_id);
-  /* Firefox dmabuf fix: destroy the scene tree here so wlroots releases all
-   * buffer references before the client's dmabuf proxies are destroyed.
-   * Without this the scene node outlives the buffer → "proxy destroyed while
-   * still attached". Must happen before free(v). */
-  if (v->scene_tree) {
+  /* For XDG views the scene tree was created with wlr_scene_xdg_surface_create
+   * which means wlroots owns it and destroys it when the xdg_surface is
+   * destroyed.  We must NOT call wlr_scene_node_destroy here — doing so causes
+   * a double-free that makes Firefox disappear immediately after opening.
+   * Just null the data pointer so cursor hit-tests can't return a dangling
+   * TrixieView pointer after this view is freed. */
+  if (v->scene_tree)
     v->scene_tree->node.data = NULL;
-    wlr_scene_node_destroy(&v->scene_tree->node);
-    v->scene_tree = NULL;
-  }
   wl_list_remove(&v->map.link); wl_list_remove(&v->unmap.link);
   wl_list_remove(&v->destroy.link); wl_list_remove(&v->commit.link);
   wl_list_remove(&v->request_fullscreen.link);
@@ -2053,7 +2052,13 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieServer *s = v->server;
   if (v->pane_id) twm_close(&s->twm, v->pane_id);
   /* Fix 8: null scene data before free to prevent stale pointer UAF. */
-  if (v->scene_tree) v->scene_tree->node.data = NULL;
+  /* XWayland scene trees are created with wlr_scene_tree_create (manually
+   * owned) so we DO destroy them here, unlike XDG views. */
+  if (v->scene_tree) {
+    v->scene_tree->node.data = NULL;
+    wlr_scene_node_destroy(&v->scene_tree->node);
+    v->scene_tree = NULL;
+  }
   wl_list_remove(&v->destroy.link);
   wl_list_remove(&v->request_fullscreen.link);
   wl_list_remove(&v->xw_configure.link);
