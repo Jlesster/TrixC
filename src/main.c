@@ -2461,16 +2461,12 @@ int main(int argc, char *argv[]) {
   s->foreign_toplevel_mgr  = wlr_foreign_toplevel_manager_v1_create(s->display);
   s->screencopy_mgr        = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
-  /* Fix A: link dmabuf to the scene graph so wlr_scene tracks buffer
-   * lifetimes. Without this Firefox destroys its zwp_linux_dmabuf_v1 proxy
-   * while the scene still holds a reference → "proxy destroyed while still
-   * attached". Pattern from somewm lines 5104-5111. */
-  {
-    struct wlr_linux_dmabuf_v1 *dmabuf =
-        wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer);
-    if (dmabuf)
-      wlr_scene_set_linux_dmabuf_v1(s->scene, dmabuf);
-  }
+  /* dmabuf: plain create is correct for wlroots 0.18.  wlr_scene_set_linux_dmabuf_v1
+   * exists in 0.18 but crashes (SIGSEGV inside wlroots) when called during init
+   * before the scene has an output attached — the Firefox proxy-destroyed error
+   * this was meant to fix is a wlroots 0.18 limitation, not something we can
+   * work around from compositor code on this version. */
+  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer);
   wlr_drm_create(s->display, s->renderer);
 #ifdef HAVE_ALPHA_MODIFIER
   wlr_alpha_modifier_v1_create(s->display);

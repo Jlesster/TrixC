@@ -1,4 +1,4 @@
-Build started at 2026-03-20T03:02:08.506105
+Build started at 2026-03-20T03:07:05.939020
 Main binary: /nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/bin/python3.13
 Build Options: 
 Python system: Linux
@@ -32,7 +32,7 @@ This program has absolutely no warranty.
 -----------
 stderr:
 collect2 version 15.2.0
-/nix/store/4yi6jj75bb5hhdzpzlxfyf69d35wsf2x-binutils-wrapper-2.44/bin/ld -plugin /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/liblto_plugin.so -plugin-opt=/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/lto-wrapper -plugin-opt=-fresolution=/tmp/nix-shell-9667-344411335/ccLPd3C4.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s --eh-frame-hdr -m elf_x86_64 -dynamic-linker /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib64/ld-linux-x86-64.so.2 -pie /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/Scrt1.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crti.o /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtbeginS.o -L/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib -L/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0 -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../.. --version -lgcc --push-state --as-needed -lgcc_s --pop-state -lc -lgcc --push-state --as-needed -lgcc_s --pop-state /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtendS.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crtn.o
+/nix/store/4yi6jj75bb5hhdzpzlxfyf69d35wsf2x-binutils-wrapper-2.44/bin/ld -plugin /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/liblto_plugin.so -plugin-opt=/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/lto-wrapper -plugin-opt=-fresolution=/tmp/nix-shell-5884-265958791/ccR4tVcL.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s --eh-frame-hdr -m elf_x86_64 -dynamic-linker /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib64/ld-linux-x86-64.so.2 -pie /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/Scrt1.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crti.o /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtbeginS.o -L/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib -L/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0 -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../.. --version -lgcc --push-state --as-needed -lgcc_s --pop-state -lc -lgcc --push-state --as-needed -lgcc_s --pop-state /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtendS.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crtn.o
 -----------
 Sanity testing C compiler: gcc
 Is cross compiler: False.
@@ -80,7 +80,7 @@ This program has absolutely no warranty.
 -----------
 stderr:
 collect2 version 15.2.0
-/nix/store/4yi6jj75bb5hhdzpzlxfyf69d35wsf2x-binutils-wrapper-2.44/bin/ld -plugin /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/liblto_plugin.so -plugin-opt=/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/lto-wrapper -plugin-opt=-fresolution=/tmp/nix-shell-9667-344411335/ccWxRiZO.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s --eh-frame-hdr -m elf_x86_64 -dynamic-linker /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib64/ld-linux-x86-64.so.2 -pie /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/Scrt1.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crti.o /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtbeginS.o -L/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib -L/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0 -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../.. --version -lgcc --push-state --as-needed -lgcc_s --pop-state -lc -lgcc --push-state --as-needed -lgcc_s --pop-state /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtendS.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crtn.o
+/nix/store/4yi6jj75bb5hhdzpzlxfyf69d35wsf2x-binutils-wrapper-2.44/bin/ld -plugin /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/liblto_plugin.so -plugin-opt=/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/lto-wrapper -plugin-opt=-fresolution=/tmp/nix-shell-5884-265958791/cctowYQH.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lgcc_s --eh-frame-hdr -m elf_x86_64 -dynamic-linker /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib64/ld-linux-x86-64.so.2 -pie /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/Scrt1.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crti.o /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtbeginS.o -L/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib -L/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0 -L/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../.. --version -lgcc --push-state --as-needed -lgcc_s --pop-state -lc -lgcc --push-state --as-needed -lgcc_s --pop-state /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/crtendS.o /nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/crtn.o
 -----------
 Sanity testing C compiler: gcc
 Is cross compiler: False.
@@ -144,7 +144,7 @@ stdout:
 -L/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib -lwlroots-0.18
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqiig521i
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7cdbkm_7
 Code:
 
         #include<stddef.h>
@@ -154,11 +154,11 @@ Code:
             return 0;
         }
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqiig521i/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqiig521i/output.exe -D_FILE_OFFSET_BITS=64 -O0` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7cdbkm_7/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7cdbkm_7/output.exe -D_FILE_OFFSET_BITS=64 -O0` -> 0
 stderr:
 In file included from /nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include/bits/libc-header-start.h:33,
                  from /nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include/stdio.h:28,
-                 from /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqiig521i/testfile.c:3:
+                 from /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp7cdbkm_7/testfile.c:3:
 /nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
       |    ^~~~~~~
@@ -171,23 +171,23 @@ Program stderr:
 
 
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppmqekyv5
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp6zwe5htz
 Code:
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppmqekyv5/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppmqekyv5/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp6zwe5htz/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp6zwe5htz/output.obj -c -D_FILE_OFFSET_BITS=64 -O0 --print-search-dirs` -> 0
 stdout:
 install: /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/
 programs: =/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/:/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/libexec/gcc/x86_64-unknown-linux-gnu/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../../x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../../x86_64-unknown-linux-gnu/bin/
 libraries: =/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/l0l2ll1lmylczj1ihqn351af2kyp5x19-glibc-2.42-51/lib/:/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/ihpdbhy4rfxaixiamyb588zfc3vj19al-gcc-15.2.0-lib/lib/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../../x86_64-unknown-linux-gnu/lib/x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../../x86_64-unknown-linux-gnu/lib/../lib64/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../x86_64-unknown-linux-gnu/15.2.0/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../../lib64/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../../x86_64-unknown-linux-gnu/lib/:/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/../../../
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpiyw0wief
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpe90uklgz
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpiyw0wief/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpiyw0wief/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/libwlroots-0.18.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpe90uklgz/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpe90uklgz/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/libwlroots-0.18.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency wlroots-0.18 found: YES 0.18.3
 Determining dependency 'wayland-server' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -220,19 +220,19 @@ stdout:
 -L/nix/store/jcc9imfj4samq59gwsskxalcd9rjicip-wayland-1.24.0/lib -lwayland-server -lm
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp69y6yokw
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpz8poukrr
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp69y6yokw/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp69y6yokw/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/jcc9imfj4samq59gwsskxalcd9rjicip-wayland-1.24.0/lib/libwayland-server.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpz8poukrr/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpz8poukrr/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/jcc9imfj4samq59gwsskxalcd9rjicip-wayland-1.24.0/lib/libwayland-server.so -Wl,--allow-shlib-undefined` -> 0
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpx6fd9vzj
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpnfp94ei0
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpx6fd9vzj/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpx6fd9vzj/output.exe -D_FILE_OFFSET_BITS=64 -O0 -lm -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpnfp94ei0/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpnfp94ei0/output.exe -D_FILE_OFFSET_BITS=64 -O0 -lm -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency wayland-server found: YES 1.24.0
 Determining dependency 'wayland-client' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -265,12 +265,12 @@ stdout:
 -L/nix/store/jcc9imfj4samq59gwsskxalcd9rjicip-wayland-1.24.0/lib -lwayland-client -lm
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpmsvjpylg
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp_4yvmf2_
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpmsvjpylg/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpmsvjpylg/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/jcc9imfj4samq59gwsskxalcd9rjicip-wayland-1.24.0/lib/libwayland-client.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp_4yvmf2_/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp_4yvmf2_/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/jcc9imfj4samq59gwsskxalcd9rjicip-wayland-1.24.0/lib/libwayland-client.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency wayland-client found: YES 1.24.0
 Determining dependency 'wayland-protocols' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -325,12 +325,12 @@ stdout:
 -L/nix/store/k1gvr4prs9736r1lhqyy1plxrrvv9b4m-libxkbcommon-1.11.0/lib -lxkbcommon
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp4zps8ybt
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmprxh638cf
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp4zps8ybt/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp4zps8ybt/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/k1gvr4prs9736r1lhqyy1plxrrvv9b4m-libxkbcommon-1.11.0/lib/libxkbcommon.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmprxh638cf/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmprxh638cf/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/k1gvr4prs9736r1lhqyy1plxrrvv9b4m-libxkbcommon-1.11.0/lib/libxkbcommon.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency xkbcommon found: YES 1.11.0
 Determining dependency 'libinput' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -363,12 +363,12 @@ stdout:
 -L/nix/store/1rsgf5h37ivryg00k3qnw5achbbpb57k-libinput-1.29.2/lib -linput
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpxwd54i8a
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp4zof32s5
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpxwd54i8a/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpxwd54i8a/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/1rsgf5h37ivryg00k3qnw5achbbpb57k-libinput-1.29.2/lib/libinput.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp4zof32s5/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp4zof32s5/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/1rsgf5h37ivryg00k3qnw5achbbpb57k-libinput-1.29.2/lib/libinput.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency libinput found: YES 1.29.2
 Determining dependency 'pixman-1' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -401,12 +401,12 @@ stdout:
 -L/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib -lpixman-1
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy9t_k62u
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpta630109
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy9t_k62u/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy9t_k62u/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/libpixman-1.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpta630109/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpta630109/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/libpixman-1.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency pixman-1 found: YES 0.46.4
 Determining dependency 'libdrm' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -439,12 +439,12 @@ stdout:
 -L/nix/store/z7xv3cj72mhagg6wri2slmxqh213fwbr-libdrm-2.4.131/lib -ldrm
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy_qe9mft
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0d0gqee_
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy_qe9mft/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy_qe9mft/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/z7xv3cj72mhagg6wri2slmxqh213fwbr-libdrm-2.4.131/lib/libdrm.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0d0gqee_/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0d0gqee_/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/z7xv3cj72mhagg6wri2slmxqh213fwbr-libdrm-2.4.131/lib/libdrm.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency libdrm found: YES 2.4.131
 Determining dependency 'freetype2' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -477,12 +477,12 @@ stdout:
 -L/nix/store/n9jq6ks3q2kkzw3davzgpsvmpb8v6siy-freetype-2.13.3/lib -lfreetype
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0gaam1n3
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpif93uosh
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0gaam1n3/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0gaam1n3/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/n9jq6ks3q2kkzw3davzgpsvmpb8v6siy-freetype-2.13.3/lib/libfreetype.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpif93uosh/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpif93uosh/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/n9jq6ks3q2kkzw3davzgpsvmpb8v6siy-freetype-2.13.3/lib/libfreetype.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency freetype2 found: YES 26.2.20
 Determining dependency 'harfbuzz' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -515,12 +515,12 @@ stdout:
 -L/nix/store/v38q8136kg0blnqbd4kz32i8h2j12hz9-harfbuzz-12.3.0/lib -lharfbuzz
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmptk26ihwp
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpopz8bj6q
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmptk26ihwp/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmptk26ihwp/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/v38q8136kg0blnqbd4kz32i8h2j12hz9-harfbuzz-12.3.0/lib/libharfbuzz.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpopz8bj6q/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpopz8bj6q/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/v38q8136kg0blnqbd4kz32i8h2j12hz9-harfbuzz-12.3.0/lib/libharfbuzz.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency harfbuzz found: YES 12.3.0
 Determining dependency 'fontconfig' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -553,28 +553,28 @@ stdout:
 -L/nix/store/n9jq6ks3q2kkzw3davzgpsvmpb8v6siy-freetype-2.13.3/lib -L/nix/store/nqx5zb6fl85lvz2mbs2rryjf8p8bhi43-fontconfig-2.17.1-lib/lib -lfontconfig -lfreetype
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp2rn4rqd3
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpv9rrtssa
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp2rn4rqd3/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp2rn4rqd3/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/nqx5zb6fl85lvz2mbs2rryjf8p8bhi43-fontconfig-2.17.1-lib/lib/libfontconfig.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpv9rrtssa/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpv9rrtssa/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/nqx5zb6fl85lvz2mbs2rryjf8p8bhi43-fontconfig-2.17.1-lib/lib/libfontconfig.so -Wl,--allow-shlib-undefined` -> 0
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpyv2n252o
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpa2zwunt3
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpyv2n252o/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpyv2n252o/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/n9jq6ks3q2kkzw3davzgpsvmpb8v6siy-freetype-2.13.3/lib/libfreetype.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpa2zwunt3/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpa2zwunt3/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/n9jq6ks3q2kkzw3davzgpsvmpb8v6siy-freetype-2.13.3/lib/libfreetype.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency fontconfig found: YES 2.17.1
 Run-time dependency threads found: YES
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpkc4x4sjc
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp3qexvw1u
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpkc4x4sjc/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpkc4x4sjc/output.exe -D_FILE_OFFSET_BITS=64 -O0 -lm -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp3qexvw1u/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp3qexvw1u/output.exe -D_FILE_OFFSET_BITS=64 -O0 -lm -Wl,--allow-shlib-undefined` -> 0
 Library m found: YES
 Determining dependency 'luajit' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -607,12 +607,12 @@ stdout:
 -L/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib -lluajit-5.1
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp83nfqdw5
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqro6_91n
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp83nfqdw5/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp83nfqdw5/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/libluajit-5.1.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqro6_91n/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpqro6_91n/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/libluajit-5.1.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency luajit found: YES 2.1.1741730670
 Determining dependency 'xwayland' with pkg-config executable '/nix/store/1nv3i8mpypy3d516f4pd95m0w72r73jy-pkg-config-wrapper-0.29.2/bin/pkg-config'
 env[PKG_CONFIG_PATH]: /nix/store/3njk768xl6ia4hdvp9gh2cqr3n5w3sya-wayland-scanner-1.24.0-dev/lib/pkgconfig:/nix/store/m1fw8l8y9ycxh5dzispbb7cwl6rra14l-python3-3.13.12/lib/pkgconfig:/nix/store/blr5zdnxfckm1690cdx6anmh3s17sx5p-wayland-1.24.0-dev/lib/pkgconfig:/nix/store/djsln0xc25vs7cng9vdd7zljb0i1flyk-wayland-protocols-1.47/share/pkgconfig:/nix/store/ixxx8nb52qxl25lix063rb35lk94p7r8-libxkbcommon-1.11.0-dev/lib/pkgconfig:/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/pkgconfig:/nix/store/kiw1h4pbwcfxcfr8ipkb8915avawq3q8-libinput-1.29.2-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/lib/pkgconfig:/nix/store/4w19rmimq1i2pljwbw8qw5jh406ald4l-systemd-minimal-libs-259-dev/share/pkgconfig:/nix/store/hvb8ymrrpp9wbrwvv0c5a0p1vi1ah16p-libevdev-1.13.4/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/lib/pkgconfig:/nix/store/2m806yclzp09qwlvbj4p93f2svspn28l-eudev-3.2.14/share/pkgconfig:/nix/store/6g92fqnx6cwza2243r78p7rqmay8ssik-libdrm-2.4.131-dev/lib/pkgconfig:/nix/store/s60msvirzaknyjgpsc8yyld1qg5i3hn5-pixman-0.46.4/lib/pkgconfig:/nix/store/374f5mfap8y7i6rzc3qnq249ym1nxfdq-freetype-2.13.3-dev/lib/pkgconfig:/nix/store/87y9237m9c9m9mxk9ajwdfmn78vz6w2y-zlib-1.3.1-dev/share/pkgconfig:/nix/store/f2zvkh7iizs8y2r443kv9c2vk4h2y90m-bzip2-1.0.8-dev/lib/pkgconfig:/nix/store/m8x59ybbd4hycpswc27vj7hjyng7q7w6-brotli-1.2.0-dev/lib/pkgconfig:/nix/store/678ygbangkyc4yb5xm7qb4psfpk3vw4c-libpng-apng-1.6.55-dev/lib/pkgconfig:/nix/store/x6y6khsf313j6sa6pjcv9ar0k4rkdph1-harfbuzz-12.3.0-dev/lib/pkgconfig:/nix/store/xcv4ngdj8sn0p7mnps6ldvgwzipnqs77-graphite2-1.3.14-dev/lib/pkgconfig:/nix/store/n1dpdbrj2s14l02b822jql8kc238zxh7-fontconfig-2.17.1-dev/lib/pkgconfig:/nix/store/7rk2ic67w77kvirns0c14151q253jxra-luajit-2.1.1741730670/lib/pkgconfig:/nix/store/ps0i6lzz3r7g77kfq6y36v98iaxg2dc1-xwayland-24.1.9/lib/pkgconfig:/nix/store/lhzl3z3rgn2zif730ww2fyb1d8gfrnk1-libxcb-1.17.0-dev/lib/pkgconfig:/nix/store/cmkhcjaky7nc8cr1j7v84rwhfmy34g4h-libxcb-wm-0.4.2-dev/lib/pkgconfig
@@ -667,12 +667,12 @@ stdout:
 -L/nix/store/m5z0dbcz2y7r0f3rill6z02msz9b46if-libxcb-1.17.0/lib -lxcb
 -----------
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpo736yml4
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy55tmp3s
 Code:
 int main(void) { return 0; }
 
 -----------
-Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpo736yml4/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpo736yml4/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/m5z0dbcz2y7r0f3rill6z02msz9b46if-libxcb-1.17.0/lib/libxcb.so -Wl,--allow-shlib-undefined` -> 0
+Command line: `gcc /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy55tmp3s/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmpy55tmp3s/output.exe -D_FILE_OFFSET_BITS=64 -O0 /nix/store/m5z0dbcz2y7r0f3rill6z02msz9b46if-libxcb-1.17.0/lib/libxcb.so -Wl,--allow-shlib-undefined` -> 0
 Run-time dependency xcb found: YES 1.17.0
 Running command: /nix/store/0550j0i8bmzxbcnzrg1g51zigj7y12ih-bash-interactive-5.3p9/bin/bash -c 'find /nix/store -maxdepth 5 -name "gl2.h" -path "*/GLES2/gl2.h" 2>/dev/null | head -1 || true'
 --- stdout ---
@@ -723,7 +723,7 @@ stdout:
 Got pkg-config variable prefix : /nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3
 Message: XWayland: enabled
 Running compile:
-Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0nrg2sx9
+Working directory:  /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppo04ew3y
 Code:
 
         #define wlr_gles2_renderer_get_buffer_fbo meson_disable_define_of_wlr_gles2_renderer_get_buffer_fbo
@@ -744,14 +744,14 @@ Code:
           return wlr_gles2_renderer_get_buffer_fbo ();
         }
 -----------
-Command line: `gcc -I/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/include/wlroots-0.18 /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0nrg2sx9/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0nrg2sx9/output.exe -D_FILE_OFFSET_BITS=64 -O0 -std=c11 /nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/libwlroots-0.18.so` -> 0
+Command line: `gcc -I/nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/include/wlroots-0.18 /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppo04ew3y/testfile.c -o /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppo04ew3y/output.exe -D_FILE_OFFSET_BITS=64 -O0 -std=c11 /nix/store/ahcw839d6ap155sbvpmpqbxzskiv7nkb-wlroots-0.18.3/lib/libwlroots-0.18.so` -> 0
 stderr:
 In file included from /nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include/bits/libc-header-start.h:33,
                  from /nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include/limits.h:26,
                  from /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/include/limits.h:210,
                  from /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/include/syslimits.h:9,
                  from /nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/lib/gcc/x86_64-unknown-linux-gnu/15.2.0/include/limits.h:34,
-                 from /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmp0nrg2sx9/testfile.c:4:
+                 from /home/jless/Code/c-cpp/c/Trixie/build/meson-private/tmppo04ew3y/testfile.c:4:
 /nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
       |    ^~~~~~~
