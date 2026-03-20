@@ -1635,7 +1635,6 @@ static void handle_new_layer_surface(struct wl_listener *listener, void *data) {
 /* ── XDG shell ──────────────────────────────────────────────────────────── */
 static void view_do_map(TrixieServer *s, TrixieView *v, Pane *p,
                         const char *app_id, const char *title) {
-  (void)v;
   lua_apply_window_rules(s, p, app_id, title);
   twm_reflow(&s->twm);
   struct wlr_scene_tree *tgt = (p->floating || p->fullscreen) ? s->layer_floating : s->layer_windows;
@@ -1650,8 +1649,6 @@ static void view_do_map(TrixieServer *s, TrixieView *v, Pane *p,
   else if (p->floating) anim_float_open(&s->anim, v->pane_id, p->rect);
   else anim_open(&s->anim, v->pane_id, p->rect);
 
-  view_apply_geom(s, v, p);
-
   if (s->foreign_toplevel_mgr) {
     v->foreign_handle = wlr_foreign_toplevel_handle_v1_create(s->foreign_toplevel_mgr);
     v->foreign_request_activate.notify = handle_foreign_toplevel_request_activate;
@@ -1659,30 +1656,44 @@ static void view_do_map(TrixieServer *s, TrixieView *v, Pane *p,
     wl_signal_add(&v->foreign_handle->events.request_activate, &v->foreign_request_activate);
     wl_signal_add(&v->foreign_handle->events.request_close,    &v->foreign_request_close);
     view_foreign_toplevel_update(s, v);
-    /* Fix 12: tell external taskbars (waybar, sfwbar) which output this
-     * window is on.  Without output_enter they show it on no monitor. */
     if (!wl_list_empty(&s->outputs)) {
       TrixieOutput *o;
       wl_list_for_each(o, &s->outputs, link) {
-        wlr_foreign_toplevel_handle_v1_output_enter(v->foreign_handle,
-                                                    o->wlr_output);
-        break; /* primary output — Trixie is single-monitor for now */
+        wlr_foreign_toplevel_handle_v1_output_enter(v->foreign_handle, o->wlr_output);
+        break;
       }
     }
   }
+
   server_focus_pane(s, v->pane_id);
+
+  /* Somewm pattern (mapnotify lines 3659-3680):
+   * 1. Apply the correct tiled/floating geometry NOW — sends configure to client.
+   * 2. Flush that configure to the client synchronously before enabling the node.
+   * 3. THEN enable the scene node so the first frame Firefox renders is at the
+   *    right size, not at its saved-session size.
+   *
+   * Without the flush, Firefox renders its first frame at its own saved geometry,
+   * we send a configure, Firefox resizes — on Wayland that resize causes Firefox
+   * to unmap+remap the surface, which fires view_handle_unmap, which removes the
+   * pane from the workspace, which hides the window permanently. */
+  view_apply_geom(s, v, p);
+  wl_display_flush_clients(s->display);
+
+  /* Enable the scene node only if this pane is on the active workspace. */
+  {
+    Workspace *ws = &s->twm.workspaces[s->twm.active_ws];
+    bool on_ws = p->sticky;
+    if (!on_ws)
+      for (int i = 0; i < ws->pane_count; i++)
+        if (ws->panes[i] == v->pane_id) { on_ws = true; break; }
+    if (on_ws && !p->minimized)
+      wlr_scene_node_set_enabled(&v->scene_tree->node, true);
+  }
+
   lua_emit_manage(s, v->pane_id);
 
-  /* Ensure the new window's scene node is enabled and positioned now,
-   * regardless of whether a Lua manage callback changed the active workspace
-   * or called other actions that would have run server_sync_windows with
-   * this pane potentially off-screen. Without this, Firefox and other clients
-   * that receive set_suspended(true) before their first frame go blank. */
-  server_sync_windows(s);
-
-  /* Fix 6: if the cursor is already inside the new window's geometry, deliver
-   * pointer focus immediately so the user doesn't have to wiggle the mouse.
-   * Pattern: somewm mapnotify lines 3728-3738. */
+  /* Fix 6: deliver pointer focus immediately if cursor is over the new window. */
   {
     struct wlr_surface *surf = NULL;
 #ifdef HAS_XWAYLAND
@@ -1902,22 +1913,11 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   wlr_xdg_toplevel_set_tiled(toplevel,
       WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
 
-  /* Fix 4 (set_bounds) + Fix 7 (set_size at new_toplevel time).
-   * Advertise content-area bounds so dialogs never spawn larger than usable
-   * space, and pre-send the tiled size so clients that process the initial
-   * configure before map (most GTK4, some Electron) get the right geometry
-   * immediately.  We re-send in initialcommitnotify if the pane geometry
-   * changed between here and the first commit. */
+  /* Advertise content-area bounds so dialogs never spawn larger than usable space. */
   {
     Rect cr = s->twm.content_rect;
-    if (cr.w > 0 && cr.h > 0) {
+    if (cr.w > 0 && cr.h > 0)
       wlr_xdg_toplevel_set_bounds(toplevel, (uint32_t)cr.w, (uint32_t)cr.h);
-      /* Send an initial size hint — not floating yet so use content rect. */
-      int bw = s->twm.border_w;
-      int cw = cr.w - bw * 2; if (cw < 1) cw = 1;
-      int ch = cr.h - bw * 2; if (ch < 1) ch = 1;
-      wlr_xdg_toplevel_set_size(toplevel, (uint32_t)cw, (uint32_t)ch);
-    }
   }
 
   TrixieView *v = calloc(1, sizeof(*v));
