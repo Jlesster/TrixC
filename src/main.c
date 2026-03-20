@@ -2513,17 +2513,11 @@ int main(int argc, char *argv[]) {
   s->foreign_toplevel_mgr  = wlr_foreign_toplevel_manager_v1_create(s->display);
   s->screencopy_mgr        = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
-  /* zwp_linux_dmabuf_v1: advertise version 3, not 5.
-   * Version 4+ introduces zwp_linux_dmabuf_feedback_v1. On nvidia Optimus
-   * (this machine: RTX 4050 + iGPU), wlroots 0.18 sends an empty or
-   * invalid feedback tranche because it cannot enumerate correct
-   * format/modifier pairs across both DRM devices. Firefox (and other
-   * clients using the feedback path) receive a protocol error and abort —
-   * the "[GFX1-]: Wayland protocol error: zwp_linux_dmabuf_v1#N still
-   * attached" message is libwayland tearing down the dying connection.
-   * Version 3 uses the legacy .format/.modifier events which wlroots 0.18
-   * handles correctly on nvidia and which every client supports. */
-  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 3, s->renderer);
+  /* zwp_linux_dmabuf_v1 version 4: supports feedback protocol without the
+   * per-surface feedback path that crashed on v5 with nvidia+wlroots 0.18.
+   * v3 disabled dmabuf entirely — Firefox then couldn't allocate GPU buffers
+   * for WebRender and failed to render anything. v4 is the correct middle ground. */
+  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 4, s->renderer);
   wlr_drm_create(s->display, s->renderer);
 #ifdef HAVE_ALPHA_MODIFIER
   wlr_alpha_modifier_v1_create(s->display);
@@ -2692,11 +2686,12 @@ int main(int argc, char *argv[]) {
   setenv("SDL_VIDEODRIVER", "wayland,x11", true);
   setenv("_JAVA_AWT_WM_NONREPARENTING", "1", true);
   setenv("MOZ_ENABLE_WAYLAND", "1", true);
-  setenv("MOZ_DBUS_REMOTE", "1", true);
-  setenv("MOZ_USE_XINPUT2", "1", false);
+  setenv("MOZ_DBUS_REMOTE",    "1", true);
+  setenv("MOZ_USE_XINPUT2",    "1", false);
   setenv("MOZ_DISABLE_RDD_SANDBOX", "1", false);
-  setenv("MOZ_WEBRENDER", "1", false);
-  setenv("MOZ_ACCELERATED", "1", false);
+  /* MOZ_WEBRENDER and MOZ_ACCELERATED intentionally not forced — Firefox
+   * autodetects GPU availability correctly. Forcing them prevents graceful
+   * fallback when dmabuf allocation fails and causes Firefox to show nothing. */
   setenv("OZONE_PLATFORM", "wayland", true);
   setenv("ELECTRON_OZONE_PLATFORM_HINT", "wayland", true);
   setenv("NIXOS_OZONE_WL", "1", true);
