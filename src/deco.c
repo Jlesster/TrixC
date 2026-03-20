@@ -4,6 +4,7 @@
  * the font, centered vertically on the top border line.  pane_bg fill so
  * it punches through the border colour cleanly.  No full-width overlay.
  */
+#include "shadow.h"
 #include "trixie.h"
 #include <drm_fourcc.h>
 #include <stdlib.h>
@@ -81,6 +82,9 @@ typedef struct {
                   text */
   int last_label_x; /* cached label node position for animation tracking */
   int last_label_y;
+  TrixieShadow *shadow;
+  int last_shadow_w;
+  int last_shadow_h;
 } DecoEntry;
 
 struct TrixieDeco {
@@ -131,9 +135,17 @@ static void destroy_rects(DecoEntry *e) {
       wlr_scene_node_destroy(&e->borders[k]->node);
       e->borders[k] = NULL;
     }
+  /* Fix 5: destroy shadow with the border rects */
+  if (e->shadow) {
+    shadow_destroy(e->shadow);
+    e->shadow = NULL;
+    e->last_shadow_w = 0;
+    e->last_shadow_h = 0;
+  }
   e->has_rects = false;
   e->layer = NULL;
 }
+
 static void ensure_rects(DecoEntry *e, struct wlr_scene_tree *layer) {
   if (e->has_rects && e->layer == layer)
     return;
@@ -154,6 +166,9 @@ static void hide_entry(DecoEntry *e) {
       wlr_scene_node_set_enabled(&e->borders[k]->node, false);
   if (e->label)
     wlr_scene_node_set_enabled(&e->label->node, false);
+  /* Fix 5: hide shadow when pane is hidden */
+  if (e->shadow)
+    shadow_set_enabled(e->shadow, false);
   e->last_enabled = false;
 }
 
@@ -430,6 +445,32 @@ void deco_update(TrixieDeco *d, TwmState *twm, AnimSet *anim,
       sc[3] *= op;
     }
     position_rects(e, shifted, fbw, tc, sc);
+
+    /* Fix 5: create or resize shadow for this pane */
+    if (cfg->shadow.enabled) {
+      int sw = shifted.w, sh_h = shifted.h;
+      if (!e->shadow) {
+        /* The shadow tree must be a child of the same layer as the
+         * border rects so it sits behind the window content. */
+        e->shadow = shadow_create(e->layer, &cfg->shadow, sw, sh_h);
+        e->last_shadow_w = sw;
+        e->last_shadow_h = sh_h;
+      } else if (e->last_shadow_w != sw || e->last_shadow_h != sh_h) {
+        shadow_resize(e->shadow, sw, sh_h);
+        e->last_shadow_w = sw;
+        e->last_shadow_h = sh_h;
+      }
+      if (e->shadow) {
+        /* Position shadow tree at the window origin (shadow.c applies
+         * the negative radius offset internally per-slice). */
+        wlr_scene_node_set_position(&e->shadow->tree->node, shifted.x,
+                                    shifted.y);
+        shadow_set_enabled(e->shadow, true);
+      }
+    } else if (e->shadow) {
+      shadow_set_enabled(e->shadow, false);
+    }
+
     if (e->label)
       wlr_scene_node_set_enabled(&e->label->node, false);
   }

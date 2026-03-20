@@ -224,6 +224,7 @@ trixie_src = [
   'src/lua.c',
   'src/main.c',
   'src/screenshot.c',
+  'src/shadow.c',
   'src/shader.c',
   'src/twm.c',
 ] + proto_headers

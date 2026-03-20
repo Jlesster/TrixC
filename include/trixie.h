@@ -143,11 +143,10 @@ typedef struct {
   Rect rect;
   Rect float_rect;
   bool floating, fullscreen, ontop;
-  bool minimized; /* hidden from display, preserved in workspace */
-  bool sticky;    /* visible on all workspaces */
+  bool minimized;
+  bool sticky;
   float rule_opacity;
-  int ws_idx; /* which workspace this pane belongs to (-1 = scratchpad) */
-  /* per-client Lua signal registry index (LUA_NOREF = none) */
+  int ws_idx;
   int lua_signals_ref;
 } Pane;
 
@@ -209,17 +208,13 @@ typedef struct {
 } TwmState;
 
 /* ── Signal system ─────────────────────────────────────────────────────── */
-/* Each signal is a named list of Lua function refs.
- * Global signals live in the server's signal table.
- * Per-object signals live in a table stored in the Lua registry,
- * referenced from the object (e.g. Pane.lua_signals_ref). */
 #define MAX_SIGNAL_NAME 64
 #define MAX_SIGNALS 64
-#define MAX_SIGNAL_CBS 16 /* handlers per signal name */
+#define MAX_SIGNAL_CBS 16
 
 typedef struct {
   char name[MAX_SIGNAL_NAME];
-  int fn_refs[MAX_SIGNAL_CBS]; /* LUA_NOREF = empty slot */
+  int fn_refs[MAX_SIGNAL_CBS];
   int count;
 } LuaSignal;
 
@@ -349,7 +344,7 @@ typedef struct {
   float width_pct, height_pct;
 } ScratchpadCfg;
 
-/* ── Bar config — minimal, Lua owns the rest ───────────────────────────── */
+/* ── Bar config ────────────────────────────────────────────────────────── */
 typedef enum { BAR_TOP = 0, BAR_BOTTOM } BarPos;
 
 typedef struct {
@@ -357,14 +352,14 @@ typedef struct {
   int height;
 } BarCfg;
 
-/* ── Canvas — FreeType/HarfBuzz pixel buffer exposed to Lua ───────────── */
+/* ── Canvas ────────────────────────────────────────────────────────────── */
 typedef struct {
   uint32_t *px;
-  int w, h;   /* buffer dimensions  */
-  int stride; /* px per row (== w)  */
+  int w, h;
+  int stride;
 } Canvas;
 
-/* ── Wibox — a Lua-owned bar/widget surface ────────────────────────────── */
+/* ── Wibox ─────────────────────────────────────────────────────────────── */
 #define MAX_WIBOXES 8
 
 typedef struct TrixieWibox {
@@ -372,11 +367,11 @@ typedef struct TrixieWibox {
   Canvas canvas;
   int x, y, w, h;
   bool visible;
-  int lua_draw_ref; /* Lua draw callback ref          */
+  int lua_draw_ref;
   BarPos position;
   bool dirty;
-  lua_State *L;         /* current Lua state              */
-  void **lua_ud_wb_ptr; /* &WiboxUD.wb — nulled on reset  */
+  lua_State *L;
+  void **lua_ud_wb_ptr;
 } TrixieWibox;
 
 /* ── Colors ────────────────────────────────────────────────────────────── */
@@ -394,13 +389,21 @@ typedef struct {
   bool layout_set, ratio_set;
 } WsCfgOverride;
 
-/* ── Main config — thin C layer, Lua owns everything else ─────────────── */
+/* ── Shadow config (fix 5) ─────────────────────────────────────────────── */
 typedef struct {
-  /* Font — needed before Lua runs for wibox canvas */
+  bool enabled;
+  int radius;    /* blur radius in px            */
+  int offset_x;  /* shadow x offset              */
+  int offset_y;  /* shadow y offset              */
+  float opacity; /* 0.0–1.0                      */
+  Color color;   /* shadow colour (usually black)*/
+} ShadowCfg;
+
+/* ── Main config ───────────────────────────────────────────────────────── */
+typedef struct {
   char font_path[256], font_path_bold[256], font_path_italic[256];
   float font_size;
 
-  /* Core geometry defaults — overridable from Lua */
   int gap, outer_gap, border_width, corner_radius;
   bool smart_gaps, no_title, xwayland;
 
@@ -426,7 +429,6 @@ typedef struct {
   MonitorCfg monitors[MAX_MONITORS];
   int monitor_count;
 
-  /* Win rules — also settable from Lua via trixie.rules */
   WinRule win_rules[MAX_WIN_RULES];
   int win_rule_count;
 
@@ -442,11 +444,16 @@ typedef struct {
   int exec_count;
 
   char build_dir[256];
+
+  /* Fix 5: shadow config */
+  ShadowCfg shadow;
 } Config;
 
 /* ── Bar / Deco forward decls ──────────────────────────────────────────── */
 typedef struct TrixieBar TrixieBar;
 typedef struct TrixieDeco TrixieDeco;
+
+/* shadow.h is included below — it provides the TrixieShadow forward decl. */
 
 /* ── Layer surface ─────────────────────────────────────────────────────── */
 typedef struct TrixieServer TrixieServer;
@@ -472,9 +479,7 @@ typedef struct {
   TrixieWibox *wiboxes[MAX_WIBOXES];
   int wibox_count;
   bool was_animating, deco_dirty;
-  /* per-output saturation shader pipeline */
   TrixieShader shader;
-  /* per-output Lua signal table ref */
   int lua_signals_ref;
 } TrixieOutput;
 
@@ -496,17 +501,22 @@ typedef struct TrixieView {
   struct wlr_scene_tree *scene_tree;
   PaneId pane_id;
   bool mapped;
+
+  /* Fix 1: configure_resent — prevents infinite configure loop with terminals
+   * and Electron apps that render at a different size than we requested.
+   * Set to true after we re-send a configure for a mismatched size; cleared
+   * once the client's rendered size matches what we asked for. */
+  bool configure_resent;
+
   struct wl_listener map, unmap, destroy, commit;
   struct wl_listener request_fullscreen, set_title, set_app_id;
   struct wlr_foreign_toplevel_handle_v1 *foreign_handle;
   struct wl_listener foreign_request_activate, foreign_request_close;
   struct wl_list link;
   bool is_xwayland;
-  bool xw_scene_attached;   /* true once wlr_scene_surface_create has run */
-  bool xw_commit_connected; /* true once xs->surface->events.{map,unmap,commit}
-                               are wired */
-  bool xw_surface_listeners_pending; /* set when xs->surface was NULL at
-                                        new_surface time */
+  bool xw_scene_attached;
+  bool xw_commit_connected;
+  bool xw_surface_listeners_pending;
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else
@@ -555,9 +565,9 @@ struct TrixieServer {
   struct wlr_scene_tree *layer_chrome;
   struct wlr_scene_tree *layer_floating;
   struct wlr_scene_tree *layer_chrome_floating;
-  struct wlr_scene_tree *layer_top; /* ZWLR_LAYER_SHELL_V1_LAYER_TOP */
+  struct wlr_scene_tree *layer_top;
   struct wlr_scene_tree *layer_overlay;
-  struct wlr_scene_tree *layer_lock; /* session-lock: always topmost */
+  struct wlr_scene_tree *layer_lock;
 
   struct wl_listener new_output, new_input, new_xdg_surface, new_xdg_popup;
   struct wl_listener new_layer_surface, new_deco;
@@ -570,14 +580,12 @@ struct TrixieServer {
   struct wl_listener cursor_shape_request;
   struct wl_listener idle_inhibit_new;
 
-  /* output management v1 — kanshi/wdisplays */
 #if __has_include(<wlr/types/wlr_output_management_v1.h>)
   struct wlr_output_manager_v1 *output_manager_v1;
   struct wl_listener output_mgr_apply;
   struct wl_listener output_mgr_test;
 #endif
 
-  /* session lock — swaylock / hyprlock */
 #if __has_include(<wlr/types/wlr_session_lock_manager_v1.h>)
   struct wlr_session_lock_manager_v1 *session_lock_mgr;
   struct wlr_session_lock_v1 *session_lock;
@@ -588,10 +596,8 @@ struct TrixieServer {
 
   struct wl_list outputs, views, keyboards, layer_surfaces, pointers;
 
-  /* Per-output layer exclusive zones (replaces static s_bar_top/bot_h) */
   int layer_excl_top, layer_excl_bottom;
 
-  /* Focus history ring for sane focus-on-close */
   PaneId focus_history[16];
   int focus_history_head;
 
@@ -617,13 +623,9 @@ struct TrixieServer {
   char reload_new_bin[512];
   char **saved_argv;
 
-  /* ── Lua state ─────────────────────────────────────────────────────── */
   lua_State *L;
-
-  /* Global signal table — connect_signal/emit_signal targets */
   LuaSignalTable signals;
 
-  /* Legacy C-config keybinds (still supported alongside Lua trixie.key) */
   struct {
     uint32_t mods;
     xkb_keysym_t sym;
@@ -631,7 +633,6 @@ struct TrixieServer {
   } lua_binds[MAX_KEYBINDS];
   int lua_bind_count;
 
-  /* Lua window rules (trixie.rules.rules table) */
   struct {
     char app_id[128], title[128];
     int workspace;
@@ -722,8 +723,7 @@ Rect anim_get_rect(AnimSet *, PaneId, Rect fallback);
 float anim_get_opacity(AnimSet *, PaneId, float fallback);
 bool anim_is_closing(AnimSet *, PaneId);
 bool anim_any(AnimSet *);
-bool anim_any_for_pane(AnimSet *,
-                       PaneId); /* true if any anim active for this pane */
+bool anim_any_for_pane(AnimSet *, PaneId);
 int anim_ws_incoming_x(AnimSet *);
 int anim_ws_outgoing_x(AnimSet *);
 void anim_workspace_transition(AnimSet *, WsDir);
@@ -736,7 +736,6 @@ void config_apply_fallback_keybinds(Config *);
 void config_set_theme(Config *, const char *name);
 
 /* ── Canvas / font ─────────────────────────────────────────────────────── */
-/* Implemented in bar.c — used by wibox and deco */
 bool canvas_font_init(const char *path, const char *bold, const char *italic,
                       float size_pt);
 bool canvas_font_reload(const char *path, const char *bold, const char *italic,
@@ -757,12 +756,10 @@ void wibox_destroy(TrixieWibox *wb);
 void wibox_mark_dirty(TrixieWibox *wb);
 void wibox_commit(TrixieWibox *wb);
 void wibox_lua_draw(TrixieWibox *wb, lua_State *L);
-/* Destroy all wiboxes — only call from output_handle_destroy / shutdown */
 void wibox_clear_output(TrixieOutput *o);
-/* Reset callbacks without destroying scene nodes — safe to call mid-loop */
 void wibox_reset_output(TrixieOutput *o, lua_State *L);
 
-/* ── Bar (thin wrapper kept for output_handle_frame) ──────────────────── */
+/* ── Bar ───────────────────────────────────────────────────────────────── */
 TrixieBar *bar_create(struct wlr_scene_tree *, int w, int h, const Config *);
 bool bar_update(TrixieBar *, TwmState *, const Config *);
 void bar_destroy(TrixieBar *);
@@ -776,6 +773,10 @@ TrixieDeco *deco_create(struct wlr_scene_tree *tiled,
 void deco_destroy(TrixieDeco *);
 void deco_mark_dirty(TrixieDeco *);
 void deco_update(TrixieDeco *, TwmState *, AnimSet *, const Config *);
+void deco_complete_update(TrixieDeco *, TwmState *, AnimSet *, const Config *);
+
+/* ── Shadow (fix 5) — full API is in shadow.h ──────────────────────────── */
+#include "shadow.h"
 
 /* ── IPC ───────────────────────────────────────────────────────────────── */
 void ipc_dispatch(TrixieServer *, const char *line, char *reply, size_t sz);
@@ -785,20 +786,12 @@ void ipc_push_workspace_changed(TrixieServer *);
 void ipc_push_title_changed(TrixieServer *, PaneId);
 
 /* ── Signal system ─────────────────────────────────────────────────────── */
-/* C-side helpers for emitting signals into Lua */
 void lua_signal_init(LuaSignalTable *t);
-/* Connect fn (at stack top) to named signal in table.
- * Pops the function. Returns the fn_ref. */
 int lua_signal_connect(lua_State *L, LuaSignalTable *t, const char *name);
-/* Disconnect a specific fn_ref from a signal. */
 void lua_signal_disconnect(lua_State *L, LuaSignalTable *t, const char *name,
                            int fn_ref);
-/* Emit: push args onto stack before calling, pass nargs count.
- * All args are popped. */
 void lua_signal_emit(lua_State *L, LuaSignalTable *t, const char *name,
                      int nargs);
-/* Emit a signal on a per-object table stored at registry[obj_ref].
- * Creates the table if obj_ref == LUA_NOREF (and writes back the new ref). */
 void lua_signal_emit_obj(lua_State *L, int *obj_ref, const char *name,
                          int nargs);
 
@@ -809,8 +802,6 @@ void lua_destroy(TrixieServer *);
 bool lua_dispatch_key(TrixieServer *, uint32_t mods, xkb_keysym_t sym);
 void lua_apply_window_rules(TrixieServer *, Pane *, const char *app_id,
                             const char *title);
-
-/* Signal firing — called from main.c / view handlers */
 void lua_emit_manage(TrixieServer *, PaneId);
 void lua_emit_unmanage(TrixieServer *, PaneId);
 void lua_emit_focus(TrixieServer *);
@@ -825,7 +816,6 @@ void lua_emit_startup(TrixieServer *);
 /* ── Server ────────────────────────────────────────────────────────────── */
 void server_spawn(TrixieServer *, const char *cmd);
 void server_dispatch_action(TrixieServer *, Action *);
-
 void server_sync_focus(TrixieServer *s);
 void server_sync_windows(TrixieServer *);
 void server_request_redraw(TrixieServer *);
@@ -841,21 +831,11 @@ void server_init_config_watch(TrixieServer *);
 TrixieView *view_from_pane(TrixieServer *, PaneId);
 void server_schedule_reload(TrixieServer *s);
 void server_set_bar_inset(TrixieServer *s, int h, bool at_bottom);
-
-/* Reload */
 void reload_config(TrixieServer *s);
 void lua_register_reload(TrixieServer *s);
-
-/* Deco */
-void deco_complete_update(TrixieDeco *d, TwmState *twm, AnimSet *anim,
-                          const Config *cfg);
-
-/* Lua layout/button/gesture dispatch */
 bool lua_call_layout(TrixieServer *s, const char *name, PaneId *panes,
                      int npanes, Rect area, int gap);
 bool lua_dispatch_button(TrixieServer *s, uint32_t mods, uint32_t btn,
                          bool pressed);
 bool lua_dispatch_gesture(TrixieServer *s, const char *spec);
-
-/* View geometry helper exposed for lua.c client_geometry */
 void view_apply_geom_pub(TrixieServer *s, TrixieView *v, Pane *p);
