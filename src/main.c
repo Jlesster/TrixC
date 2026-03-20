@@ -540,8 +540,12 @@ void server_sync_windows(TrixieServer *s) {
       if (v->is_xwayland && v->xwayland_surface)
         wlr_xwayland_surface_activate(v->xwayland_surface, false);
 #endif
-      /* Fix 2: suspend off-screen XDG clients so they stop rendering. */
-      if (!v->is_xwayland && v->xdg_toplevel)
+      /* Only suspend if the view is not in the middle of its open animation.
+       * Suspending a view that just mapped (anim_open in flight) makes Firefox
+       * and other clients go blank and appear to close immediately — the client
+       * receives suspended=true before it has committed its first real frame. */
+      if (!v->is_xwayland && v->xdg_toplevel &&
+          !anim_any_for_pane(&s->anim, v->pane_id))
         wlr_xdg_toplevel_set_suspended(v->xdg_toplevel, true);
       continue;
     }
@@ -1668,6 +1672,13 @@ static void view_do_map(TrixieServer *s, TrixieView *v, Pane *p,
   }
   server_focus_pane(s, v->pane_id);
   lua_emit_manage(s, v->pane_id);
+
+  /* Ensure the new window's scene node is enabled and positioned now,
+   * regardless of whether a Lua manage callback changed the active workspace
+   * or called other actions that would have run server_sync_windows with
+   * this pane potentially off-screen. Without this, Firefox and other clients
+   * that receive set_suspended(true) before their first frame go blank. */
+  server_sync_windows(s);
 
   /* Fix 6: if the cursor is already inside the new window's geometry, deliver
    * pointer focus immediately so the user doesn't have to wiggle the mouse.
