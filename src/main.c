@@ -80,7 +80,6 @@
 #include <wlr/types/wlr_drm_lease_v1.h>
 #define HAVE_DRM_LEASE_V1 1
 #endif
-#include "shader.h"
 #include <wlr/render/gles2.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
@@ -392,6 +391,14 @@ static void view_apply_geom(TrixieServer *s, TrixieView *v, Pane *p) {
 #endif
   if (!v->xdg_toplevel || !v->xdg_toplevel->base) return;
   if (v->xdg_toplevel->base->initial_commit) return;
+  /* Fix 11: skip if an animation is in flight — server_sync_windows drives
+   * geometry during animation; issuing another set_size here would flood the
+   * client with configures (Firefox crash on rapid reflows). */
+  if (anim_any_for_pane(&s->anim, v->pane_id)) return;
+  /* Skip if size already matches to avoid redundant configures. */
+  struct wlr_box cur;
+  wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &cur);
+  if (cur.width == cw && cur.height == ch) return;
   wlr_xdg_toplevel_set_size(v->xdg_toplevel, (uint32_t)cw, (uint32_t)ch);
 }
 
@@ -1245,24 +1252,78 @@ static void handle_request_set_primary_selection(struct wl_listener *listener, v
 }
 
 /* ── XDG Popups ─────────────────────────────────────────────────────────── */
-static void handle_new_xdg_popup(struct wl_listener *listener, void *data) {
-  TrixieServer *s = CONTAINER_OF(listener, TrixieServer, new_xdg_popup);
-  struct wlr_xdg_popup *popup = data;
+
+/* Fix 1: popup state — we register the commit listener in createpopup but
+ * defer scene tree creation to the first (initial) commit, exactly when the
+ * popup's parent-relative position and size are finalised.  Creating the
+ * scene tree immediately in new_popup fires before that and produces
+ * flicker / wrong-position popups (right-click menus, tooltips, IME).
+ * Pattern: somewm commitpopup / destroypopup. */
+typedef struct {
+  TrixieServer *server;
+  struct wlr_xdg_popup *popup;
+  struct wl_listener commit;
+  struct wl_listener destroy;
+} TrixiePopup;
+
+static void popup_handle_destroy(struct wl_listener *listener, void *data) {
+  (void)data;
+  TrixiePopup *p = CONTAINER_OF(listener, TrixiePopup, destroy);
+  wl_list_remove(&p->commit.link);
+  wl_list_remove(&p->destroy.link);
+  free(p);
+}
+
+static void popup_handle_commit(struct wl_listener *listener, void *data) {
+  (void)data;
+  TrixiePopup *tp = CONTAINER_OF(listener, TrixiePopup, commit);
+  TrixieServer *s = tp->server;
+  struct wlr_xdg_popup *popup = tp->popup;
+
+  if (!popup->base->initial_commit)
+    return;
+
+  /* Find the parent scene tree — walk up through nested popups. */
   struct wlr_scene_tree *parent_tree = s->layer_floating;
   if (popup->parent) {
-    struct wlr_xdg_surface *px = wlr_xdg_surface_try_from_wlr_surface(popup->parent);
-    if (px && px->data) parent_tree = px->data;
+    struct wlr_xdg_surface *px =
+        wlr_xdg_surface_try_from_wlr_surface(popup->parent);
+    if (px && px->data)
+      parent_tree = px->data;
   }
-  struct wlr_scene_tree *tree = wlr_scene_xdg_surface_create(parent_tree, popup->base);
-  if (!tree) return;
+
+  struct wlr_scene_tree *tree =
+      wlr_scene_xdg_surface_create(parent_tree, popup->base);
+  if (!tree) {
+    wlr_xdg_popup_destroy(popup);
+    return;
+  }
   popup->base->data = tree;
-  struct wlr_output *out = wlr_output_layout_output_at(s->output_layout, s->cursor->x, s->cursor->y);
+
+  /* Unconstrain to the output the popup appears on. */
+  struct wlr_output *out =
+      wlr_output_layout_output_at(s->output_layout, s->cursor->x, s->cursor->y);
   if (out) {
     struct wlr_box ob;
     wlr_output_layout_get_box(s->output_layout, out, &ob);
     wlr_xdg_popup_unconstrain_from_box(popup, &ob);
   }
   wlr_scene_node_raise_to_top(&tree->node);
+}
+
+static void handle_new_xdg_popup(struct wl_listener *listener, void *data) {
+  TrixieServer *s = CONTAINER_OF(listener, TrixieServer, new_xdg_popup);
+  struct wlr_xdg_popup *popup = data;
+
+  TrixiePopup *tp = calloc(1, sizeof(*tp));
+  if (!tp) return;
+  tp->server = s;
+  tp->popup  = popup;
+
+  tp->commit.notify  = popup_handle_commit;
+  tp->destroy.notify = popup_handle_destroy;
+  wl_signal_add(&popup->base->surface->events.commit, &tp->commit);
+  wl_signal_add(&popup->events.destroy,               &tp->destroy);
 }
 
 /* ── Drag and drop ──────────────────────────────────────────────────────── */
@@ -1594,9 +1655,44 @@ static void view_do_map(TrixieServer *s, TrixieView *v, Pane *p,
     wl_signal_add(&v->foreign_handle->events.request_activate, &v->foreign_request_activate);
     wl_signal_add(&v->foreign_handle->events.request_close,    &v->foreign_request_close);
     view_foreign_toplevel_update(s, v);
+    /* Fix 12: tell external taskbars (waybar, sfwbar) which output this
+     * window is on.  Without output_enter they show it on no monitor. */
+    if (!wl_list_empty(&s->outputs)) {
+      TrixieOutput *o;
+      wl_list_for_each(o, &s->outputs, link) {
+        wlr_foreign_toplevel_handle_v1_output_enter(v->foreign_handle,
+                                                    o->wlr_output);
+        break; /* primary output — Trixie is single-monitor for now */
+      }
+    }
   }
   server_focus_pane(s, v->pane_id);
   lua_emit_manage(s, v->pane_id);
+
+  /* Fix 6: if the cursor is already inside the new window's geometry, deliver
+   * pointer focus immediately so the user doesn't have to wiggle the mouse.
+   * Pattern: somewm mapnotify lines 3728-3738. */
+  {
+    struct wlr_surface *surf = NULL;
+#ifdef HAS_XWAYLAND
+    if (v->is_xwayland && v->xwayland_surface)
+      surf = v->xwayland_surface->surface;
+    else
+#endif
+    if (v->xdg_toplevel)
+      surf = v->xdg_toplevel->base->surface;
+    if (surf && surf->mapped) {
+      double cx = s->cursor->x, cy = s->cursor->y;
+      if (cx >= p->rect.x && cx < p->rect.x + p->rect.w &&
+          cy >= p->rect.y && cy < p->rect.y + p->rect.h) {
+        double sx = cx - p->rect.x - s->twm.border_w;
+        double sy = cy - p->rect.y - s->twm.border_w;
+        wlr_seat_pointer_notify_enter(s->seat, surf, sx, sy);
+        wlr_seat_pointer_notify_motion(s->seat, 0, sx, sy);
+      }
+    }
+  }
+
   server_request_redraw(s);
 }
 
@@ -1650,11 +1746,16 @@ static void view_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, destroy);
   TrixieServer *s = v->server;
   twm_close(&s->twm, v->pane_id);
+  /* Fix 8: null the scene node's data pointer before freeing so cursor
+   * hit-tests (wlr_scene_node_at → node->data) can't return a dangling
+   * TrixieView pointer after this view is freed. */
+  if (v->scene_tree)
+    v->scene_tree->node.data = NULL;
   wl_list_remove(&v->map.link); wl_list_remove(&v->unmap.link);
   wl_list_remove(&v->destroy.link); wl_list_remove(&v->commit.link);
   wl_list_remove(&v->request_fullscreen.link);
+  wl_list_remove(&v->request_maximize.link);
   wl_list_remove(&v->set_app_id.link); wl_list_remove(&v->set_title.link);
-  /* Only remove foreign toplevel listeners if they were actually registered. */
   if (v->foreign_handle) {
     wl_list_remove(&v->foreign_request_activate.link);
     wl_list_remove(&v->foreign_request_close.link);
@@ -1670,8 +1771,39 @@ static void view_handle_commit(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, commit);
   TrixieServer *s = v->server;
-  if (!s->fractional_scale_mgr || !v->xdg_toplevel || !v->xdg_toplevel->base->surface) return;
+  if (!v->xdg_toplevel || !v->xdg_toplevel->base->surface) return;
   struct wlr_surface *surf = v->xdg_toplevel->base->surface;
+
+  /* Fix 2: for tiled clients, if the client just committed a size that
+   * differs from what we asked for, re-send the correct size once.  This
+   * catches Firefox using its saved session geometry on relaunch and
+   * Electron apps that ignore the initial configure.  Uses the same
+   * configure_resent guard as server_sync_windows so we don't loop. */
+  if (!v->xdg_toplevel->base->initial_commit) {
+    Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
+    if (p && !p->floating && !p->fullscreen) {
+      int bw = s->twm.border_w;
+      int want_w = p->rect.w - bw * 2; if (want_w < 1) want_w = 1;
+      int want_h = p->rect.h - bw * 2; if (want_h < 1) want_h = 1;
+      struct wlr_box cur;
+      wlr_xdg_surface_get_geometry(v->xdg_toplevel->base, &cur);
+      if (cur.width != want_w || cur.height != want_h) {
+        if (v->configure_resent) {
+          v->configure_resent = false; /* accept mismatch, stop loop */
+        } else {
+          v->configure_resent =
+              (cur.width  == (int)v->xdg_toplevel->current.width &&
+               cur.height == (int)v->xdg_toplevel->current.height);
+          wlr_xdg_toplevel_set_size(v->xdg_toplevel,
+                                    (uint32_t)want_w, (uint32_t)want_h);
+        }
+      } else {
+        v->configure_resent = false;
+      }
+    }
+  }
+
+  if (!s->fractional_scale_mgr) return;
   TrixieOutput *o;
   wl_list_for_each(o, &s->outputs, link) {
     struct wlr_output_layout_output *lo = wlr_output_layout_get(s->output_layout, o->wlr_output);
@@ -1701,6 +1833,18 @@ static void view_handle_request_fullscreen(struct wl_listener *listener, void *d
   TrixieView *v = CONTAINER_OF(listener, TrixieView, request_fullscreen);
   Action a = {.kind = ACTION_FULLSCREEN};
   server_dispatch_action(v->server, &a);
+}
+
+/* Fix 5: xdg-shell protocol requires the compositor to ack every
+ * request_maximize even if it doesn't honour it — some clients (Ghostty,
+ * Electron) hang waiting for the configure.  Send an empty schedule so the
+ * serial advances and the client unblocks.  Pattern: somewm line 3753. */
+static void view_handle_request_maximize(struct wl_listener *listener, void *data) {
+  (void)data;
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, request_maximize);
+  if (v->xdg_toplevel &&
+      wl_resource_get_version(v->xdg_toplevel->resource) >= 2)
+    wlr_xdg_surface_schedule_configure(v->xdg_toplevel->base);
 }
 
 static void view_handle_set_title(struct wl_listener *listener, void *data) {
@@ -1744,12 +1888,22 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   wlr_xdg_toplevel_set_tiled(toplevel,
       WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT);
 
-  /* Fix 4: advertise content-area bounds so dialogs and preference windows
-   * never spawn larger than the available space. */
+  /* Fix 4 (set_bounds) + Fix 7 (set_size at new_toplevel time).
+   * Advertise content-area bounds so dialogs never spawn larger than usable
+   * space, and pre-send the tiled size so clients that process the initial
+   * configure before map (most GTK4, some Electron) get the right geometry
+   * immediately.  We re-send in initialcommitnotify if the pane geometry
+   * changed between here and the first commit. */
   {
     Rect cr = s->twm.content_rect;
-    if (cr.w > 0 && cr.h > 0)
+    if (cr.w > 0 && cr.h > 0) {
       wlr_xdg_toplevel_set_bounds(toplevel, (uint32_t)cr.w, (uint32_t)cr.h);
+      /* Send an initial size hint — not floating yet so use content rect. */
+      int bw = s->twm.border_w;
+      int cw = cr.w - bw * 2; if (cw < 1) cw = 1;
+      int ch = cr.h - bw * 2; if (ch < 1) ch = 1;
+      wlr_xdg_toplevel_set_size(toplevel, (uint32_t)cw, (uint32_t)ch);
+    }
   }
 
   TrixieView *v = calloc(1, sizeof(*v));
@@ -1770,6 +1924,7 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   v->destroy.notify          = view_handle_destroy;
   v->commit.notify           = view_handle_commit;
   v->request_fullscreen.notify = view_handle_request_fullscreen;
+  v->request_maximize.notify   = view_handle_request_maximize;
   v->set_title.notify        = view_handle_set_title;
   v->set_app_id.notify       = view_handle_set_app_id;
 
@@ -1778,6 +1933,7 @@ static void handle_new_xdg_surface(struct wl_listener *listener, void *data) {
   wl_signal_add(&surface->events.destroy,                &v->destroy);
   wl_signal_add(&surface->surface->events.commit,        &v->commit);
   wl_signal_add(&toplevel->events.request_fullscreen,    &v->request_fullscreen);
+  wl_signal_add(&toplevel->events.request_maximize,      &v->request_maximize);
   wl_signal_add(&toplevel->events.set_title,             &v->set_title);
   wl_signal_add(&toplevel->events.set_app_id,            &v->set_app_id);
   wl_list_insert(&s->views, &v->link);
@@ -1831,7 +1987,10 @@ static void xwayland_handle_unmap(struct wl_listener *listener, void *data) {
     wlr_foreign_toplevel_handle_v1_destroy(v->foreign_handle);
     v->foreign_handle = NULL;
   }
-  if (v->xwayland_surface->override_redirect) { wlr_scene_node_set_enabled(&v->scene_tree->node, false); return; }
+  if (v->xwayland_surface->override_redirect) {
+    wlr_scene_node_set_enabled(&v->scene_tree->node, false);
+    return;
+  }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (p) {
     bool is_scratch = false;
@@ -1857,10 +2016,18 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, destroy);
   TrixieServer *s = v->server;
   if (v->pane_id) twm_close(&s->twm, v->pane_id);
-  wl_list_remove(&v->destroy.link); wl_list_remove(&v->request_fullscreen.link);
-  wl_list_remove(&v->set_title.link); wl_list_remove(&v->set_app_id.link);
-  if (v->xw_commit_connected) { wl_list_remove(&v->map.link); wl_list_remove(&v->unmap.link); wl_list_remove(&v->commit.link); }
-  /* Only remove foreign toplevel listeners if they were actually registered. */
+  /* Fix 8: null scene data before free to prevent stale pointer UAF. */
+  if (v->scene_tree) v->scene_tree->node.data = NULL;
+  wl_list_remove(&v->destroy.link);
+  wl_list_remove(&v->request_fullscreen.link);
+  wl_list_remove(&v->xw_configure.link);
+  wl_list_remove(&v->set_title.link);
+  wl_list_remove(&v->set_app_id.link);
+  if (v->xw_commit_connected) {
+    wl_list_remove(&v->map.link);
+    wl_list_remove(&v->unmap.link);
+    wl_list_remove(&v->commit.link);
+  }
   if (v->foreign_handle) {
     wl_list_remove(&v->foreign_request_activate.link);
     wl_list_remove(&v->foreign_request_close.link);
@@ -1904,6 +2071,57 @@ static void xwayland_handle_request_fullscreen(struct wl_listener *listener, voi
   Action a = {.kind = ACTION_FULLSCREEN};
   server_dispatch_action(v->server, &a);
 }
+
+/* Fix 4: honour XWayland configure requests so Steam menus, Wine dialogs,
+ * and Java Swing windows don't silently land at (0,0).
+ * - override_redirect windows: ack immediately with their requested geometry.
+ * - floating managed windows: ack and update our record.
+ * - tiled managed windows: ack with our current geometry (don't let the
+ *   client move/resize itself out from under the tiling engine).
+ * Pattern: somewm configurex11, lines 6389-6406. */
+static void xwayland_handle_configure(struct wl_listener *listener, void *data) {
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, xw_configure);
+  TrixieServer *s = v->server;
+#ifdef HAS_XWAYLAND
+  struct wlr_xwayland_surface *xs = v->xwayland_surface;
+  struct wlr_xwayland_surface_configure_event *ev = data;
+
+  if (!xs->surface || !xs->surface->mapped) {
+    /* Not yet mapped — ack whatever the client asked for. */
+    wlr_xwayland_surface_configure(xs, ev->x, ev->y, ev->width, ev->height);
+    return;
+  }
+
+  if (xs->override_redirect) {
+    /* Unmanaged: follow the client's requested position/size exactly. */
+    wlr_scene_node_set_position(&v->scene_tree->node, ev->x, ev->y);
+    wlr_xwayland_surface_configure(xs, ev->x, ev->y, ev->width, ev->height);
+    return;
+  }
+
+  Pane *p = v->pane_id ? twm_pane_by_id(&s->twm, v->pane_id) : NULL;
+  if (p && p->floating) {
+    /* Floating managed window: honour position + size. */
+    p->rect.x = ev->x; p->rect.y = ev->y;
+    p->rect.w = ev->width + s->twm.border_w * 2;
+    p->rect.h = ev->height + s->twm.border_w * 2;
+    wlr_xwayland_surface_configure(xs, ev->x, ev->y, ev->width, ev->height);
+    server_sync_windows(s);
+  } else if (p) {
+    /* Tiled: ack with our geometry so the client stays in place. */
+    int bw = s->twm.border_w;
+    int cw = p->rect.w - bw * 2; if (cw < 1) cw = 1;
+    int ch = p->rect.h - bw * 2; if (ch < 1) ch = 1;
+    wlr_xwayland_surface_configure(xs,
+        (int16_t)(p->rect.x + bw), (int16_t)(p->rect.y + bw),
+        (uint16_t)cw, (uint16_t)ch);
+  } else {
+    wlr_xwayland_surface_configure(xs, ev->x, ev->y, ev->width, ev->height);
+  }
+#else
+  (void)s; (void)data;
+#endif
+}
 static void xwayland_handle_set_title(struct wl_listener *listener, void *data) {
   (void)data;
   TrixieView *v = CONTAINER_OF(listener, TrixieView, set_title);
@@ -1939,10 +2157,12 @@ static void handle_new_xwayland_surface(struct wl_listener *listener, void *data
   v->destroy.notify          = xwayland_handle_destroy;
   v->commit.notify           = xwayland_handle_commit;
   v->request_fullscreen.notify = xwayland_handle_request_fullscreen;
+  v->xw_configure.notify       = xwayland_handle_configure;
   v->set_title.notify        = xwayland_handle_set_title;
   v->set_app_id.notify       = xwayland_handle_set_class;
   wl_signal_add(&xs->events.destroy,            &v->destroy);
   wl_signal_add(&xs->events.request_fullscreen, &v->request_fullscreen);
+  wl_signal_add(&xs->events.request_configure,  &v->xw_configure);
   wl_signal_add(&xs->events.set_title,          &v->set_title);
   wl_signal_add(&xs->events.set_class,          &v->set_app_id);
   wl_list_insert(&s->views, &v->link);
@@ -2242,9 +2462,9 @@ int main(int argc, char *argv[]) {
   s->screencopy_mgr        = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
   /* Fix A: link dmabuf to the scene graph so wlr_scene tracks buffer
-   * lifetimes.  Without this, Firefox (and any dmabuf client) destroys its
-   * zwp_linux_dmabuf_v1 proxy while the scene still holds a reference,
-   * causing "proxy destroyed while still attached" errors. */
+   * lifetimes. Without this Firefox destroys its zwp_linux_dmabuf_v1 proxy
+   * while the scene still holds a reference → "proxy destroyed while still
+   * attached". Pattern from somewm lines 5104-5111. */
   {
     struct wlr_linux_dmabuf_v1 *dmabuf =
         wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer);
@@ -2261,6 +2481,10 @@ int main(int argc, char *argv[]) {
     if (drm_fd >= 0) wlr_linux_drm_syncobj_manager_v1_create(s->display, 1, drm_fd);
   }
 #endif
+  /* Fix 9: wlr_scene_set_gamma_control_manager_v1 only exists in wlroots
+   * 0.19+.  On 0.18 we still create the protocol object so clients (wlsunset,
+   * gammastep) can connect without error — scene integration and actual colour
+   * temperature changes require upgrading wlroots. */
   wlr_gamma_control_manager_v1_create(s->display);
 
   s->idle_inhibit_mgr = wlr_idle_inhibit_v1_create(s->display);

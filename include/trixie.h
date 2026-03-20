@@ -509,7 +509,8 @@ typedef struct TrixieView {
   bool configure_resent;
 
   struct wl_listener map, unmap, destroy, commit;
-  struct wl_listener request_fullscreen, set_title, set_app_id;
+  struct wl_listener request_fullscreen, request_maximize;
+  struct wl_listener set_title, set_app_id;
   struct wlr_foreign_toplevel_handle_v1 *foreign_handle;
   struct wl_listener foreign_request_activate, foreign_request_close;
   struct wl_list link;
@@ -517,6 +518,7 @@ typedef struct TrixieView {
   bool xw_scene_attached;
   bool xw_commit_connected;
   bool xw_surface_listeners_pending;
+  struct wl_listener xw_configure; /* XWayland request_configure */
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else
