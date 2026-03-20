@@ -31,7 +31,18 @@ stdenv.mkDerivation (finalAttrs: {
   pname = "trixie";
   version = "0.5.0";
 
-  src = lib.cleanSource ../.;
+  # Exclude the local dev build directory so Meson doesn't find a stale
+  # build tree inside the sandbox and try to reconfigure it (which fails
+  # because the sandbox can't write back to the source path).
+  src = lib.cleanSourceWith {
+    src = lib.cleanSource ../.;
+    filter =
+      path: type:
+      let
+        base = baseNameOf path;
+      in
+      !(base == "build" && type == "directory");
+  };
 
   nativeBuildInputs = [
     meson
@@ -62,9 +73,10 @@ stdenv.mkDerivation (finalAttrs: {
     xcbutilwm
   ];
 
-  # --wipe is only appropriate in the dev shell; it breaks nix build's
-  # incremental build tracking and can cause spurious full rebuilds.
-  mesonFlags = [ ];
+  # --wipe is safe in Nix sandbox builds (always a clean source copy).
+  # It ensures Meson sets up fresh rather than tripping over any stale
+  # state that slipped through the source filter.
+  mesonFlags = [ "--wipe" ];
 
   postInstall = ''
     install -Dm755 trixiectl $out/bin/trixiectl
