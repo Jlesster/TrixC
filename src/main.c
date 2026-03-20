@@ -1746,11 +1746,15 @@ static void view_handle_destroy(struct wl_listener *listener, void *data) {
   TrixieView *v = CONTAINER_OF(listener, TrixieView, destroy);
   TrixieServer *s = v->server;
   twm_close(&s->twm, v->pane_id);
-  /* Fix 8: null the scene node's data pointer before freeing so cursor
-   * hit-tests (wlr_scene_node_at → node->data) can't return a dangling
-   * TrixieView pointer after this view is freed. */
-  if (v->scene_tree)
+  /* Firefox dmabuf fix: destroy the scene tree here so wlroots releases all
+   * buffer references before the client's dmabuf proxies are destroyed.
+   * Without this the scene node outlives the buffer → "proxy destroyed while
+   * still attached". Must happen before free(v). */
+  if (v->scene_tree) {
     v->scene_tree->node.data = NULL;
+    wlr_scene_node_destroy(&v->scene_tree->node);
+    v->scene_tree = NULL;
+  }
   wl_list_remove(&v->map.link); wl_list_remove(&v->unmap.link);
   wl_list_remove(&v->destroy.link); wl_list_remove(&v->commit.link);
   wl_list_remove(&v->request_fullscreen.link);
@@ -1948,18 +1952,31 @@ static void handle_new_deco(struct wl_listener *listener, void *data) {
 
 /* ── XWayland ───────────────────────────────────────────────────────────── */
 #ifdef HAS_XWAYLAND
+/* Forward declarations — xwayland_handle_map references these before their
+ * definitions appear in the file. */
+static void xwayland_handle_commit(struct wl_listener *, void *);
+static void xwayland_handle_unmap(struct wl_listener *, void *);
 static void xwayland_handle_map(struct wl_listener *listener, void *data) {
   (void)data;
-  TrixieView *v = CONTAINER_OF(listener, TrixieView, map);
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, xw_surface_map);
   TrixieServer *s = v->server;
   v->mapped = true;
   struct wlr_xwayland_surface *xs = v->xwayland_surface;
   if (!xs->surface) { wlr_log(WLR_ERROR, "xwayland_handle_map: surface NULL for %s", xs->class ? xs->class : "(unknown)"); v->mapped = false; return; }
   if (!v->xw_scene_attached) { wlr_scene_surface_create(v->scene_tree, xs->surface); v->xw_scene_attached = true; }
+  /* Wire xs->surface->events using dedicated listener fields so the same
+   * wl_listener node is never inserted into two signal lists simultaneously.
+   * The original code reused v->map/v->unmap here — those are already in
+   * xs->surface->events from the first map, so re-adding them on remap
+   * corrupts the wayland list and fires xwayland_handle_map twice per event,
+   * producing two ghost panes per window (the Dolphin ghost-window bug). */
   if (!v->xw_commit_connected) {
-    wl_signal_add(&xs->surface->events.map,    &v->map);
-    wl_signal_add(&xs->surface->events.unmap,  &v->unmap);
-    wl_signal_add(&xs->surface->events.commit, &v->commit);
+    v->xw_surface_map.notify    = xwayland_handle_map;
+    v->xw_surface_unmap.notify  = xwayland_handle_unmap;
+    v->xw_surface_commit.notify = xwayland_handle_commit;
+    wl_signal_add(&xs->surface->events.map,    &v->xw_surface_map);
+    wl_signal_add(&xs->surface->events.unmap,  &v->xw_surface_unmap);
+    wl_signal_add(&xs->surface->events.commit, &v->xw_surface_commit);
     v->xw_commit_connected = true;
   }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
@@ -1978,7 +1995,7 @@ static void xwayland_handle_map(struct wl_listener *listener, void *data) {
 }
 static void xwayland_handle_unmap(struct wl_listener *listener, void *data) {
   (void)data;
-  TrixieView *v = CONTAINER_OF(listener, TrixieView, unmap);
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, xw_surface_unmap);
   TrixieServer *s = v->server;
   v->mapped = false;
   if (v->foreign_handle) {
@@ -1990,6 +2007,25 @@ static void xwayland_handle_unmap(struct wl_listener *listener, void *data) {
   if (v->xwayland_surface->override_redirect) {
     wlr_scene_node_set_enabled(&v->scene_tree->node, false);
     return;
+  }
+  /* Destroy the scene tree on unmap so wlroots releases all buffer
+   * references (including dmabuf) before the client destroys them.
+   * Mark xw_scene_attached false so xwayland_handle_map recreates it. */
+  if (v->scene_tree) {
+    v->scene_tree->node.data = NULL;
+    wlr_scene_node_destroy(&v->scene_tree->node);
+    v->scene_tree = wlr_scene_tree_create(s->layer_windows);
+    if (v->scene_tree) {
+      v->scene_tree->node.data = v;
+      wlr_scene_node_set_enabled(&v->scene_tree->node, false);
+    }
+    v->xw_scene_attached = false;
+  }
+  if (v->xw_commit_connected) {
+    wl_list_remove(&v->xw_surface_map.link);
+    wl_list_remove(&v->xw_surface_unmap.link);
+    wl_list_remove(&v->xw_surface_commit.link);
+    v->xw_commit_connected = false;
   }
   Pane *p = twm_pane_by_id(&s->twm, v->pane_id);
   if (p) {
@@ -2024,9 +2060,9 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
   wl_list_remove(&v->set_title.link);
   wl_list_remove(&v->set_app_id.link);
   if (v->xw_commit_connected) {
-    wl_list_remove(&v->map.link);
-    wl_list_remove(&v->unmap.link);
-    wl_list_remove(&v->commit.link);
+    wl_list_remove(&v->xw_surface_map.link);
+    wl_list_remove(&v->xw_surface_unmap.link);
+    wl_list_remove(&v->xw_surface_commit.link);
   }
   if (v->foreign_handle) {
     wl_list_remove(&v->foreign_request_activate.link);
@@ -2040,7 +2076,7 @@ static void xwayland_handle_destroy(struct wl_listener *listener, void *data) {
 }
 static void xwayland_handle_commit(struct wl_listener *listener, void *data) {
   (void)data;
-  TrixieView *v = CONTAINER_OF(listener, TrixieView, commit);
+  TrixieView *v = CONTAINER_OF(listener, TrixieView, xw_surface_commit);
   TrixieServer *s = v->server;
   if (!v->xwayland_surface || !v->xwayland_surface->surface) return;
   if (v->xwayland_surface->override_redirect) return;
@@ -2461,12 +2497,17 @@ int main(int argc, char *argv[]) {
   s->foreign_toplevel_mgr  = wlr_foreign_toplevel_manager_v1_create(s->display);
   s->screencopy_mgr        = wlr_screencopy_manager_v1_create(s->display);
   wlr_export_dmabuf_manager_v1_create(s->display);
-  /* dmabuf: plain create is correct for wlroots 0.18.  wlr_scene_set_linux_dmabuf_v1
-   * exists in 0.18 but crashes (SIGSEGV inside wlroots) when called during init
-   * before the scene has an output attached — the Firefox proxy-destroyed error
-   * this was meant to fix is a wlroots 0.18 limitation, not something we can
-   * work around from compositor code on this version. */
-  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 5, s->renderer);
+  /* zwp_linux_dmabuf_v1: advertise version 3, not 5.
+   * Version 4+ introduces zwp_linux_dmabuf_feedback_v1. On nvidia Optimus
+   * (this machine: RTX 4050 + iGPU), wlroots 0.18 sends an empty or
+   * invalid feedback tranche because it cannot enumerate correct
+   * format/modifier pairs across both DRM devices. Firefox (and other
+   * clients using the feedback path) receive a protocol error and abort —
+   * the "[GFX1-]: Wayland protocol error: zwp_linux_dmabuf_v1#N still
+   * attached" message is libwayland tearing down the dying connection.
+   * Version 3 uses the legacy .format/.modifier events which wlroots 0.18
+   * handles correctly on nvidia and which every client supports. */
+  wlr_linux_dmabuf_v1_create_with_renderer(s->display, 3, s->renderer);
   wlr_drm_create(s->display, s->renderer);
 #ifdef HAVE_ALPHA_MODIFIER
   wlr_alpha_modifier_v1_create(s->display);

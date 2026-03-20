@@ -519,6 +519,13 @@ typedef struct TrixieView {
   bool xw_commit_connected;
   bool xw_surface_listeners_pending;
   struct wl_listener xw_configure; /* XWayland request_configure */
+  struct wl_listener
+      xw_surface_commit; /* wlr_surface commit — separate from v->commit so we
+                            never add v->commit to two signal lists */
+  struct wl_listener xw_surface_map; /* wlr_surface map   — dedicated to avoid
+                                        double-list corruption */
+  struct wl_listener xw_surface_unmap; /* wlr_surface unmap — dedicated to avoid
+                                          double-list corruption */
 #ifdef HAS_XWAYLAND
   struct wlr_xwayland_surface *xwayland_surface;
 #else
