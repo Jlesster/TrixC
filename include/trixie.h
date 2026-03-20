@@ -71,14 +71,6 @@ typedef struct {
 } Rect;
 
 static inline bool rect_empty(Rect r) { return r.w <= 0 || r.h <= 0; }
-
-/* Resolve effective border width for a pane. border_w_override >= 0 means
- * a per-pane rule overrides the global default. Floating/fullscreen = 0. */
-static inline int pane_border_w(const Pane *p, int global_bw) {
-  if (!p) return global_bw;
-  if (p->floating || p->fullscreen) return 0;
-  return (p->border_w_override >= 0) ? p->border_w_override : global_bw;
-}
 static inline bool rect_contains(Rect r, int x, int y) {
   return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
@@ -161,6 +153,16 @@ typedef struct Pane {
   int border_w_override;
 } Pane;
 
+/* Resolve effective border width for a pane.
+ * border_w_override >= 0 means a per-pane rule overrides the global default.
+ * Floating and fullscreen panes always get border_w = 0. */
+static inline int pane_border_w(const Pane *p, int global_bw) {
+  if (!p)
+    return global_bw;
+  if (p->floating || p->fullscreen)
+    return 0;
+  return (p->border_w_override >= 0) ? p->border_w_override : global_bw;
+}
 typedef struct {
   int index;
   PaneId panes[MAX_PANES];
@@ -533,8 +535,8 @@ typedef struct TrixieView {
   struct wl_listener
       xw_surface_commit; /* wlr_surface commit — separate from v->commit so we
                             never add v->commit to two signal lists */
-  struct wl_listener xw_surface_map; /* wlr_surface map   — dedicated to avoid
-                                        double-list corruption */
+  struct wl_listener xw_surface_map;   /* wlr_surface map   — dedicated to avoid
+                                          double-list corruption */
   struct wl_listener xw_surface_unmap; /* wlr_surface unmap — dedicated to avoid
                                           double-list corruption */
 #ifdef HAS_XWAYLAND
